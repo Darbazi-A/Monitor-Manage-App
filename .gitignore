@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local show data: absolute paths to media on this machine.
+presets.json
