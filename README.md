@@ -22,7 +22,14 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   reports `2816×256` but is driven at `2818×132`, so every output can be given an
   exact width/height/offset instead of plain fullscreen.
 - **Playlists** — prepare several backgrounds per screen before an event, then
-  switch instantly by clicking an entry or using the prev/next arrows.
+  switch instantly by clicking an entry or using the prev/next arrows. Entries
+  are numbered and can be dragged into the running order.
+- **Real video posters** — a frame is pulled out of each clip, so previews and
+  playlists show the footage rather than a film icon.
+- **Position bar** — elapsed / total per screen, draggable to seek, so nobody is
+  guessing how long a clip has left.
+- **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
+  playlist, `Space` plays/pauses, `B` blacks out, `F5` opens the outputs.
 - **Drag & drop** everywhere; drop several files at once to fill a playlist.
 - **Scaling modes** — Stretch, Fit (keep aspect), Fill (crop to cover).
 - **Repeat** — on by default, per screen.
@@ -56,7 +63,18 @@ MP4 is the safe choice).
 4. Save it all as a preset so the next assembly is one click away.
 
 `Escape` on a stage screen closes just that window; press **OPEN OUTPUTS** to
-bring it back.
+bring it back. Quitting while outputs are live asks first — closing the app
+blacks out the hall.
+
+### Keys
+
+| | |
+| --- | --- |
+| `1` `2` `3` | choose the screen the keyboard drives (it gets an accent border) |
+| `←` `→` | previous / next entry in that screen's playlist |
+| `Space` | play / pause that screen |
+| `B` | blackout every screen |
+| `F5` | apply routing / open outputs |
 
 ## Starting with Windows
 
@@ -85,6 +103,7 @@ Everything lives in `main.py`:
 | `BaseOutputWindow` | frameless, un-closable, taskbar-less stage window |
 | `StandardOutputWindow` | Main / Sides — `QVideoWidget` + `ImageView` in a stack |
 | `TopOutputWindow` | Top — `QGraphicsScene` so text composites over video |
+| `VideoThumbnailer` | pulls one real frame out of a clip, queued and cached |
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |

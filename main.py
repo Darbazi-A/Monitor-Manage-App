@@ -65,12 +65,15 @@ except ImportError:  # pragma: no cover - non-Windows
 from PySide6.QtCore import (
     QEvent,
     QObject,
+    QPoint,
     QPointF,
     QRect,
     QRectF,
+    QSettings,
     QSize,
     QSizeF,
     Qt,
+    QTime,
     QTimer,
     QUrl,
     Signal,
@@ -82,14 +85,17 @@ from PySide6.QtGui import (
     QFont,
     QGuiApplication,
     QIcon,
+    QKeySequence,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
     QPixmap,
     QScreen,
+    QShortcut,
     QTransform,
 )
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem, QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -208,6 +214,18 @@ def is_video(path: str) -> bool:
 
 def is_supported(path: str) -> bool:
     return is_image(path) or is_video(path)
+
+
+def format_time(milliseconds: int) -> str:
+    """m:ss, or h:mm:ss for anything past an hour."""
+    if milliseconds is None or milliseconds < 0:
+        milliseconds = 0
+    seconds = milliseconds // 1000
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def urls_to_paths(mime) -> List[str]:
@@ -509,6 +527,114 @@ class Icons:
         return icon
 
 
+class VideoThumbnailer(QObject):
+    """
+    Pulls one real frame out of a video file so playlists and previews show the
+    clip instead of a generic film icon.
+
+    A single hidden QMediaPlayer works through a queue: seek a little way in
+    (the first frame is often black), take the first valid frame, cache it.
+    A per-item timeout keeps one unreadable file from stalling the queue.
+    """
+
+    ready = Signal(str, QPixmap)
+
+    TARGET = QSize(480, 270)
+    SEEK_MS = 1200
+    TIMEOUT_MS = 6000
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._cache: Dict[str, QPixmap] = {}
+        self._queue: List[str] = []
+        self._current: Optional[str] = None
+        self._started = False
+
+        self._player = QMediaPlayer(self)
+        self._sink = QVideoSink(self)
+        self._player.setVideoSink(self._sink)   # no audio output -> silent
+        self._sink.videoFrameChanged.connect(self._on_frame)
+        self._player.mediaStatusChanged.connect(self._on_status)
+        self._player.errorOccurred.connect(lambda *_a: self._finish(None))
+
+        self._timeout = QTimer(self)
+        self._timeout.setSingleShot(True)
+        self._timeout.setInterval(self.TIMEOUT_MS)
+        self._timeout.timeout.connect(lambda: self._finish(None))
+
+    def cached(self, path: str) -> Optional[QPixmap]:
+        return self._cache.get(path)
+
+    def request(self, path: str) -> None:
+        pixmap = self._cache.get(path)
+        if pixmap is not None:
+            self.ready.emit(path, pixmap)
+            return
+        if path == self._current or path in self._queue:
+            return
+        self._queue.append(path)
+        self._pump()
+
+    # -- internals ---------------------------------------------------------- #
+
+    def _pump(self) -> None:
+        if self._current is not None or not self._queue:
+            return
+        self._current = self._queue.pop(0)
+        self._started = False
+        self._player.stop()
+        self._player.setSource(QUrl())
+        self._player.setSource(QUrl.fromLocalFile(self._current))
+        self._timeout.start()
+
+    def _on_status(self, status) -> None:
+        # Seek + play exactly once per item: seeking makes the player re-buffer,
+        # which re-emits Loaded/Buffered, and acting on that restarts the
+        # pipeline forever so no frame is ever rendered.
+        if self._current is None or self._started:
+            return
+        media_status = getattr(QMediaPlayer, "MediaStatus", None)
+        ready_states = {
+            getattr(media_status, "LoadedMedia", None),
+            getattr(media_status, "BufferedMedia", None),
+        }
+        if status in ready_states:
+            self._started = True
+            duration = self._player.duration()
+            self._player.setPosition(min(self.SEEK_MS, max(0, duration // 3)))
+            self._player.play()
+
+    def _on_frame(self, frame) -> None:
+        if self._current is None or not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        self._finish(QPixmap.fromImage(image).scaled(
+            self.TARGET, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _finish(self, pixmap: Optional[QPixmap]) -> None:
+        self._timeout.stop()
+        path, self._current = self._current, None
+        self._player.stop()
+        self._player.setSource(QUrl())
+        if path and pixmap is not None and not pixmap.isNull():
+            self._cache[path] = pixmap
+            self.ready.emit(path, pixmap)
+        QTimer.singleShot(0, self._pump)
+
+
+_THUMBNAILER: Optional[VideoThumbnailer] = None
+
+
+def thumbnailer() -> VideoThumbnailer:
+    """Lazily created singleton; needs a running QApplication."""
+    global _THUMBNAILER
+    if _THUMBNAILER is None:
+        _THUMBNAILER = VideoThumbnailer()
+    return _THUMBNAILER
+
+
 def icon_button(name: str, tooltip: str, colour: str = CLR_TEXT, size: int = 18) -> QPushButton:
     button = QPushButton()
     button.setIcon(Icons.get(name, colour, size))
@@ -549,6 +675,11 @@ QFrame#card, QFrame#bar {{
     border: 1px solid {CLR_LINE};
     border-radius: 10px;
 }}
+/* The card the keyboard acts on. */
+QFrame#card[active="true"] {{
+    border: 1px solid {CLR_ACCENT};
+    background: #1c222c;
+}}
 QLabel#cardTitle {{ font-size: 14px; font-weight: 700; }}
 QLabel#cardHint {{ color: {CLR_MUTED}; }}
 QLabel#sectionTitle {{
@@ -558,6 +689,30 @@ QLabel#sectionTitle {{
     letter-spacing: 1.4px;
 }}
 QLabel#brand {{ font-size: 13px; font-weight: 800; letter-spacing: 1.2px; }}
+QLabel#clock {{
+    color: {CLR_MUTED};
+    font-size: 15px;
+    font-weight: 600;
+    font-family: "Consolas", "Segoe UI", monospace;
+}}
+QLabel#timecode {{
+    color: {CLR_MUTED};
+    font-family: "Consolas", monospace;
+    font-size: 11px;
+}}
+QLabel#badgeLive, QLabel#badgeOff {{
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    padding: 3px 7px;
+    border-radius: 4px;
+}}
+QLabel#badgeLive {{ color: #0b1a12; background: {CLR_OK}; }}
+QLabel#badgeOff {{ color: {CLR_WARN}; background: rgba(232, 164, 76, 0.14); }}
+QLabel#keyHint {{
+    color: #5d6779;
+    font-size: 11px;
+}}
 QLabel {{ background: transparent; }}
 
 QFrame#dropZone {{
@@ -638,6 +793,15 @@ QSlider::handle:horizontal {{
     margin: -5px 0; border-radius: 6px;
 }}
 QSlider::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
+
+/* Playback position: a hairline that only grows a handle on hover. */
+QSlider#scrub::groove:horizontal {{ height: 3px; background: #232b36; border-radius: 2px; }}
+QSlider#scrub::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
+QSlider#scrub::handle:horizontal {{
+    background: transparent; width: 10px; margin: -4px 0; border-radius: 5px;
+}}
+QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; }}
+QSlider#scrub:disabled::sub-page:horizontal {{ background: #2d3542; }}
 
 QCheckBox {{ background: transparent; }}
 QCheckBox::indicator {{
@@ -1258,17 +1422,18 @@ class DropZone(QFrame):
     filesDropped = Signal(list)
     browseRequested = Signal()
 
-    THUMB = QSize(230, 118)
+    THUMB = QSize(250, 132)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(150)
-        self.setMaximumHeight(170)
+        self.setMinimumHeight(158)
+        self.setMaximumHeight(178)
         self.setProperty("dragActive", "false")
         self.setProperty("loaded", "false")
+        self._path = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -1281,8 +1446,12 @@ class DropZone(QFrame):
         self.caption = QLabel()
         self.caption.setObjectName("cardHint")
         self.caption.setAlignment(Qt.AlignCenter)
-        self.caption.setWordWrap(True)
+        self.caption.setWordWrap(False)
+        self.caption.setTextFormat(Qt.PlainText)
         layout.addWidget(self.caption)
+
+        # A real frame arrives a moment after a video is queued.
+        thumbnailer().ready.connect(self._on_poster_ready)
 
         self._show_empty()
 
@@ -1293,24 +1462,49 @@ class DropZone(QFrame):
         self.style().polish(self)
 
     def _show_empty(self) -> None:
-        self.thumb.setPixmap(Icons.get("plus", CLR_LINE, 30).pixmap(30, 30))
+        self._path = ""
+        self.thumb.setPixmap(Icons.get("plus", CLR_LINE, 28).pixmap(28, 28))
         self.caption.setText("drop media here  ·  or click to browse")
         self.setProperty("loaded", "false")
         self._restyle()
 
+    def _elide(self, text: str) -> str:
+        metrics = self.caption.fontMetrics()
+        return metrics.elidedText(text, Qt.ElideMiddle, max(120, self.width() - 26))
+
     def set_file(self, path: str) -> None:
+        self._path = path
+        poster = None
         if is_image(path):
             pixmap = QPixmap(path)
             if not pixmap.isNull():
-                self.thumb.setPixmap(
-                    pixmap.scaled(self.THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
+                poster = pixmap
         else:
-            self.thumb.setPixmap(Icons.get("video", CLR_ACCENT, 40).pixmap(40, 40))
-        self.caption.setText(os.path.basename(path))
+            poster = thumbnailer().cached(path)
+            if poster is None:
+                # Placeholder until the real frame is extracted.
+                self.thumb.setPixmap(Icons.get("video", CLR_ACCENT, 34).pixmap(34, 34))
+                thumbnailer().request(path)
+
+        if poster is not None:
+            self.thumb.setPixmap(
+                poster.scaled(self.THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        self.caption.setText(self._elide(os.path.basename(path)))
         self.caption.setToolTip(path)
         self.setProperty("loaded", "true")
         self._restyle()
+
+    def _on_poster_ready(self, path: str, pixmap: QPixmap) -> None:
+        if path == self._path and not pixmap.isNull():
+            self.thumb.setPixmap(
+                pixmap.scaled(self.THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._path:
+            self.caption.setText(self._elide(os.path.basename(self._path)))
 
     def clear(self) -> None:
         self.caption.setToolTip("")
@@ -1368,17 +1562,39 @@ class Playlist(QListWidget):
     itemChosen = Signal(str)
     filesAdded = Signal(list)
 
+    ICON = QSize(44, 26)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.NoDragDrop)
+        # InternalMove so the running order can be arranged before an event;
+        # dropEvent still handles files dragged in from Explorer.
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setDragEnabled(True)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.setIconSize(QSize(38, 22))
+        self.setIconSize(self.ICON)
         self.setUniformItemSizes(True)
-        self.setMinimumHeight(104)
-        self.setMaximumHeight(150)
+        self.setMinimumHeight(112)
+        self.setMaximumHeight(168)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setToolTip("Click an entry to put it on the screen · drag to reorder")
         self.itemClicked.connect(self._on_item_clicked)
+        self.model().rowsMoved.connect(lambda *_a: self._renumber())
+        thumbnailer().ready.connect(self._on_poster_ready)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self.count():
+            return
+        # An empty list is where an event gets prepared, so say so.
+        painter = QPainter(self.viewport())
+        painter.setPen(QColor(CLR_LINE))
+        painter.drawText(
+            self.viewport().rect(),
+            Qt.AlignCenter,
+            "drop several files here\nto build the running order",
+        )
 
     # -- content ------------------------------------------------------------ #
 
@@ -1399,24 +1615,46 @@ class Playlist(QListWidget):
             self.addItem(item)
             existing.add(path)
             added.append(path)
-        if added and announce:
-            self.filesAdded.emit(added)
+        if added:
+            self._renumber()
+            if announce:
+                self.filesAdded.emit(added)
         return added
 
-    @staticmethod
-    def _thumb_for(path: str) -> QIcon:
+    def _thumb_for(self, path: str) -> QIcon:
         if is_image(path):
             pixmap = QPixmap(path)
             if not pixmap.isNull():
-                return QIcon(pixmap.scaled(QSize(38, 22), Qt.KeepAspectRatioByExpanding,
+                return QIcon(pixmap.scaled(self.ICON, Qt.KeepAspectRatioByExpanding,
                                            Qt.SmoothTransformation))
             return Icons.get("image", CLR_MUTED, 16)
+
+        poster = thumbnailer().cached(path)
+        if poster is not None:
+            return QIcon(poster.scaled(self.ICON, Qt.KeepAspectRatioByExpanding,
+                                       Qt.SmoothTransformation))
+        thumbnailer().request(path)
         return Icons.get("video", CLR_MUTED, 16)
+
+    def _on_poster_ready(self, path: str, pixmap: QPixmap) -> None:
+        for row in range(self.count()):
+            item = self.item(row)
+            if item.data(Qt.UserRole) == path:
+                item.setIcon(QIcon(pixmap.scaled(self.ICON, Qt.KeepAspectRatioByExpanding,
+                                                 Qt.SmoothTransformation)))
+
+    def _renumber(self) -> None:
+        """Keep the visible running order in step after adds and reorders."""
+        for row in range(self.count()):
+            item = self.item(row)
+            path = item.data(Qt.UserRole)
+            item.setText(f"{row + 1}.  {os.path.basename(path)}")
 
     def remove_current(self) -> None:
         row = self.currentRow()
         if row >= 0:
             self.takeItem(row)
+            self._renumber()
 
     def clear_all(self) -> None:
         self.clear()
@@ -1450,18 +1688,26 @@ class Playlist(QListWidget):
     # -- drag & drop -------------------------------------------------------- #
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if urls_to_paths(event.mimeData()):
+        if event.source() is self:
+            super().dragEnterEvent(event)
+        elif urls_to_paths(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802
-        if urls_to_paths(event.mimeData()):
+        if event.source() is self:
+            super().dragMoveEvent(event)
+        elif urls_to_paths(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        if event.source() is self:
+            super().dropEvent(event)  # reordering within the list
+            self._renumber()
+            return
         paths = urls_to_paths(event.mimeData())
         if not paths:
             event.ignore()
@@ -1487,13 +1733,18 @@ class OutputCard(QFrame):
     volumeChanged = Signal(int)
     muteChanged = Signal(bool)
     repeatChanged = Signal(bool)
+    seekRequested = Signal(int)
+    activated = Signal()
 
     def __init__(self, title: str, subtitle: str, default_mode: ScaleMode,
                  parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("card")
+        self.setProperty("active", "false")
         self._last_dir = ""
         self._path = ""
+        self._duration = 0
+        self._scrubbing = False
 
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(14, 12, 14, 12)
@@ -1517,8 +1768,9 @@ class OutputCard(QFrame):
         header.addLayout(title_box)
         header.addStretch(1)
 
-        self.state_dot = QLabel("●")
-        header.addWidget(self.state_dot)
+        self.state_badge = QLabel("CLOSED")
+        self.state_badge.setObjectName("badgeOff")
+        header.addWidget(self.state_badge)
         self.root.addLayout(header)
 
         # --- preview / drop zone ------------------------------------------- #
@@ -1526,6 +1778,26 @@ class OutputCard(QFrame):
         self.zone.filesDropped.connect(self._on_files_chosen)
         self.zone.browseRequested.connect(self._on_browse)
         self.root.addWidget(self.zone)
+
+        # --- playback position --------------------------------------------- #
+        scrub_row = QHBoxLayout()
+        scrub_row.setSpacing(8)
+        self.scrub = QSlider(Qt.Horizontal)
+        self.scrub.setObjectName("scrub")
+        self.scrub.setRange(0, 0)
+        self.scrub.setEnabled(False)
+        self.scrub.setToolTip("Playback position — drag to seek")
+        self.scrub.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
+        self.scrub.sliderReleased.connect(self._on_scrub_released)
+        scrub_row.addWidget(self.scrub, 1)
+
+        self.timecode = QLabel("–:––")
+        self.timecode.setObjectName("timecode")
+        self.timecode.setMinimumWidth(78)
+        self.timecode.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.timecode.setToolTip("Elapsed / total")
+        scrub_row.addWidget(self.timecode)
+        self.root.addLayout(scrub_row)
 
         # --- scaling + repeat ---------------------------------------------- #
         options = QHBoxLayout()
@@ -1629,9 +1901,56 @@ class OutputCard(QFrame):
     # -- state -------------------------------------------------------------- #
 
     def set_output_open(self, is_open: bool) -> None:
-        colour = CLR_OK if is_open else CLR_WARN
-        self.state_dot.setStyleSheet(f"color: {colour}; font-size: 13px;")
-        self.state_dot.setToolTip("Output window is OPEN" if is_open else "Output window is CLOSED")
+        self.state_badge.setText("LIVE" if is_open else "CLOSED")
+        self.state_badge.setObjectName("badgeLive" if is_open else "badgeOff")
+        self.state_badge.setToolTip(
+            "This screen's output window is open" if is_open else
+            "No output window — press OPEN OUTPUTS"
+        )
+        self.state_badge.style().unpolish(self.state_badge)
+        self.state_badge.style().polish(self.state_badge)
+        if not is_open:
+            self.set_duration(0)
+
+    def set_active(self, active: bool) -> None:
+        """Mark the card the keyboard shortcuts act on."""
+        self.setProperty("active", "true" if active else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self.activated.emit()
+        super().mousePressEvent(event)
+
+    # -- playback position -------------------------------------------------- #
+
+    def set_duration(self, milliseconds: int) -> None:
+        self._duration = max(0, milliseconds)
+        self.scrub.setEnabled(self._duration > 0)
+        if self._duration == 0:
+            # A zero-width range paints as a *full* bar, which reads as "playing";
+            # give it a range it can actually sit empty in.
+            self.scrub.setRange(0, 1)
+            self.scrub.setValue(0)
+            self.timecode.setText("–:––")
+        else:
+            self.scrub.setRange(0, self._duration)
+            self._update_timecode(self.scrub.value())
+
+    def set_position(self, milliseconds: int) -> None:
+        if self._scrubbing or self._duration <= 0:
+            return
+        self.scrub.setValue(milliseconds)
+        self._update_timecode(milliseconds)
+
+    def _update_timecode(self, position: int) -> None:
+        self.timecode.setText(f"{format_time(position)} / {format_time(self._duration)}")
+
+    @Slot()
+    def _on_scrub_released(self) -> None:
+        self._scrubbing = False
+        self.seekRequested.emit(self.scrub.value())
+        self._update_timecode(self.scrub.value())
 
     def current_scale_mode(self) -> ScaleMode:
         return self.scale_combo.currentData()
@@ -2190,6 +2509,8 @@ class ControlPanel(QMainWindow):
 
         self.routing_rows: Dict[str, RoutingRow] = {}
         self.presets = PresetStore()
+        self.active_role = ROLE_MAIN
+        self.settings = QSettings("StageDisplayController", "StageDisplayController")
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -2212,6 +2533,16 @@ class ControlPanel(QMainWindow):
         self._refresh_preset_combo()
         self._load_autostart_state()
         self._update_output_status()
+        self._install_shortcuts()
+        self.set_active_role(ROLE_MAIN)
+        self._restore_window_geometry()
+
+        hint = QLabel(
+            "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
+            "B blackout · F5 open outputs"
+        )
+        hint.setObjectName("keyHint")
+        self.statusBar().addPermanentWidget(hint)
         self.statusBar().showMessage(
             "Screens & Setup → assign monitors → OPEN OUTPUTS.   "
             "Then drop media onto a card, or build a playlist."
@@ -2237,6 +2568,18 @@ class ControlPanel(QMainWindow):
 
         self.status_pill = QLabel()
         layout.addWidget(self.status_pill)
+        layout.addSpacing(14)
+
+        # A wall clock the operator can glance at without leaving the app.
+        self.clock = QLabel()
+        self.clock.setObjectName("clock")
+        self.clock.setToolTip("Current time")
+        layout.addWidget(self.clock)
+        self._tick_clock()
+        clock_timer = QTimer(self)
+        clock_timer.timeout.connect(self._tick_clock)
+        clock_timer.start(1000)
+
         layout.addStretch(1)
 
         # --- presets ------------------------------------------------------- #
@@ -2325,7 +2668,56 @@ class ControlPanel(QMainWindow):
             ROLE_SIDES: self.sides_card,
             ROLE_TOP: self.top_card,
         }
+        for role, card in self.cards.items():
+            card.activated.connect(lambda bound=role: self.set_active_role(bound))
         return page
+
+    # ------------------------------------------------------- keyboard ------ #
+
+    def _tick_clock(self) -> None:
+        self.clock.setText(QTime.currentTime().toString("HH:mm:ss"))
+
+    def set_active_role(self, role: str) -> None:
+        """Choose which card the keyboard shortcuts drive."""
+        self.active_role = role
+        for name, card in self.cards.items():
+            card.set_active(name == role)
+
+    def _active_card(self) -> OutputCard:
+        return self.cards[self.active_role]
+
+    def _install_shortcuts(self) -> None:
+        """
+        Live-operation keys. During a show the mouse is slow and the operator is
+        often looking at the stage, not the screen.
+        """
+        bindings = (
+            ("1", lambda: self.set_active_role(ROLE_MAIN)),
+            ("2", lambda: self.set_active_role(ROLE_SIDES)),
+            ("3", lambda: self.set_active_role(ROLE_TOP)),
+            ("Space", self._toggle_active_playback),
+            ("Right", lambda: self._active_card().playlist.step(1)),
+            ("Left", lambda: self._active_card().playlist.step(-1)),
+            ("B", self._blackout_all),
+            ("F5", self._apply_routing),
+        )
+        for key, handler in bindings:
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ApplicationShortcut)
+            shortcut.activated.connect(handler)
+
+    @Slot()
+    def _toggle_active_playback(self) -> None:
+        window = getattr(self, self.OUTPUT_ATTRS[self.active_role], None)
+        if window is None:
+            return
+        player = window.engine.player
+        playing = getattr(QMediaPlayer, "PlaybackState", None)
+        state_playing = getattr(playing, "PlayingState", None) if playing else None
+        if player.playbackState() == state_playing:
+            window.engine.pause()
+        else:
+            window.engine.play()
 
     def _build_screens_tab(self) -> QWidget:
         page = QWidget()
@@ -2815,6 +3207,11 @@ class ControlPanel(QMainWindow):
             window.closedByUser.connect(
                 lambda bound_role=role, name=title: self._on_output_closed(bound_role, name)
             )
+            # Feed the card's position bar; these die with the window.
+            player = window.engine.player
+            player.positionChanged.connect(card.set_position)
+            player.durationChanged.connect(card.set_duration)
+            card.seekRequested.connect(player.setPosition)
 
         window.engine.set_loop(card.is_repeating())
         window.engine.set_volume(card.volume_slider.value())
@@ -3147,9 +3544,30 @@ class ControlPanel(QMainWindow):
 
     # ------------------------------------------------------------ shutdown -- #
 
+    def _restore_window_geometry(self) -> None:
+        saved = self.settings.value("window/geometry")
+        if saved is not None:
+            self.restoreGeometry(saved)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         """Closing the control panel tears down every stage window, then quits."""
-        for window in self._outputs():
+        live = self._outputs()
+        if live:
+            # Quitting mid-show blacks out the hall; make it a deliberate act.
+            answer = QMessageBox.question(
+                self,
+                "Stage outputs are live",
+                f"{len(live)} stage screen(s) are still showing content.\n\n"
+                "Quitting closes them and blacks out the stage. Quit anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        for window in live:
             window.clear_output()
             window.force_close()
             window.deleteLater()
