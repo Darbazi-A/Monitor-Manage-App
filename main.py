@@ -49,12 +49,18 @@ Run with:      python main.py
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
+
+try:  # Windows only; the rest of the app runs without it.
+    import winreg
+except ImportError:  # pragma: no cover - non-Windows
+    winreg = None
 
 from PySide6.QtCore import (
     QEvent,
@@ -123,6 +129,15 @@ from PySide6.QtWidgets import (
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
 ICON_FILE = os.path.join(APP_DIR, "stage_icon.ico")
+
+# Per-user "run at login" entry. HKCU needs no administrator rights, and it
+# starts nothing until the operator ticks the box in Screens & Setup.
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE = "StageDisplayController"
+
+# LED processors and video walls often finish enumerating well after the
+# desktop appears, so an autostart waits before applying the routing.
+DEFAULT_STARTUP_DELAY = 20
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".mpg", ".mpeg", ".webm"}
@@ -2021,11 +2036,102 @@ class RoutingRow(QWidget):
 # Presets
 # --------------------------------------------------------------------------- #
 
+class Autostart:
+    """
+    "Open this preset when the PC starts", via the per-user Run registry key.
+
+    HKCU\\...\\Run needs no administrator rights and affects only this account.
+    The command launches pythonw.exe so no console window appears behind the
+    stage output, and passes the preset name plus a delay - see
+    DEFAULT_STARTUP_DELAY for why the delay matters.
+    """
+
+    @staticmethod
+    def available() -> bool:
+        return winreg is not None and sys.platform == "win32"
+
+    @staticmethod
+    def _launcher() -> str:
+        """pythonw.exe if we can find it, so the app starts without a console."""
+        if getattr(sys, "frozen", False):  # packaged with PyInstaller etc.
+            return sys.executable
+        executable = sys.executable
+        if os.path.basename(executable).lower() == "python.exe":
+            quiet = os.path.join(os.path.dirname(executable), "pythonw.exe")
+            if os.path.exists(quiet):
+                return quiet
+        return executable
+
+    @classmethod
+    def command(cls, preset: str, delay: int) -> str:
+        if getattr(sys, "frozen", False):
+            return f'"{cls._launcher()}" --preset "{preset}" --delay {delay}'
+        script = os.path.join(APP_DIR, os.path.basename(__file__))
+        return f'"{cls._launcher()}" "{script}" --preset "{preset}" --delay {delay}'
+
+    @classmethod
+    def read(cls) -> Optional[str]:
+        """The currently registered command line, or None when disabled."""
+        if not cls.available():
+            return None
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+                value, _kind = winreg.QueryValueEx(key, RUN_VALUE)
+                return value
+        except OSError:
+            return None
+
+    @classmethod
+    def enable(cls, preset: str, delay: int) -> Optional[str]:
+        """Returns an error message, or None on success."""
+        if not cls.available():
+            return "Autostart is only supported on Windows."
+        try:
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                                    winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, RUN_VALUE, 0, winreg.REG_SZ, cls.command(preset, delay))
+            return None
+        except OSError as exc:
+            return str(exc)
+
+    @classmethod
+    def disable(cls) -> Optional[str]:
+        if not cls.available():
+            return None
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, RUN_VALUE)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            return str(exc)
+        return None
+
+    @staticmethod
+    def parse(command: Optional[str]) -> tuple:
+        """Pull (preset, delay) back out of a registered command line."""
+        if not command:
+            return None, DEFAULT_STARTUP_DELAY
+        preset, delay = None, DEFAULT_STARTUP_DELAY
+        if "--preset" in command:
+            rest = command.split("--preset", 1)[1].strip()
+            if rest.startswith('"'):
+                preset = rest[1:].split('"', 1)[0]
+            else:
+                preset = rest.split(" ", 1)[0]
+        if "--delay" in command:
+            tail = command.split("--delay", 1)[1].strip().split(" ", 1)[0]
+            if tail.isdigit():
+                delay = int(tail)
+        return preset, delay
+
+
 class PresetStore:
     """Named presets persisted as JSON next to this script."""
 
-    def __init__(self, path: str = PRESET_FILE) -> None:
-        self.path = path
+    def __init__(self, path: Optional[str] = None) -> None:
+        # Resolved at call time, not import time, so PRESET_FILE stays overridable.
+        self.path = path or PRESET_FILE
         self.data: Dict[str, dict] = {}
         self.load()
 
@@ -2104,6 +2210,7 @@ class ControlPanel(QMainWindow):
 
         self._refresh_screen_combos(initial=True)
         self._refresh_preset_combo()
+        self._load_autostart_state()
         self._update_output_status()
         self.statusBar().showMessage(
             "Screens & Setup → assign monitors → OPEN OUTPUTS.   "
@@ -2287,6 +2394,7 @@ class ControlPanel(QMainWindow):
         buttons.addStretch(1)
         card_layout.addLayout(buttons)
         layout.addWidget(card)
+        layout.addWidget(self._build_autostart_card())
 
         tips = QFrame()
         tips.setObjectName("card")
@@ -2313,6 +2421,167 @@ class ControlPanel(QMainWindow):
 
         layout.addStretch(1)
         return page
+
+    def _build_autostart_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        box = QVBoxLayout(card)
+        box.setContentsMargins(16, 14, 16, 16)
+        box.setSpacing(9)
+
+        heading = QLabel("START WITH WINDOWS")
+        heading.setObjectName("sectionTitle")
+        box.addWidget(heading)
+
+        note = QLabel(
+            "Open the app and put a preset on the screens automatically when this PC starts. "
+            "The delay gives LED processors and video walls time to come up first — without it "
+            "the outputs can land on the wrong monitors."
+        )
+        note.setObjectName("cardHint")
+        note.setWordWrap(True)
+        box.addWidget(note)
+
+        row = QHBoxLayout()
+        row.setSpacing(9)
+
+        self.autostart_check = QCheckBox("Start automatically")
+        self.autostart_check.toggled.connect(self._on_autostart_toggled)
+        row.addWidget(self.autostart_check)
+
+        row.addWidget(QLabel("Preset"))
+        self.autostart_preset = QComboBox()
+        self.autostart_preset.setMinimumWidth(200)
+        self.autostart_preset.currentIndexChanged.connect(self._refresh_autostart_entry)
+        row.addWidget(self.autostart_preset)
+
+        row.addWidget(QLabel("Wait"))
+        self.autostart_delay = QSpinBox()
+        self.autostart_delay.setRange(0, 600)
+        self.autostart_delay.setValue(DEFAULT_STARTUP_DELAY)
+        self.autostart_delay.setSuffix(" s")
+        self.autostart_delay.setToolTip("Seconds to wait for the monitors before applying the preset")
+        self.autostart_delay.valueChanged.connect(self._refresh_autostart_entry)
+        row.addWidget(self.autostart_delay)
+
+        row.addStretch(1)
+        box.addLayout(row)
+
+        self.autostart_status = QLabel()
+        self.autostart_status.setObjectName("cardHint")
+        self.autostart_status.setWordWrap(True)
+        box.addWidget(self.autostart_status)
+
+        if not Autostart.available():
+            self.autostart_check.setEnabled(False)
+            self.autostart_preset.setEnabled(False)
+            self.autostart_delay.setEnabled(False)
+        return card
+
+    def _load_autostart_state(self) -> None:
+        """Reflect whatever is registered in the Run key, without changing it."""
+        preset, delay = Autostart.parse(Autostart.read())
+        self.autostart_delay.blockSignals(True)
+        self.autostart_delay.setValue(delay)
+        self.autostart_delay.blockSignals(False)
+
+        if preset:
+            index = self.autostart_preset.findText(preset)
+            if index >= 0:
+                self.autostart_preset.blockSignals(True)
+                self.autostart_preset.setCurrentIndex(index)
+                self.autostart_preset.blockSignals(False)
+
+        self.autostart_check.blockSignals(True)
+        self.autostart_check.setChecked(preset is not None)
+        self.autostart_check.blockSignals(False)
+        self._describe_autostart()
+
+    def _describe_autostart(self) -> None:
+        if not Autostart.available():
+            self.autostart_status.setText("Autostart is only available on Windows.")
+            return
+        if not self.autostart_check.isChecked():
+            self.autostart_status.setText("Currently off — nothing runs at login.")
+            return
+        preset = self.autostart_preset.currentText()
+        delay = self.autostart_delay.value()
+        self.autostart_status.setText(
+            f"On: at login the app opens and applies “{preset}” after {delay} seconds."
+        )
+        self.autostart_status.setStyleSheet(f"color: {CLR_OK};")
+
+    @Slot(bool)
+    def _on_autostart_toggled(self, enabled: bool) -> None:
+        if enabled and not self.autostart_preset.isEnabled():
+            # No presets saved yet, so there would be nothing to apply.
+            QMessageBox.information(
+                self, "No preset",
+                "Save a preset first — autostart needs to know what to put on the screens.",
+            )
+            self.autostart_check.setChecked(False)
+            return
+        error = self._refresh_autostart_entry()
+        if error:
+            QMessageBox.critical(self, "Could not change autostart", error)
+            self.autostart_check.blockSignals(True)
+            self.autostart_check.setChecked(not enabled)
+            self.autostart_check.blockSignals(False)
+        self._describe_autostart()
+
+    @Slot()
+    def _refresh_autostart_entry(self) -> Optional[str]:
+        """Write (or remove) the Run entry so it matches the controls."""
+        if not Autostart.available():
+            return None
+        if self.autostart_check.isChecked():
+            preset = self.autostart_preset.currentText()
+            if not preset or not self.autostart_preset.isEnabled():
+                return None
+            error = Autostart.enable(preset, self.autostart_delay.value())
+        else:
+            error = Autostart.disable()
+        if not error:
+            self._describe_autostart()
+        return error
+
+    # -- autostart run ------------------------------------------------------ #
+
+    def run_autostart(self, preset: str, delay: int) -> None:
+        """
+        Apply `preset` once the monitors have had `delay` seconds to appear.
+
+        Called only when the app was launched with --preset, i.e. by the Run
+        registry entry at login.
+        """
+        remaining = {"seconds": max(0, delay)}
+        ticker = QTimer(self)
+
+        def tick() -> None:
+            if remaining["seconds"] <= 0:
+                ticker.stop()
+                self._fire_autostart(preset)
+                return
+            self.statusBar().showMessage(
+                f"Autostart: applying “{preset}” in {remaining['seconds']}s "
+                "(waiting for the monitors)…"
+            )
+            remaining["seconds"] -= 1
+
+        ticker.timeout.connect(tick)
+        ticker.start(1000)
+        tick()
+
+    def _fire_autostart(self, preset: str) -> None:
+        self._refresh_screen_combos()  # pick up monitors that appeared while waiting
+        payload = self.presets.get(preset)
+        if not payload:
+            self.statusBar().showMessage(
+                f"Autostart: preset “{preset}” not found — nothing applied.", 0
+            )
+            return
+        self._apply_preset(payload)
+        self.statusBar().showMessage(f"Autostart: “{preset}” applied.", 10000)
 
     def _wire_card(self, card: OutputCard, role: str) -> None:
         """Connect a card's signals to whichever output window that role owns."""
@@ -2728,6 +2997,24 @@ class ControlPanel(QMainWindow):
                 self.preset_combo.setCurrentIndex(index)
         self.preset_combo.blockSignals(False)
 
+        # The autostart picker offers the same list.
+        wanted = self.autostart_preset.currentText()
+        self.autostart_preset.blockSignals(True)
+        self.autostart_preset.clear()
+        if names:
+            self.autostart_preset.addItems(names)
+            self.autostart_preset.setEnabled(Autostart.available())
+            target = select or wanted
+            index = self.autostart_preset.findText(target) if target else -1
+            self.autostart_preset.setCurrentIndex(max(0, index))
+        else:
+            self.autostart_preset.addItem("no presets yet")
+            self.autostart_preset.setEnabled(False)
+        self.autostart_preset.blockSignals(False)
+        # Keep the registered command in step with a renamed or deleted preset.
+        if self.autostart_check.isChecked():
+            self._refresh_autostart_entry()
+
     def _collect_preset(self) -> dict:
         payload = {
             "routing": {role: row.config().to_dict() for role, row in self.routing_rows.items()},
@@ -2735,6 +3022,9 @@ class ControlPanel(QMainWindow):
             "top": {
                 "background": self.top_card.background_colour().name(),
                 "marquee": self.top_card.marquee_state(),
+                # Remembered so an unattended autostart brings the text back too.
+                "marquee_running": (self.top_output.is_marquee_running()
+                                    if self.top_output is not None else False),
             },
         }
         for role, card in self.cards.items():
@@ -2788,6 +3078,11 @@ class ControlPanel(QMainWindow):
 
         # Open the windows, then push the remembered media into them.
         self._apply_routing()
+
+        if (top_data.get("marquee_running")
+                and self.top_output is not None
+                and self.top_card.text_edit.text().strip()):
+            self.top_output.start_marquee()
 
         if missing:
             QMessageBox.warning(
@@ -2867,7 +3162,27 @@ class ControlPanel(QMainWindow):
 # Entry point
 # --------------------------------------------------------------------------- #
 
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Multi-screen playback controller for an assembly hall stage."
+    )
+    parser.add_argument(
+        "--preset",
+        help="Apply this saved preset on startup (used by the Start-with-Windows entry).",
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=DEFAULT_STARTUP_DELAY,
+        help="Seconds to wait for the monitors before applying --preset.",
+    )
+    # parse_known_args so Qt's own switches (-platform, -style, ...) pass through.
+    options, _unknown = parser.parse_known_args(argv)
+    return options
+
+
 def main() -> int:
+    options = parse_args(sys.argv[1:])
     app = QApplication(sys.argv)
     app.setApplicationName("Stage Display Controller")
     app.setStyle("Fusion")
@@ -2880,6 +3195,8 @@ def main() -> int:
 
     panel = ControlPanel()
     panel.show()
+    if options.preset:
+        panel.run_autostart(options.preset, options.delay)
 
     return app.exec()
 

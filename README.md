@@ -30,6 +30,8 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   live video via a `QGraphicsScene`.
 - **Presets** — routing, geometry, playlists, scaling, volumes and marquee
   settings saved as JSON.
+- **Start with Windows** — optionally open the app at login and put a chosen
+  preset on the screens, after a delay that lets LED processors finish booting.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -56,6 +58,21 @@ MP4 is the safe choice).
 `Escape` on a stage screen closes just that window; press **OPEN OUTPUTS** to
 bring it back.
 
+## Starting with Windows
+
+**Screens & Setup → Start with Windows** ticks a per-user `HKCU\…\Run` entry
+(no administrator rights, this account only) that launches:
+
+```
+pythonw.exe main.py --preset "<name>" --delay <seconds>
+```
+
+`pythonw.exe` keeps a console window off the stage. The delay matters: LED
+processors and video walls often finish enumerating long after the desktop
+appears, and applying the routing too early lands the outputs on the wrong
+monitors — 20 seconds is a sensible starting point. Untick the box to remove the
+entry. The same switches work by hand for testing.
+
 ## Layout
 
 Everything lives in `main.py`:
@@ -71,6 +88,7 @@ Everything lives in `main.py`:
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |
+| `Autostart` | the per-user "run at login" registry entry |
 | `ControlPanel` | the dashboard |
 
 `presets.json` is deliberately git-ignored: it holds absolute paths to media on
