@@ -31,6 +31,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `B` blacks out, `F5` opens the outputs.
 - **Drag & drop** everywhere; drop several files at once to fill a playlist.
+- **Transitions** — an optional dip to black whenever the picture changes: fade
+  out, swap, fade back in. Off / Fast / Normal / Slow, applied to every screen,
+  to playlist steps and to blackouts.
 - **Scaling modes** — Stretch, Fit (keep aspect), Fill (crop to cover).
 - **Repeat** — on by default, per screen.
 - **Marquee** — text, typeface, pixel size, colour and scroll speed, drawn over
@@ -76,6 +79,21 @@ blacks out the hall.
 | `B` | blackout every screen |
 | `F5` | apply routing / open outputs |
 
+## Transitions
+
+![One dip to black](docs/fade.png)
+
+Set the length in **Screens & Setup → Transition**. It is a dip to black, not an
+A/B crossfade: blending two sources would need two decoders and two surfaces per
+screen, and compositing over a video surface is not something to gamble on
+mid-assembly. Dipping is what broadcast does for the same reason, and it behaves
+identically for image→video, video→video and video→image.
+
+Mechanically each output gets a black top-level window as its transient parent,
+faded with `windowOpacity`. It mirrors the output's always-on-top flag — a
+topmost window sits above a non-topmost one whoever owns whom, so without that
+the overlay would fade away *behind* the screen it is meant to be dimming.
+
 ## Starting with Windows
 
 **Screens & Setup → Start with Windows** ticks a per-user `HKCU\…\Run` entry
@@ -104,6 +122,7 @@ Everything lives in `main.py`:
 | `StandardOutputWindow` | Main / Sides — `QVideoWidget` + `ImageView` in a stack |
 | `TopOutputWindow` | Top — `QGraphicsScene` so text composites over video |
 | `VideoThumbnailer` | pulls one real frame out of a clip, queued and cached |
+| `FadeOverlay` | the black pane that dips one output to black and back |
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |

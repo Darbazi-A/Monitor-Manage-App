@@ -63,10 +63,12 @@ except ImportError:  # pragma: no cover - non-Windows
     winreg = None
 
 from PySide6.QtCore import (
+    QEasingCurve,
     QEvent,
     QObject,
     QPoint,
     QPointF,
+    QPropertyAnimation,
     QRect,
     QRectF,
     QSettings,
@@ -173,6 +175,10 @@ ROLE_LABELS = {
 # The LED strip's real canvas, as mapped in Nova Studio - NOT what Windows reports.
 DEFAULT_TOP_WIDTH = 2818
 DEFAULT_TOP_HEIGHT = 132
+
+# Dip-to-black transition lengths, total (out + in).
+FADE_PRESETS = (("Off (hard cut)", 0), ("Fast", 240), ("Normal", 450), ("Slow", 900))
+DEFAULT_FADE_MS = 450
 
 # Palette - a quiet, low-contrast dark theme so the stage stays the bright thing.
 CLR_BG = "#12151b"
@@ -992,6 +998,112 @@ class ImageView(QWidget):
 # Output windows
 # --------------------------------------------------------------------------- #
 
+class FadeOverlay(QWidget):
+    """
+    A black pane held directly above one output window, used to dip to black.
+
+    Why dip instead of a true A/B crossfade: blending two sources needs two
+    decoders and two surfaces per screen, and mixing a QVideoWidget's surface
+    with anything else is not something to gamble on mid-assembly. Dipping is
+    what broadcast does for the same reason, and it behaves identically for
+    image->video, video->video and video->image.
+
+    It is a separate top-level window rather than a child widget because a child
+    cannot reliably paint over a video surface. Setting the output window as its
+    transient parent keeps it above that output and nothing else - so a
+    presentation covering the Main Stage is never dimmed by a transition on
+    another screen.
+    """
+
+    BASE_FLAGS = Qt.Window | Qt.FramelessWindowHint | Qt.Tool
+
+    def __init__(self, target: QWidget) -> None:
+        super().__init__(None, FadeOverlay.BASE_FLAGS)
+        self._target = target
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setStyleSheet("background-color: black;")
+        self.setCursor(Qt.BlankCursor)
+        self.setWindowOpacity(0.0)
+
+        self._anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+    # -- internals ---------------------------------------------------------- #
+
+    def _clear_handlers(self) -> None:
+        try:
+            self._anim.finished.disconnect()
+        except RuntimeError:
+            pass  # nothing connected
+
+    def _cover_target(self) -> None:
+        geometry = self._target.geometry()
+
+        # A topmost window always sits above a non-topmost one, whoever owns
+        # whom - so the overlay has to match the output's stacking or it fades
+        # away behind the very screen it is supposed to be dimming.
+        flags = self.BASE_FLAGS
+        if self._target.windowFlags() & Qt.WindowStaysOnTopHint:
+            flags |= Qt.WindowStaysOnTopHint
+        if flags != self.windowFlags():
+            opacity = self.windowOpacity()
+            self.setWindowFlags(flags)     # this hides the window
+            self.setWindowOpacity(opacity)
+
+        self.setGeometry(geometry)
+        self.winId()  # force the native handle so a transient parent can be set
+        handle, target_handle = self.windowHandle(), self._target.windowHandle()
+        if handle is not None and target_handle is not None:
+            handle.setTransientParent(target_handle)
+        if not self.isVisible():
+            self.show()
+        self.setGeometry(geometry)
+        self.raise_()
+
+    # -- public API --------------------------------------------------------- #
+
+    def dip(self, action: Callable[[], None], duration_ms: int) -> None:
+        """Fade to black, run `action` while nothing is visible, fade back."""
+        half = max(60, duration_ms // 2)
+        self._cover_target()
+        self._anim.stop()
+        self._clear_handlers()
+
+        def midpoint() -> None:
+            self._clear_handlers()
+            action()
+            # Give the new image or the first video frame a moment to land,
+            # otherwise the fade-in reveals the previous content.
+            QTimer.singleShot(70, lambda: self._fade_in(half))
+
+        self._anim.finished.connect(midpoint)
+        self._anim.setDuration(half)
+        self._anim.setStartValue(self.windowOpacity())
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+
+    def _fade_in(self, duration_ms: int) -> None:
+        self._anim.stop()
+        self._clear_handlers()
+
+        def done() -> None:
+            self._clear_handlers()
+            self.hide()
+
+        self._anim.finished.connect(done)
+        self._anim.setDuration(duration_ms)
+        self._anim.setStartValue(1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+
+    def abort(self) -> None:
+        self._anim.stop()
+        self._clear_handlers()
+        self.setWindowOpacity(0.0)
+        self.hide()
+
+
 class BaseOutputWindow(QWidget):
     """
     Frameless, borderless window shown on a stage monitor.
@@ -1019,6 +1131,7 @@ class BaseOutputWindow(QWidget):
         self._allow_close = False
         self._screen: Optional[QScreen] = None
         self._geometry: Optional[QRect] = None
+        self._fader: Optional[FadeOverlay] = None
 
     # -- placement ---------------------------------------------------------- #
 
@@ -1061,9 +1174,45 @@ class BaseOutputWindow(QWidget):
 
     def force_close(self) -> None:
         """The only sanctioned way to close a stage window."""
+        if self._fader is not None:
+            self._fader.abort()
         self._allow_close = True
         self.close()
         self._allow_close = False
+
+    # -- transitions -------------------------------------------------------- #
+
+    def fader(self) -> FadeOverlay:
+        if self._fader is None:
+            self._fader = FadeOverlay(self)
+        return self._fader
+
+    def present(self, path: str, fade_ms: int = 0) -> bool:
+        """
+        Put `path` on this screen, optionally dipping to black on the way.
+
+        The media is prepared (decoded, validated) before the fade starts, so a
+        bad file is reported instantly instead of after a pointless dip.
+        """
+        payload = self.prepare_media(path)
+        if payload is None:
+            return False
+        if fade_ms <= 0:
+            self.commit_media(payload)
+        else:
+            self.fader().dip(lambda: self.commit_media(payload), fade_ms)
+        return True
+
+    def fade_clear(self, fade_ms: int = 0) -> None:
+        """Blackout, smoothly when a transition length is set."""
+        if fade_ms <= 0:
+            self.clear_output()
+        else:
+            self.fader().dip(self.clear_output, fade_ms)
+
+    def load_media(self, path: str) -> bool:
+        """Immediate swap, no transition."""
+        return self.present(path, 0)
 
     # -- event handling ----------------------------------------------------- #
 
@@ -1085,7 +1234,12 @@ class BaseOutputWindow(QWidget):
 
     # -- interface implemented by subclasses -------------------------------- #
 
-    def load_media(self, path: str) -> bool:
+    def prepare_media(self, path: str):
+        """Decode/validate; return an opaque payload, or None if unusable."""
+        raise NotImplementedError
+
+    def commit_media(self, payload) -> None:
+        """Put a prepared payload on screen. Must be quick - it runs mid-fade."""
         raise NotImplementedError
 
     def clear_output(self) -> None:
@@ -1123,23 +1277,24 @@ class StandardOutputWindow(BaseOutputWindow):
 
         self.set_scale_mode(self._scale_mode)
 
-    def load_media(self, path: str) -> bool:
+    def prepare_media(self, path: str):
         if is_image(path):
             pixmap = QPixmap(path)
-            if pixmap.isNull():
-                return False
-            self.engine.clear()  # release any playing video first
-            self._image_view.set_pixmap(pixmap)
-            self._stack.setCurrentIndex(0)
-            return True
-
+            return None if pixmap.isNull() else ("image", pixmap)
         if is_video(path):
+            return ("video", path)
+        return None
+
+    def commit_media(self, payload) -> None:
+        kind, value = payload
+        if kind == "image":
+            self.engine.clear()  # release any playing video first
+            self._image_view.set_pixmap(value)
+            self._stack.setCurrentIndex(0)
+        else:
             self._image_view.clear()
             self._stack.setCurrentIndex(1)
-            self.engine.load(path)
-            return True
-
-        return False
+            self.engine.load(value)
 
     def clear_output(self) -> None:
         self.engine.clear()
@@ -1230,27 +1385,28 @@ class TopOutputWindow(BaseOutputWindow):
 
     # -- background --------------------------------------------------------- #
 
-    def load_media(self, path: str) -> bool:
+    def prepare_media(self, path: str):
         if is_image(path):
             pixmap = QPixmap(path)
-            if pixmap.isNull():
-                return False
+            return None if pixmap.isNull() else ("image", pixmap)
+        if is_video(path):
+            return ("video", path)
+        return None
+
+    def commit_media(self, payload) -> None:
+        kind, value = payload
+        if kind == "image":
             self.engine.clear()
             self._video_item.setVisible(False)
-            self._pixmap_item.setPixmap(pixmap)
+            self._pixmap_item.setPixmap(value)
             self._pixmap_item.setVisible(True)
             self._layout_pixmap()
-            return True
-
-        if is_video(path):
+        else:
             self._pixmap_item.setVisible(False)
             self._pixmap_item.setPixmap(QPixmap())
             self._video_item.setVisible(True)
-            self.engine.load(path)
+            self.engine.load(value)
             self._layout_video()
-            return True
-
-        return False
 
     def set_background_color(self, color: QColor) -> None:
         """Solid-colour background; also clears any image or video."""
@@ -2531,6 +2687,7 @@ class ControlPanel(QMainWindow):
 
         self._refresh_screen_combos(initial=True)
         self._refresh_preset_combo()
+        self._load_fade_setting()
         self._load_autostart_state()
         self._update_output_status()
         self._install_shortcuts()
@@ -2677,6 +2834,34 @@ class ControlPanel(QMainWindow):
     def _tick_clock(self) -> None:
         self.clock.setText(QTime.currentTime().toString("HH:mm:ss"))
 
+    # ------------------------------------------------------- transitions --- #
+
+    def fade_ms(self) -> int:
+        """Current dip-to-black length; 0 means hard cut."""
+        value = self.fade_combo.currentData()
+        return int(value) if value is not None else 0
+
+    def _load_fade_setting(self) -> None:
+        stored = self.settings.value("playback/fade_ms", DEFAULT_FADE_MS)
+        try:
+            stored = int(stored)
+        except (TypeError, ValueError):
+            stored = DEFAULT_FADE_MS
+        index = self.fade_combo.findData(stored)
+        self.fade_combo.blockSignals(True)
+        self.fade_combo.setCurrentIndex(index if index >= 0 else
+                                        self.fade_combo.findData(DEFAULT_FADE_MS))
+        self.fade_combo.blockSignals(False)
+
+    @Slot()
+    def _on_fade_changed(self) -> None:
+        milliseconds = self.fade_ms()
+        self.settings.setValue("playback/fade_ms", milliseconds)
+        self.statusBar().showMessage(
+            "Transitions off — pictures change instantly." if milliseconds == 0
+            else f"Transition: dip to black over {milliseconds} ms.", 5000
+        )
+
     def set_active_role(self, role: str) -> None:
         """Choose which card the keyboard shortcuts drive."""
         self.active_role = role
@@ -2783,6 +2968,21 @@ class ControlPanel(QMainWindow):
         close_outputs.setToolTip("Close every stage output window (the app keeps running)")
         close_outputs.clicked.connect(self._close_all_outputs)
         buttons.addWidget(close_outputs)
+
+        buttons.addSpacing(14)
+        fade_label = QLabel("Transition")
+        fade_label.setObjectName("cardHint")
+        buttons.addWidget(fade_label)
+        self.fade_combo = QComboBox()
+        for caption, milliseconds in FADE_PRESETS:
+            self.fade_combo.addItem(caption, milliseconds)
+        self.fade_combo.setToolTip(
+            "Dip to black whenever the picture changes: fade out, swap, fade back in.\n"
+            "Applies to every screen, to playlist steps and to blackouts."
+        )
+        self.fade_combo.currentIndexChanged.connect(self._on_fade_changed)
+        buttons.addWidget(self.fade_combo)
+
         buttons.addStretch(1)
         card_layout.addLayout(buttons)
         layout.addWidget(card)
@@ -2997,7 +3197,7 @@ class ControlPanel(QMainWindow):
                 return
             window.set_scale_mode(card.current_scale_mode())
             window.engine.set_loop(card.is_repeating())
-            if window.load_media(path):
+            if window.present(path, self.fade_ms()):
                 card.show_loaded(path)
                 self.statusBar().showMessage(
                     f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000
@@ -3019,7 +3219,7 @@ class ControlPanel(QMainWindow):
         card.playRequested.connect(lambda: output() and output().engine.play())
         card.pauseRequested.connect(lambda: output() and output().engine.pause())
         card.stopRequested.connect(lambda: output() and output().engine.stop())
-        card.clearRequested.connect(lambda: output() and output().clear_output())
+        card.clearRequested.connect(lambda: output() and output().fade_clear(self.fade_ms()))
         card.volumeChanged.connect(lambda value: output() and output().engine.set_volume(value))
         card.muteChanged.connect(lambda muted: output() and output().engine.set_muted(muted))
         card.repeatChanged.connect(lambda on: output() and output().engine.set_loop(on))
@@ -3279,8 +3479,9 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _blackout_all(self) -> None:
+        fade = self.fade_ms()
         for window in self._outputs():
-            window.clear_output()
+            window.fade_clear(fade)
         if self.top_output is not None:
             self.top_output.stop_marquee()
         for card in self.cards.values():
@@ -3337,7 +3538,13 @@ class ControlPanel(QMainWindow):
         if self.top_output is None:
             QMessageBox.warning(self, "Output not open", "The Top Screen output window is not open yet.")
             return
-        self.top_output.set_background_color(colour)
+        fade = self.fade_ms()
+        if fade > 0:
+            self.top_output.fader().dip(
+                lambda: self.top_output.set_background_color(colour), fade
+            )
+        else:
+            self.top_output.set_background_color(colour)
         self.statusBar().showMessage(f"Top Screen: solid background {colour.name()}", 5000)
 
     def _push_top_settings(self) -> None:
