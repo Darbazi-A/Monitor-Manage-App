@@ -31,9 +31,13 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `B` blacks out, `F5` opens the outputs.
 - **Drag & drop** everywhere; drop several files at once to fill a playlist.
-- **Transitions** — an optional dip to black whenever the picture changes: fade
-  out, swap, fade back in. Off / Fast / Normal / Slow, applied to every screen,
+- **Transitions** — a crossfade that dissolves the old picture into the new one,
+  or a fade through black. Off / Fast / Normal / Slow, applied to every screen,
   to playlist steps and to blackouts.
+- **Refuses bad files instead of stalling** — every file is checked before it
+  reaches a screen, and anything unusable is explained in plain language with a
+  suggested fix. Clips that cannot be decoded are flagged red in the playlist
+  *before* the show.
 - **Scaling modes** — Stretch, Fit (keep aspect), Fill (crop to cover).
 - **Repeat** — on by default, per screen.
 - **Marquee** — text, typeface, pixel size, colour and scroll speed, drawn over
@@ -81,18 +85,43 @@ blacks out the hall.
 
 ## Transitions
 
-![One dip to black](docs/fade.png)
+![A crossfade between two backgrounds](docs/crossfade.png)
 
-Set the length in **Screens & Setup → Transition**. It is a dip to black, not an
-A/B crossfade: blending two sources would need two decoders and two surfaces per
-screen, and compositing over a video surface is not something to gamble on
-mid-assembly. Dipping is what broadcast does for the same reason, and it behaves
-identically for image→video, video→video and video→image.
+Set the length and style in **Screens & Setup → Transition**.
 
-Mechanically each output gets a black top-level window as its transient parent,
-faded with `windowOpacity`. It mirrors the output's always-on-top flag — a
-topmost window sits above a non-topmost one whoever owns whom, so without that
-the overlay would fade away *behind* the screen it is meant to be dimming.
+**Crossfade** takes a still of what is on screen, swaps the media behind it, then
+dissolves the still away — the hall never goes dark. This is why every output is
+drawn through a `QGraphicsScene` rather than a `QVideoWidget`: a video widget
+renders to its own surface, which cannot be captured, so there would be nothing
+to dissolve *from*. It works for image→video, video→video and video→image alike.
+
+**Through black** fades out, swaps while nothing is visible, and fades back in.
+Blackouts always use this — there is nothing to dissolve into.
+
+Mechanically each output owns a black top-level window, faded with
+`windowOpacity`. Two things that had to be right: the overlay is constructed
+*with the output as its parent*, because an owned window stays above its owner
+and setting a transient parent after the native window exists is too late; and it
+mirrors the output's always-on-top flag, since a topmost window sits above a
+non-topmost one whoever owns whom.
+
+## When a file will not play
+
+Nothing reaches a screen unchecked. `describe_media()` verifies the file exists,
+is not empty, has a known extension, and — for images — actually decodes, by
+reading a 32×32 version first, which catches the half-copied files that pass a
+header check. Videos are matched against the containers the machine's backend
+reports it can demux.
+
+This build of Qt decodes **H.264, MPEG-1/2/4, WMV and MotionJPEG**. It cannot
+decode H.265/HEVC, VP9 or AV1, and it cannot open WebM or FLV at all — those are
+refused up front with the reason and a conversion recipe rather than freezing the
+player. Playback errors that only surface at decode time are caught too: the
+screen is cleared rather than left on a frozen half-frame.
+
+Supported image types come from `QImageReader.supportedImageFormats()` at
+startup, so whatever the installed Qt can read — SVG, ICO, JFIF, TGA and the rest
+— is accepted rather than rejected by a hardcoded list.
 
 ## Starting with Windows
 
@@ -117,12 +146,12 @@ Everything lives in `main.py`:
 | --- | --- |
 | `Icons` | line icons drawn with `QPainter` — no image assets |
 | `MediaEngine` | `QMediaPlayer` wrapper: looping, safe source swapping, audio |
-| `ImageView` | paints a `QPixmap` with the selected scale mode |
 | `BaseOutputWindow` | frameless, un-closable, taskbar-less stage window |
-| `StandardOutputWindow` | Main / Sides — `QVideoWidget` + `ImageView` in a stack |
-| `TopOutputWindow` | Top — `QGraphicsScene` so text composites over video |
-| `VideoThumbnailer` | pulls one real frame out of a clip, queued and cached |
-| `FadeOverlay` | the black pane that dips one output to black and back |
+| `SceneOutputWindow` | any output, drawn through a `QGraphicsScene` |
+| `StandardOutputWindow` / `TopOutputWindow` | Main+Sides / the ceiling strip |
+| `VideoThumbnailer` | pulls one real frame out of a clip; a failure flags it as unplayable |
+| `MediaProblem`, `describe_media` | why a file was refused, in plain language |
+| `FadeOverlay` | crossfades or dips one output between pictures |
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |

@@ -32,10 +32,10 @@ Architecture
 ------------
     Icons                - line icons drawn with QPainter (no image assets).
     MediaEngine          - QMediaPlayer wrapper: looping, safe source swapping.
-    ImageView            - paints a QPixmap with a ScaleMode.
+    FadeOverlay          - crossfades or dips one output between pictures.
     BaseOutputWindow     - frameless, un-closable, taskbar-less stage window.
-    StandardOutputWindow - Main / Sides output (QVideoWidget + ImageView).
-    TopOutputWindow      - Top output (QGraphicsView, so text composites over video).
+    SceneOutputWindow    - any stage output, drawn through a QGraphicsScene.
+    StandardOutputWindow / TopOutputWindow - Main+Sides / the ceiling strip.
     DropZone             - drag & drop target with a thumbnail preview.
     Playlist             - the prepared-media list for one output.
     OutputCard / TopCard - one output's live controls.
@@ -98,7 +98,7 @@ from PySide6.QtGui import (
     QTransform,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
-from PySide6.QtMultimediaWidgets import QGraphicsVideoItem, QVideoWidget
+from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -124,7 +124,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
-    QStackedLayout,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -147,16 +146,54 @@ RUN_VALUE = "StageDisplayController"
 # desktop appears, so an autostart waits before applying the routing.
 DEFAULT_STARTUP_DELAY = 20
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".wmv", ".m4v", ".mpg", ".mpeg", ".webm"}
+def _readable_image_extensions() -> set:
+    """
+    Every image type this machine's Qt build can actually read.
+
+    Hardcoding a list meant rejecting files Qt handles perfectly well - .svg
+    logos, .ico, the .jfif that browsers save - so ask the plugins instead.
+    """
+    try:
+        from PySide6.QtGui import QImageReader
+        formats = {"." + bytes(f).decode().lower() for f in QImageReader.supportedImageFormats()}
+    except Exception:  # pragma: no cover - ancient/odd builds
+        formats = set()
+    formats |= {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
+    formats.discard(".pdf")  # a document, not a stage background
+    return formats
+
+
+# Containers this machine's multimedia backend can demux. Anything outside it is
+# refused up front with an explanation instead of stalling the player.
+# The names must match QMediaFormat.fileFormatName() exactly - it says "MPEG-4",
+# hyphen and all, so spelling it "MPEG4" here would refuse every .mp4 on the disk.
+CONTAINER_BY_EXTENSION = {
+    ".mp4": "MPEG-4", ".m4v": "MPEG-4", ".mov": "QuickTime", ".qt": "QuickTime",
+    ".avi": "AVI", ".divx": "AVI", ".mkv": "Matroska", ".wmv": "WMV", ".asf": "WMV",
+    ".mpg": "MPEG-4", ".mpeg": "MPEG-4", ".m2v": "MPEG-4", ".ts": "MPEG-4",
+    ".mts": "MPEG-4", ".m2ts": "MPEG-4", ".3gp": "MPEG-4", ".3g2": "MPEG-4",
+    ".ogv": "Ogg", ".webm": "WebM", ".flv": "Flash Video", ".vob": "MPEG program stream",
+    ".rm": "RealMedia", ".rmvb": "RealMedia", ".f4v": "Flash Video",
+}
+
+IMAGE_EXTENSIONS = _readable_image_extensions()
+VIDEO_EXTENSIONS = set(CONTAINER_BY_EXTENSION)
+
+
+def _filter_clause(extensions) -> str:
+    return " ".join(sorted("*" + ext for ext in extensions))
+
 
 MEDIA_FILTER = (
-    "Media files (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff "
-    "*.mp4 *.mov *.avi *.mkv *.wmv *.m4v *.mpg *.mpeg *.webm);;"
-    "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tif *.tiff);;"
-    "Videos (*.mp4 *.mov *.avi *.mkv *.wmv *.m4v *.mpg *.mpeg *.webm);;"
+    f"Media files ({_filter_clause(IMAGE_EXTENSIONS | VIDEO_EXTENSIONS)});;"
+    f"Images ({_filter_clause(IMAGE_EXTENSIONS)});;"
+    f"Videos ({_filter_clause(VIDEO_EXTENSIONS)});;"
     "All files (*.*)"
 )
+
+# Above this an image is decoded at a reduced size: a 100-megapixel scan would
+# otherwise lock the interface for seconds while it is unpacked.
+MAX_IMAGE_PIXELS = 40_000_000
 
 ROLE_CONTROL = "control"
 ROLE_MAIN = "main"
@@ -176,9 +213,16 @@ ROLE_LABELS = {
 DEFAULT_TOP_WIDTH = 2818
 DEFAULT_TOP_HEIGHT = 132
 
-# Dip-to-black transition lengths, total (out + in).
-FADE_PRESETS = (("Off (hard cut)", 0), ("Fast", 240), ("Normal", 450), ("Slow", 900))
-DEFAULT_FADE_MS = 450
+# Transition lengths, total.
+FADE_PRESETS = (("Off (hard cut)", 0), ("Fast", 240), ("Normal", 500), ("Slow", 1000))
+DEFAULT_FADE_MS = 500
+
+TRANSITION_CROSSFADE = "crossfade"
+TRANSITION_DIP = "dip"
+TRANSITION_STYLES = (
+    ("Crossfade", TRANSITION_CROSSFADE),
+    ("Through black", TRANSITION_DIP),
+)
 
 # Palette - a quiet, low-contrast dark theme so the stage stays the bright thing.
 CLR_BG = "#12151b"
@@ -220,6 +264,179 @@ def is_video(path: str) -> bool:
 
 def is_supported(path: str) -> bool:
     return is_image(path) or is_video(path)
+
+
+class MediaProblem(Exception):
+    """A file the app will not put on stage, with a plain-language reason."""
+
+    def __init__(self, title: str, detail: str, advice: str = "") -> None:
+        super().__init__(title)
+        self.title = title
+        self.detail = detail
+        self.advice = advice
+
+    def message(self) -> str:
+        parts = [self.detail]
+        if self.advice:
+            parts.append("\n" + self.advice)
+        return "\n".join(parts)
+
+
+CONVERT_ADVICE = (
+    "Convert it to H.264 in an MP4 container and it will play.\n"
+    "In VLC:  Media → Convert / Save → Profile “Video - H.264 + MP3 (MP4)”."
+)
+
+
+def supported_video_containers() -> set:
+    """Container names the multimedia backend reports it can decode."""
+    try:
+        from PySide6.QtMultimedia import QMediaFormat
+        media_format = QMediaFormat()
+        return {
+            QMediaFormat.fileFormatName(f)
+            for f in media_format.supportedFileFormats(QMediaFormat.Decode)
+        }
+    except Exception:  # pragma: no cover - backend without introspection
+        return set()
+
+
+def describe_media(path: str) -> str:
+    """
+    Check a file well enough to refuse it clearly, before anything reaches a
+    screen. Returns "image" or "video"; raises MediaProblem otherwise.
+    """
+    if not path:
+        raise MediaProblem("No file", "No file was given.")
+
+    if not os.path.exists(path):
+        raise MediaProblem(
+            "File not found",
+            f"{path}\n\nThe file is not there any more.",
+            "If it lives on a USB stick or a network drive, check that it is still connected.",
+        )
+    if not os.path.isfile(path):
+        raise MediaProblem("Not a file", f"{path}\n\nThat is a folder, not a media file.")
+
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        raise MediaProblem("Cannot read the file", f"{path}\n\nWindows said: {exc}") from exc
+    if size == 0:
+        raise MediaProblem(
+            "Empty file", f"{os.path.basename(path)} is 0 bytes.",
+            "The copy probably failed - copy it again from the original.",
+        )
+
+    extension = os.path.splitext(path)[1].lower()
+    if not extension:
+        raise MediaProblem(
+            "No file extension",
+            f"{os.path.basename(path)} has no extension, so its type is unknown.",
+            "Rename it with the right ending, for example .jpg or .mp4.",
+        )
+
+    if extension in IMAGE_EXTENSIONS:
+        _check_image(path, extension)
+        return "image"
+
+    if extension in VIDEO_EXTENSIONS:
+        _check_video(path, extension)
+        return "video"
+
+    raise MediaProblem(
+        "Unsupported file type",
+        f"{os.path.basename(path)}\n\n“{extension}” is not an image or video type "
+        "this app can show.",
+        "Supported images: " + ", ".join(sorted(e[1:] for e in IMAGE_EXTENSIONS)) + "\n"
+        "Supported video containers: " + ", ".join(sorted(e[1:] for e in VIDEO_EXTENSIONS)),
+    )
+
+
+def _check_image(path: str, extension: str) -> None:
+    from PySide6.QtGui import QImageReader
+
+    reader = QImageReader(path)
+    reader.setDecideFormatFromContent(True)  # a .jpg that is really a .png still works
+    if not reader.canRead():
+        raise MediaProblem(
+            "Damaged or mislabelled image",
+            f"{os.path.basename(path)}\n\nQt could not read it: {reader.errorString()}",
+            "The file may be corrupt, or it may be a different type wearing the wrong "
+            "extension (a Photoshop .psd renamed to .jpg, for instance).\n"
+            "Open it in Paint and re-save it as PNG or JPG.",
+        )
+    size = reader.size()
+    if size.isValid() and size.width() * size.height() > MAX_IMAGE_PIXELS * 4:
+        raise MediaProblem(
+            "Image is enormous",
+            f"{os.path.basename(path)} is {size.width()}×{size.height()} pixels.",
+            "Resize it to something near the screen resolution before the show - "
+            "decoding it would stall the app.",
+        )
+
+    # canRead() only sniffs the header, so a truncated or half-copied file still
+    # passes it. Decode a thumbnail-sized version: cheap, but it walks enough of
+    # the stream to catch damage before anything reaches a screen.
+    probe = QImageReader(path)
+    probe.setDecideFormatFromContent(True)
+    probe.setScaledSize(QSize(32, 32))
+    if probe.read().isNull():
+        raise MediaProblem(
+            "Damaged image file",
+            f"{os.path.basename(path)}\n\nThe file starts like an image but could not be "
+            f"decoded: {probe.errorString() or 'unexpected end of file'}",
+            "It was most likely copied incompletely. Copy it again from the original, "
+            "or re-save it as PNG or JPG.",
+        )
+
+
+def _check_video(path: str, extension: str) -> None:
+    container = CONTAINER_BY_EXTENSION.get(extension, "")
+    available = supported_video_containers()
+    if available and container and container not in available:
+        raise MediaProblem(
+            "Container not supported on this PC",
+            f"{os.path.basename(path)}\n\nThis machine's video backend cannot open "
+            f"{container} files.\nIt can open: " + ", ".join(sorted(available)) + ".",
+            CONVERT_ADVICE,
+        )
+
+
+def load_pixmap(path: str) -> QPixmap:
+    """
+    Decode an image, or explain why not.
+
+    QImageReader rather than QPixmap(path) so the format is judged by content,
+    very large files are scaled down while decoding instead of unpacked whole,
+    and a failure comes back with a reason rather than a silent null pixmap.
+    """
+    from PySide6.QtGui import QImageReader
+
+    reader = QImageReader(path)
+    reader.setDecideFormatFromContent(True)
+    reader.setAutoTransform(True)  # honour EXIF rotation from phone cameras
+
+    size = reader.size()
+    if size.isValid() and size.width() * size.height() > MAX_IMAGE_PIXELS:
+        scaled = size.scaled(QSize(7680, 4320), Qt.KeepAspectRatio)
+        reader.setScaledSize(scaled)
+
+    image = reader.read()
+    if image.isNull():
+        raise MediaProblem(
+            "Could not open the image",
+            f"{os.path.basename(path)}\n\nQt said: {reader.errorString() or 'unknown error'}",
+            "The file may be corrupt or only partly copied. Re-save it as PNG or JPG.",
+        )
+    pixmap = QPixmap.fromImage(image)
+    if pixmap.isNull():
+        raise MediaProblem(
+            "Could not open the image",
+            f"{os.path.basename(path)}\n\nThe image decoded but could not be prepared "
+            "for display.",
+        )
+    return pixmap
 
 
 def format_time(milliseconds: int) -> str:
@@ -486,6 +703,19 @@ class Icons:
         p.drawPath(inner)
 
     @staticmethod
+    def _warning(p: QPainter) -> None:
+        path = QPainterPath()
+        path.moveTo(12, 3.8)
+        path.lineTo(21.5, 20)
+        path.lineTo(2.5, 20)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(12, 10), QPointF(12, 14.6))
+        dot = QPainterPath()
+        dot.addEllipse(QPointF(12, 17.4), 1.1, 1.1)
+        p.fillPath(dot, p.pen().brush())
+
+    @staticmethod
     def _video(p: QPainter) -> None:
         path = QPainterPath()
         path.addRoundedRect(QRectF(3.5, 6, 12.5, 12), 2, 2)
@@ -544,6 +774,7 @@ class VideoThumbnailer(QObject):
     """
 
     ready = Signal(str, QPixmap)
+    failed = Signal(str)   # no frame could be read - the clip is suspect
 
     TARGET = QSize(480, 270)
     SEEK_MS = 1200
@@ -552,6 +783,7 @@ class VideoThumbnailer(QObject):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._cache: Dict[str, QPixmap] = {}
+        self._failures: set = set()
         self._queue: List[str] = []
         self._current: Optional[str] = None
         self._started = False
@@ -570,6 +802,10 @@ class VideoThumbnailer(QObject):
 
     def cached(self, path: str) -> Optional[QPixmap]:
         return self._cache.get(path)
+
+    def is_suspect(self, path: str) -> bool:
+        """True once a frame grab has failed for this file."""
+        return path in self._failures
 
     def request(self, path: str) -> None:
         pixmap = self._cache.get(path)
@@ -625,8 +861,14 @@ class VideoThumbnailer(QObject):
         self._player.stop()
         self._player.setSource(QUrl())
         if path and pixmap is not None and not pixmap.isNull():
+            self._failures.discard(path)
             self._cache[path] = pixmap
             self.ready.emit(path, pixmap)
+        elif path:
+            # No frame came back, so this clip will not play on stage either.
+            # Better the operator learns that now than during the assembly.
+            self._failures.add(path)
+            self.failed.emit(path)
         QTimer.singleShot(0, self._pump)
 
 
@@ -945,56 +1187,6 @@ class MediaEngine(QObject):
 
 
 # --------------------------------------------------------------------------- #
-# Image rendering widget
-# --------------------------------------------------------------------------- #
-
-class ImageView(QWidget):
-    """Paints a pixmap on a black background, honouring the current ScaleMode."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._pixmap = QPixmap()
-        self._mode = ScaleMode.FIT
-
-    def set_pixmap(self, pixmap: QPixmap) -> None:
-        self._pixmap = pixmap
-        self.update()
-
-    def clear(self) -> None:
-        self._pixmap = QPixmap()
-        self.update()
-
-    def set_scale_mode(self, mode: ScaleMode) -> None:
-        self._mode = mode
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("black"))
-        if self._pixmap.isNull():
-            return
-
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        target = QRectF(self.rect())
-        source = QRectF(self._pixmap.rect())
-
-        if self._mode is ScaleMode.FIT:
-            scale = min(target.width() / source.width(), target.height() / source.height())
-            width, height = source.width() * scale, source.height() * scale
-            target = QRectF((target.width() - width) / 2, (target.height() - height) / 2, width, height)
-        elif self._mode is ScaleMode.CROP:
-            scale = max(target.width() / source.width(), target.height() / source.height())
-            visible_w, visible_h = target.width() / scale, target.height() / scale
-            source = QRectF(
-                (source.width() - visible_w) / 2,
-                (source.height() - visible_h) / 2,
-                visible_w,
-                visible_h,
-            )
-        painter.drawPixmap(target, self._pixmap, source)
-
-
-# --------------------------------------------------------------------------- #
 # Output windows
 # --------------------------------------------------------------------------- #
 
@@ -1018,7 +1210,12 @@ class FadeOverlay(QWidget):
     BASE_FLAGS = Qt.Window | Qt.FramelessWindowHint | Qt.Tool
 
     def __init__(self, target: QWidget) -> None:
-        super().__init__(None, FadeOverlay.BASE_FLAGS)
+        # Constructed WITH the output as its parent: a top-level widget that has
+        # a parent becomes an owned window, and Windows keeps an owned window
+        # above its owner. Setting a transient parent after winId() has already
+        # created the native window is too late - the owner is fixed at creation,
+        # which left the overlay fading away underneath a non-topmost output.
+        super().__init__(target, FadeOverlay.BASE_FLAGS)
         self._target = target
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -1026,16 +1223,25 @@ class FadeOverlay(QWidget):
         self.setCursor(Qt.BlankCursor)
         self.setWindowOpacity(0.0)
 
+        # Holds a still of the outgoing picture during a crossfade.
+        self._still = QPixmap()
+
         self._anim = QPropertyAnimation(self, b"windowOpacity", self)
         self._anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("black"))
+        if not self._still.isNull():
+            painter.drawPixmap(self.rect(), self._still, QRectF(self._still.rect()).toRect())
 
     # -- internals ---------------------------------------------------------- #
 
     def _clear_handlers(self) -> None:
         try:
             self._anim.finished.disconnect()
-        except RuntimeError:
-            pass  # nothing connected
+        except (RuntimeError, TypeError):
+            pass  # nothing connected, which is fine
 
     def _cover_target(self) -> None:
         geometry = self._target.geometry()
@@ -1063,8 +1269,44 @@ class FadeOverlay(QWidget):
 
     # -- public API --------------------------------------------------------- #
 
+    def crossfade(self, action: Callable[[], None], duration_ms: int) -> bool:
+        """
+        Swap instantly behind a still of the old picture, then dissolve it away.
+
+        Smoother than dipping because the hall never goes dark - but it needs a
+        usable still of what is currently on screen, which only the graphics
+        scene outputs can give. Returns False when no still could be taken, so
+        the caller can fall back to a dip.
+        """
+        still = self._target.snapshot() if hasattr(self._target, "snapshot") else QPixmap()
+        if still.isNull():
+            return False
+
+        self._still = still
+        self._cover_target()
+        self._anim.stop()
+        self._clear_handlers()
+        self.setWindowOpacity(1.0)
+        self.repaint()
+
+        action()        # the new picture is built underneath, unseen
+
+        def done() -> None:
+            self._clear_handlers()
+            self._still = QPixmap()
+            self.hide()
+
+        self._anim.finished.connect(done)
+        self._anim.setDuration(max(80, duration_ms))
+        self._anim.setStartValue(1.0)
+        self._anim.setEndValue(0.0)
+        # A short hold lets the first video frame arrive before it is revealed.
+        QTimer.singleShot(90, self._anim.start)
+        return True
+
     def dip(self, action: Callable[[], None], duration_ms: int) -> None:
         """Fade to black, run `action` while nothing is visible, fade back."""
+        self._still = QPixmap()
         half = max(60, duration_ms // 2)
         self._cover_target()
         self._anim.stop()
@@ -1168,6 +1410,16 @@ class BaseOutputWindow(QWidget):
         if on_top:
             flags |= Qt.WindowStaysOnTopHint
         was_visible = self.isVisible()
+
+        # setWindowFlags destroys and recreates this window, which leaves the
+        # overlay owned by an HWND that no longer exists - and an overlay with a
+        # dead owner sinks behind the output. Throw it away and build a fresh one.
+        if self._fader is not None:
+            self._fader.abort()
+            self._fader.setParent(None)
+            self._fader.deleteLater()
+            self._fader = None
+
         self.setWindowFlags(flags)
         if was_visible and self._screen is not None:
             self.show_with_geometry(self._screen, self._geometry)
@@ -1187,32 +1439,42 @@ class BaseOutputWindow(QWidget):
             self._fader = FadeOverlay(self)
         return self._fader
 
-    def present(self, path: str, fade_ms: int = 0) -> bool:
-        """
-        Put `path` on this screen, optionally dipping to black on the way.
+    def transition(self, action: Callable[[], None], fade_ms: int, style: str) -> None:
+        """Run `action` behind whichever transition the operator chose."""
+        if fade_ms <= 0:
+            action()
+            return
+        if style == TRANSITION_CROSSFADE and self.fader().crossfade(action, fade_ms):
+            return
+        self.fader().dip(action, fade_ms)   # also the fallback when no still exists
 
-        The media is prepared (decoded, validated) before the fade starts, so a
-        bad file is reported instantly instead of after a pointless dip.
+    def present(self, path: str, fade_ms: int = 0,
+                style: str = TRANSITION_CROSSFADE) -> None:
+        """
+        Put `path` on this screen, transitioning on the way.
+
+        Raises MediaProblem if the file cannot be shown. The media is prepared
+        (checked, decoded) before any transition starts, so a bad file is
+        reported instantly instead of after a pointless fade.
         """
         payload = self.prepare_media(path)
-        if payload is None:
-            return False
-        if fade_ms <= 0:
-            self.commit_media(payload)
-        else:
-            self.fader().dip(lambda: self.commit_media(payload), fade_ms)
-        return True
+        self.transition(lambda: self.commit_media(payload), fade_ms, style)
 
-    def fade_clear(self, fade_ms: int = 0) -> None:
-        """Blackout, smoothly when a transition length is set."""
-        if fade_ms <= 0:
-            self.clear_output()
-        else:
-            self.fader().dip(self.clear_output, fade_ms)
+    def fade_clear(self, fade_ms: int = 0, style: str = TRANSITION_DIP) -> None:
+        """Blackout. Always through black - there is nothing to dissolve into."""
+        self.transition(self.clear_output, fade_ms, TRANSITION_DIP)
+
+    def snapshot(self) -> QPixmap:
+        """A still of what is on screen, or a null pixmap if it cannot be taken."""
+        return QPixmap()
 
     def load_media(self, path: str) -> bool:
-        """Immediate swap, no transition."""
-        return self.present(path, 0)
+        """Immediate swap, no transition. False instead of raising."""
+        try:
+            self.present(path, 0)
+            return True
+        except MediaProblem:
+            return False
 
     # -- event handling ----------------------------------------------------- #
 
@@ -1249,75 +1511,20 @@ class BaseOutputWindow(QWidget):
         raise NotImplementedError
 
 
-class StandardOutputWindow(BaseOutputWindow):
+class SceneOutputWindow(BaseOutputWindow):
     """
-    Main Stage / Side Screens output.
+    One stage output, drawn through a QGraphicsScene.
 
-    A QStackedLayout swaps between the image view and the QVideoWidget, so only
-    one of them is ever on screen; that avoids flashes when switching media.
-    """
-
-    def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
-        super().__init__(title, parent)
-
-        self.engine = MediaEngine(self)
-        self._scale_mode = ScaleMode.FIT
-
-        self._image_view = ImageView(self)
-        self._video_widget = QVideoWidget(self)
-        self._video_widget.setStyleSheet("background-color: black;")
-        self.engine.player.setVideoOutput(self._video_widget)
-
-        self._stack = QStackedLayout(self)
-        self._stack.setContentsMargins(0, 0, 0, 0)
-        self._stack.setStackingMode(QStackedLayout.StackingMode.StackOne)
-        self._stack.addWidget(self._image_view)    # index 0
-        self._stack.addWidget(self._video_widget)  # index 1
-        self._stack.setCurrentIndex(0)
-
-        self.set_scale_mode(self._scale_mode)
-
-    def prepare_media(self, path: str):
-        if is_image(path):
-            pixmap = QPixmap(path)
-            return None if pixmap.isNull() else ("image", pixmap)
-        if is_video(path):
-            return ("video", path)
-        return None
-
-    def commit_media(self, payload) -> None:
-        kind, value = payload
-        if kind == "image":
-            self.engine.clear()  # release any playing video first
-            self._image_view.set_pixmap(value)
-            self._stack.setCurrentIndex(0)
-        else:
-            self._image_view.clear()
-            self._stack.setCurrentIndex(1)
-            self.engine.load(value)
-
-    def clear_output(self) -> None:
-        self.engine.clear()
-        self._image_view.clear()
-        self._stack.setCurrentIndex(0)
-
-    def set_scale_mode(self, mode: ScaleMode) -> None:
-        self._scale_mode = mode
-        self._image_view.set_scale_mode(mode)
-        self._video_widget.setAspectRatioMode(mode.aspect_mode)
-
-
-class TopOutputWindow(BaseOutputWindow):
-    """
-    Top / horizontal LED strip output.
-
-    Implemented with a QGraphicsScene so the marquee text can be composited over
-    a live QGraphicsVideoItem (not possible over a plain QVideoWidget).
+    Every output uses this, not just the ceiling strip. A QVideoWidget renders
+    straight to its own surface, which means nothing can be composited over it
+    and it cannot be captured - so no text overlay and, more importantly, no
+    crossfade, because a crossfade needs a still of the outgoing picture. Going
+    through the scene costs a texture blit and buys both.
 
     Scene layers (Z value):
         0   background colour rectangle
         1   background image OR background video
-        10  marquee text
+        10  marquee text (used by the ceiling strip)
     """
 
     MARQUEE_INTERVAL_MS = 16  # ~60 fps
@@ -1386,12 +1593,10 @@ class TopOutputWindow(BaseOutputWindow):
     # -- background --------------------------------------------------------- #
 
     def prepare_media(self, path: str):
-        if is_image(path):
-            pixmap = QPixmap(path)
-            return None if pixmap.isNull() else ("image", pixmap)
-        if is_video(path):
-            return ("video", path)
-        return None
+        kind = describe_media(path)          # raises MediaProblem
+        if kind == "image":
+            return ("image", load_pixmap(path))
+        return ("video", path)
 
     def commit_media(self, payload) -> None:
         kind, value = payload
@@ -1561,6 +1766,33 @@ class TopOutputWindow(BaseOutputWindow):
         )
         self._video_item.setSize(QSizeF(rect.width(), rect.height()))
         self._video_item.setPos(0, 0)
+
+    # -- transitions -------------------------------------------------------- #
+
+    def snapshot(self) -> QPixmap:
+        """
+        A still of exactly what this screen is showing, video included.
+
+        This is the piece a crossfade is built on, and the reason every output
+        goes through a graphics scene rather than a QVideoWidget.
+        """
+        try:
+            return self.grab()
+        except Exception:
+            return QPixmap()
+
+
+class StandardOutputWindow(SceneOutputWindow):
+    """Main Stage / Side Screens: a plain full-frame output."""
+
+
+class TopOutputWindow(SceneOutputWindow):
+    """
+    The ceiling LED strip.
+
+    Identical machinery to any other output; this is where the marquee is
+    actually used, composited over whatever background is running.
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -1738,6 +1970,7 @@ class Playlist(QListWidget):
         self.itemClicked.connect(self._on_item_clicked)
         self.model().rowsMoved.connect(lambda *_a: self._renumber())
         thumbnailer().ready.connect(self._on_poster_ready)
+        thumbnailer().failed.connect(self._on_poster_failed)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
@@ -1799,6 +2032,18 @@ class Playlist(QListWidget):
                 item.setIcon(QIcon(pixmap.scaled(self.ICON, Qt.KeepAspectRatioByExpanding,
                                                  Qt.SmoothTransformation)))
 
+    def _on_poster_failed(self, path: str) -> None:
+        """Flag a clip no frame could be read from - it will not play either."""
+        for row in range(self.count()):
+            item = self.item(row)
+            if item.data(Qt.UserRole) == path:
+                item.setIcon(Icons.get("warning", CLR_DANGER, 16))
+                item.setForeground(QColor(CLR_DANGER))
+                item.setToolTip(
+                    f"{path}\n\nNo frame could be read from this clip, so it will most "
+                    "likely not play on stage.\nConvert it to H.264 MP4 before the show."
+                )
+
     def _renumber(self) -> None:
         """Keep the visible running order in step after adds and reorders."""
         for row in range(self.count()):
@@ -1833,11 +2078,15 @@ class Playlist(QListWidget):
         """Highlight whichever entry is currently on the screen."""
         for row in range(self.count()):
             item = self.item(row)
-            active = item.data(Qt.UserRole) == path
+            entry = item.data(Qt.UserRole)
+            active = entry == path
             font = item.font()
             font.setBold(active)
             item.setFont(font)
-            item.setForeground(QColor(CLR_ACCENT if active else CLR_MUTED))
+            if thumbnailer().is_suspect(entry):
+                item.setForeground(QColor(CLR_DANGER))  # keep the warning visible
+            else:
+                item.setForeground(QColor(CLR_ACCENT if active else CLR_MUTED))
             if active:
                 self.setCurrentRow(row)
 
@@ -2837,9 +3086,12 @@ class ControlPanel(QMainWindow):
     # ------------------------------------------------------- transitions --- #
 
     def fade_ms(self) -> int:
-        """Current dip-to-black length; 0 means hard cut."""
+        """Current transition length; 0 means hard cut."""
         value = self.fade_combo.currentData()
         return int(value) if value is not None else 0
+
+    def fade_style(self) -> str:
+        return self.style_combo.currentData() or TRANSITION_CROSSFADE
 
     def _load_fade_setting(self) -> None:
         stored = self.settings.value("playback/fade_ms", DEFAULT_FADE_MS)
@@ -2853,14 +3105,22 @@ class ControlPanel(QMainWindow):
                                         self.fade_combo.findData(DEFAULT_FADE_MS))
         self.fade_combo.blockSignals(False)
 
+        style = self.settings.value("playback/fade_style", TRANSITION_CROSSFADE)
+        index = self.style_combo.findData(style)
+        self.style_combo.blockSignals(True)
+        self.style_combo.setCurrentIndex(max(0, index))
+        self.style_combo.blockSignals(False)
+
     @Slot()
     def _on_fade_changed(self) -> None:
         milliseconds = self.fade_ms()
         self.settings.setValue("playback/fade_ms", milliseconds)
-        self.statusBar().showMessage(
-            "Transitions off — pictures change instantly." if milliseconds == 0
-            else f"Transition: dip to black over {milliseconds} ms.", 5000
-        )
+        self.settings.setValue("playback/fade_style", self.fade_style())
+        if milliseconds == 0:
+            self.statusBar().showMessage("Transitions off — pictures change instantly.", 5000)
+        else:
+            name = "crossfade" if self.fade_style() == TRANSITION_CROSSFADE else "fade through black"
+            self.statusBar().showMessage(f"Transition: {name} over {milliseconds} ms.", 5000)
 
     def set_active_role(self, role: str) -> None:
         """Choose which card the keyboard shortcuts drive."""
@@ -2977,11 +3237,21 @@ class ControlPanel(QMainWindow):
         for caption, milliseconds in FADE_PRESETS:
             self.fade_combo.addItem(caption, milliseconds)
         self.fade_combo.setToolTip(
-            "Dip to black whenever the picture changes: fade out, swap, fade back in.\n"
+            "How long a change of picture takes.\n"
             "Applies to every screen, to playlist steps and to blackouts."
         )
         self.fade_combo.currentIndexChanged.connect(self._on_fade_changed)
         buttons.addWidget(self.fade_combo)
+
+        self.style_combo = QComboBox()
+        for caption, value in TRANSITION_STYLES:
+            self.style_combo.addItem(caption, value)
+        self.style_combo.setToolTip(
+            "Crossfade dissolves the old picture into the new one - the hall never "
+            "goes dark.\nThrough black fades out, swaps, then fades in."
+        )
+        self.style_combo.currentIndexChanged.connect(self._on_fade_changed)
+        buttons.addWidget(self.style_combo)
 
         buttons.addStretch(1)
         card_layout.addLayout(buttons)
@@ -3192,22 +3462,22 @@ class ControlPanel(QMainWindow):
                     "“OPEN OUTPUTS” and try again.",
                 )
                 return
-            if not os.path.isfile(path):
-                QMessageBox.warning(self, "File not found", f"Cannot find:\n{path}")
+            try:
+                window.set_scale_mode(card.current_scale_mode())
+                window.engine.set_loop(card.is_repeating())
+                window.present(path, self.fade_ms(), self.fade_style())
+            except MediaProblem as problem:
+                self._report_media_problem(role, path, problem)
                 return
-            window.set_scale_mode(card.current_scale_mode())
-            window.engine.set_loop(card.is_repeating())
-            if window.present(path, self.fade_ms()):
-                card.show_loaded(path)
-                self.statusBar().showMessage(
-                    f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000
+            except Exception as exc:  # never let one bad file take the app down
+                self._report_media_problem(
+                    role, path,
+                    MediaProblem("Could not show this file",
+                                 f"{os.path.basename(path)}\n\n{type(exc).__name__}: {exc}"),
                 )
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Unsupported file",
-                    f"“{os.path.basename(path)}” is not a supported image or video.",
-                )
+                return
+            card.show_loaded(path)
+            self.statusBar().showMessage(f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000)
 
         card.loadRequested.connect(on_load)
         card.queueRequested.connect(
@@ -3223,6 +3493,46 @@ class ControlPanel(QMainWindow):
         card.volumeChanged.connect(lambda value: output() and output().engine.set_volume(value))
         card.muteChanged.connect(lambda muted: output() and output().engine.set_muted(muted))
         card.repeatChanged.connect(lambda on: output() and output().engine.set_loop(on))
+
+    # -------------------------------------------------- problem reporting -- #
+
+    def _report_media_problem(self, role: str, path: str, problem: MediaProblem) -> None:
+        """One clear dialog instead of a frozen or blank screen."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(problem.title)
+        box.setText(f"<b>{problem.title}</b><br>{ROLE_LABELS[role]} was not changed.")
+        box.setInformativeText(problem.message())
+        box.setDetailedText(f"File:\n{path}")
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec()
+        self.statusBar().showMessage(
+            f"{ROLE_LABELS[role]}: {os.path.basename(path)} refused — {problem.title}", 12000
+        )
+
+    def _on_engine_error(self, role: str, message: str) -> None:
+        """
+        Playback errors used to vanish silently: the signal was never connected,
+        so an unplayable codec looked like the app hanging for no reason.
+        """
+        card = self.cards.get(role)
+        name = os.path.basename(card.current_path()) if card and card.current_path() else "the clip"
+        window = getattr(self, self.OUTPUT_ATTRS[role], None)
+        if window is not None:
+            window.clear_output()      # do not leave a frozen half-frame on stage
+        if card is not None:
+            card.reset_file()
+        self._report_media_problem(
+            role,
+            card.current_path() if card else "",
+            MediaProblem(
+                "This video will not play on this PC",
+                f"{name}\n\nThe video backend reported:\n{message}\n\n"
+                "The container opened, so this is almost certainly the codec inside it - "
+                "H.265/HEVC, VP9 and AV1 are not supported here.",
+                CONVERT_ADVICE,
+            ),
+        )
 
     # -------------------------------------------------------------- routing -- #
 
@@ -3412,6 +3722,9 @@ class ControlPanel(QMainWindow):
             player.positionChanged.connect(card.set_position)
             player.durationChanged.connect(card.set_duration)
             card.seekRequested.connect(player.setPosition)
+            window.engine.errorOccurred.connect(
+                lambda message, bound=role: self._on_engine_error(bound, message)
+            )
 
         window.engine.set_loop(card.is_repeating())
         window.engine.set_volume(card.volume_slider.value())
@@ -3539,12 +3852,9 @@ class ControlPanel(QMainWindow):
             QMessageBox.warning(self, "Output not open", "The Top Screen output window is not open yet.")
             return
         fade = self.fade_ms()
-        if fade > 0:
-            self.top_output.fader().dip(
-                lambda: self.top_output.set_background_color(colour), fade
-            )
-        else:
-            self.top_output.set_background_color(colour)
+        self.top_output.transition(
+            lambda: self.top_output.set_background_color(colour), fade, self.fade_style()
+        )
         self.statusBar().showMessage(f"Top Screen: solid background {colour.name()}", 5000)
 
     def _push_top_settings(self) -> None:
