@@ -217,6 +217,11 @@ DEFAULT_TOP_HEIGHT = 132
 FADE_PRESETS = (("Off (hard cut)", 0), ("Fast", 240), ("Normal", 500), ("Slow", 1000))
 DEFAULT_FADE_MS = 500
 
+# QSettings scope. Tests override these so a test run cannot rewrite the
+# operator's real preferences.
+SETTINGS_ORG = "StageDisplayController"
+SETTINGS_APP = "StageDisplayController"
+
 TRANSITION_CROSSFADE = "crossfade"
 TRANSITION_DIP = "dip"
 TRANSITION_STYLES = (
@@ -225,11 +230,11 @@ TRANSITION_STYLES = (
 )
 
 # Palette - a quiet, low-contrast dark theme so the stage stays the bright thing.
-CLR_BG = "#12151b"
-CLR_CARD = "#1a1f27"
+CLR_BG = "#0f1218"
+CLR_CARD = "#191e26"
 CLR_INPUT = "#151a21"
 CLR_HOVER = "#242b36"
-CLR_LINE = "#2a323e"
+CLR_LINE = "#2b3442"
 CLR_TEXT = "#e3e8f0"
 CLR_MUTED = "#79839a"
 CLR_ACCENT = "#5aa9f0"
@@ -926,7 +931,7 @@ QFrame#card, QFrame#bar {{
 /* The card the keyboard acts on. */
 QFrame#card[active="true"] {{
     border: 1px solid {CLR_ACCENT};
-    background: #1c222c;
+    background: #1b2230;
 }}
 QLabel#cardTitle {{ font-size: 14px; font-weight: 700; }}
 QLabel#cardHint {{ color: {CLR_MUTED}; }}
@@ -934,8 +939,9 @@ QLabel#sectionTitle {{
     color: {CLR_MUTED};
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 1.4px;
+    letter-spacing: 1.5px;
 }}
+QLabel#cardSub {{ color: {CLR_MUTED}; font-size: 11px; }}
 QLabel#brand {{ font-size: 13px; font-weight: 800; letter-spacing: 1.2px; }}
 QLabel#clock {{
     color: {CLR_MUTED};
@@ -978,7 +984,7 @@ QPushButton {{
     background: {CLR_INPUT};
     border: 1px solid {CLR_LINE};
     border-radius: 7px;
-    padding: 6px 12px;
+    padding: 7px 13px;
 }}
 QPushButton:hover {{ background: {CLR_HOVER}; border-color: #3b4657; }}
 QPushButton:pressed {{ background: #11151b; }}
@@ -1385,9 +1391,14 @@ class BaseOutputWindow(QWidget):
         whole monitor. A custom rectangle is what makes LED walls work when
         Windows reports a resolution that differs from the mapped canvas.
         """
+        target = rect if rect is not None else screen.geometry()
+        if (self.isVisible() and self._screen is screen and self._geometry == rect
+                and self.geometry() == target):
+            self.raise_()      # already exactly here; re-showing would only flicker
+            return
+
         self._screen = screen
         self._geometry = rect
-        target = rect if rect is not None else screen.geometry()
 
         # Leaving fullscreen first makes a cross-monitor move reliable on Windows.
         if self.isFullScreen() or self.isVisible():
@@ -1409,6 +1420,8 @@ class BaseOutputWindow(QWidget):
         flags = self.BASE_FLAGS
         if on_top:
             flags |= Qt.WindowStaysOnTopHint
+        if flags == self.windowFlags():
+            return   # setWindowFlags would destroy and rebuild the window for nothing
         was_visible = self.isVisible()
 
         # setWindowFlags destroys and recreates this window, which leaves the
@@ -2167,7 +2180,7 @@ class OutputCard(QFrame):
         name = QLabel(title)
         name.setObjectName("cardTitle")
         hint = QLabel(subtitle)
-        hint.setObjectName("cardHint")
+        hint.setObjectName("cardSub")
         title_box.addWidget(name)
         title_box.addWidget(hint)
         header.addLayout(title_box)
@@ -2915,13 +2928,17 @@ class ControlPanel(QMainWindow):
         self.routing_rows: Dict[str, RoutingRow] = {}
         self.presets = PresetStore()
         self.active_role = ROLE_MAIN
-        self.settings = QSettings("StageDisplayController", "StageDisplayController")
+        self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        self._freshly_opened: set = set()
+        self.loaded_preset: Optional[str] = None
+        self._preset_dirty = False
 
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(14, 12, 14, 8)
         root.setSpacing(9)
         root.addWidget(self._build_header())
+        root.addWidget(self._build_preset_bar())
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
@@ -2938,6 +2955,7 @@ class ControlPanel(QMainWindow):
         self._refresh_preset_combo()
         self._load_fade_setting()
         self._load_autostart_state()
+        self._describe_preset_state()
         self._update_output_status()
         self._install_shortcuts()
         self.set_active_role(ROLE_MAIN)
@@ -2988,33 +3006,6 @@ class ControlPanel(QMainWindow):
 
         layout.addStretch(1)
 
-        # --- presets ------------------------------------------------------- #
-        preset_label = QLabel()
-        preset_label.setPixmap(Icons.get("list", CLR_MUTED, 15).pixmap(15, 15))
-        preset_label.setToolTip("Presets")
-        layout.addWidget(preset_label)
-
-        self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(190)
-        self.preset_combo.setToolTip("Saved show presets")
-        layout.addWidget(self.preset_combo)
-
-        for icon_name, tip, handler in (
-            ("folder", "Load the selected preset", self._load_preset),
-            ("save", "Save / overwrite the selected preset", self._save_preset),
-            ("plus", "Save the current setup as a new preset", self._save_preset_as),
-            ("trash", "Delete the selected preset", self._delete_preset),
-        ):
-            button = icon_button(icon_name, tip, CLR_MUTED, 16)
-            button.setObjectName("ghost")
-            button.clicked.connect(handler)
-            layout.addWidget(button)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.VLine)
-        separator.setStyleSheet(f"color: {CLR_LINE};")
-        layout.addWidget(separator)
-
         # --- global actions ------------------------------------------------ #
         open_btn = QPushButton("  OPEN OUTPUTS")
         open_btn.setObjectName("primary")
@@ -3032,6 +3023,87 @@ class ControlPanel(QMainWindow):
         # "Close outputs" deliberately lives on the Screens tab: an X in the
         # header corner reads like "quit the app" during a show.
         return bar
+
+    def _build_preset_bar(self) -> QWidget:
+        """
+        Presets get their own labelled row.
+
+        As four unlabelled icons in the header this was guesswork - which one
+        loads, which one overwrites, and what is on the screens right now. Words
+        and a state line answer all three.
+        """
+        bar = QFrame()
+        bar.setObjectName("bar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(14, 9, 14, 9)
+        layout.setSpacing(9)
+
+        glyph = QLabel()
+        glyph.setPixmap(Icons.get("list", CLR_MUTED, 16).pixmap(16, 16))
+        layout.addWidget(glyph)
+
+        caption = QLabel("PRESET")
+        caption.setObjectName("sectionTitle")
+        layout.addWidget(caption)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(230)
+        self.preset_combo.setToolTip("Saved setups: routing, playlists, marquee, volumes")
+        layout.addWidget(self.preset_combo)
+
+        load_btn = QPushButton("  Load")
+        load_btn.setObjectName("primary")
+        load_btn.setIcon(Icons.get("folder", "#0b0e13", 15))
+        load_btn.setToolTip("Put the selected preset on the screens")
+        load_btn.clicked.connect(self._load_preset)
+        layout.addWidget(load_btn)
+
+        save_btn = QPushButton("  Save")
+        save_btn.setIcon(Icons.get("save", CLR_TEXT, 15))
+        save_btn.setToolTip("Overwrite the selected preset with what is set up now")
+        save_btn.clicked.connect(self._save_preset)
+        layout.addWidget(save_btn)
+
+        new_btn = QPushButton("  Save as new…")
+        new_btn.setIcon(Icons.get("plus", CLR_TEXT, 15))
+        new_btn.setToolTip("Store the current setup under a new name")
+        new_btn.clicked.connect(self._save_preset_as)
+        layout.addWidget(new_btn)
+
+        delete_btn = QPushButton("  Delete")
+        delete_btn.setIcon(Icons.get("trash", CLR_TEXT, 15))
+        delete_btn.setToolTip("Remove the selected preset")
+        delete_btn.clicked.connect(self._delete_preset)
+        layout.addWidget(delete_btn)
+
+        layout.addSpacing(6)
+        self.preset_state = QLabel()
+        self.preset_state.setObjectName("cardHint")
+        layout.addWidget(self.preset_state)
+
+        layout.addStretch(1)
+        where = QLabel(f"saved in {os.path.basename(PRESET_FILE)}")
+        where.setObjectName("keyHint")
+        where.setToolTip(PRESET_FILE)
+        layout.addWidget(where)
+        return bar
+
+    def _mark_preset_dirty(self) -> None:
+        if not self._preset_dirty:
+            self._preset_dirty = True
+            self._describe_preset_state()
+
+    def _describe_preset_state(self) -> None:
+        if self.loaded_preset is None:
+            self.preset_state.setText("nothing loaded")
+            self.preset_state.setStyleSheet(f"color: {CLR_MUTED};")
+            return
+        if self._preset_dirty:
+            self.preset_state.setText(f"●  {self.loaded_preset} — changed, not saved")
+            self.preset_state.setStyleSheet(f"color: {CLR_WARN}; font-weight: 600;")
+        else:
+            self.preset_state.setText(f"●  {self.loaded_preset} is on the screens")
+            self.preset_state.setStyleSheet(f"color: {CLR_OK}; font-weight: 600;")
 
     def _build_live_tab(self) -> QWidget:
         page = QWidget()
@@ -3067,6 +3139,9 @@ class ControlPanel(QMainWindow):
         )
         self.top_card.marqueeStart.connect(self._start_marquee)
         self.top_card.marqueeStop.connect(self._stop_marquee)
+        for changed in (self.top_card.marqueeTextChanged, self.top_card.marqueeColorChanged,
+                        self.top_card.marqueeSpeedChanged, self.top_card.colorRequested):
+            changed.connect(lambda *_a: self._mark_preset_dirty())
         layout.addWidget(self.top_card, 1)
 
         self.cards: Dict[str, OutputCard] = {
@@ -3477,6 +3552,7 @@ class ControlPanel(QMainWindow):
                 )
                 return
             card.show_loaded(path)
+            self._mark_preset_dirty()
             self.statusBar().showMessage(f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000)
 
         card.loadRequested.connect(on_load)
@@ -3486,6 +3562,9 @@ class ControlPanel(QMainWindow):
             )
         )
         card.scaleModeChanged.connect(lambda mode: output() and output().set_scale_mode(mode))
+        for changed in (card.scaleModeChanged, card.repeatChanged, card.muteChanged,
+                        card.queueRequested, card.volumeChanged):
+            changed.connect(lambda *_a: self._mark_preset_dirty())
         card.playRequested.connect(lambda: output() and output().engine.play())
         card.pauseRequested.connect(lambda: output() and output().engine.pause())
         card.stopRequested.connect(lambda: output() and output().engine.stop())
@@ -3677,6 +3756,8 @@ class ControlPanel(QMainWindow):
         if control_screen is not None:
             self._move_self_to(control_screen)
 
+        self._freshly_opened = set()   # filled by _ensure_output below
+
         specs = (
             (ROLE_MAIN, StandardOutputWindow, "Main Stage Output", self.main_card),
             (ROLE_SIDES, StandardOutputWindow, "Side Screens Output", self.sides_card),
@@ -3712,6 +3793,7 @@ class ControlPanel(QMainWindow):
             return None
 
         if window is None:
+            self._freshly_opened.add(role)   # nothing on it yet, so do not fade in
             window = cls(title)
             window.set_scale_mode(card.current_scale_mode())
             window.closedByUser.connect(
@@ -3734,13 +3816,26 @@ class ControlPanel(QMainWindow):
         return window
 
     def _restore_media_to_outputs(self) -> None:
-        """Re-send whatever each card has loaded, e.g. after reopening a window."""
+        """
+        Re-send whatever each card has loaded - after reopening a window, or
+        when a preset changes every screen at once.
+
+        A screen that was already showing something transitions into the new
+        picture; one whose window has only just been created cuts straight in,
+        because there is nothing to dissolve away from.
+        """
         for role, card in self.cards.items():
             window = getattr(self, self.OUTPUT_ATTRS[role], None)
             path = card.current_path()
-            if window is not None and path and os.path.isfile(path):
-                window.set_scale_mode(card.current_scale_mode())
-                window.load_media(path)
+            if window is None or not path or not os.path.isfile(path):
+                continue
+            window.set_scale_mode(card.current_scale_mode())
+            fade = 0 if role in self._freshly_opened else self.fade_ms()
+            try:
+                window.present(path, fade, self.fade_style())
+            except MediaProblem as problem:
+                self._report_media_problem(role, path, problem)
+                card.reset_file()
 
     def _on_output_closed(self, role: str, title: str) -> None:
         """
@@ -4014,6 +4109,9 @@ class ControlPanel(QMainWindow):
             QMessageBox.information(self, "No preset", "Save a preset first, then it can be loaded.")
             return
         self._apply_preset(payload)
+        self.loaded_preset = name
+        self._preset_dirty = False
+        self._describe_preset_state()
         self.statusBar().showMessage(f"Preset loaded: {name}", 6000)
 
     @Slot()
@@ -4056,7 +4154,11 @@ class ControlPanel(QMainWindow):
         if error:
             QMessageBox.critical(self, "Could not save presets", error)
             return
+        if select:
+            self.loaded_preset = select
+            self._preset_dirty = False
         self._refresh_preset_combo(select)
+        self._describe_preset_state()
         self.statusBar().showMessage(f"Presets saved to {PRESET_FILE}", 6000)
 
     # ------------------------------------------------------------ shutdown -- #

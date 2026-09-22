@@ -43,7 +43,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Marquee** — text, typeface, pixel size, colour and scroll speed, drawn over
   live video via a `QGraphicsScene`.
 - **Presets** — routing, geometry, playlists, scaling, volumes and marquee
-  settings saved as JSON.
+  settings saved as JSON, on their own labelled row that shows which preset is
+  on the screens and whether it has unsaved changes. Loading one transitions
+  every screen rather than cutting.
 - **Start with Windows** — optionally open the app at login and put a chosen
   preset on the screens, after a delay that lets LED processors finish booting.
 - **Blackout** — clears every stage screen at once.
@@ -97,6 +99,10 @@ to dissolve *from*. It works for image→video, video→video and video→image 
 
 **Through black** fades out, swaps while nothing is visible, and fades back in.
 Blackouts always use this — there is nothing to dissolve into.
+
+Loading a preset transitions too. A screen whose window has only just been
+opened cuts straight in, because there is no previous picture to dissolve away
+from.
 
 Mechanically each output owns a black top-level window, faded with
 `windowOpacity`. Two things that had to be right: the overlay is constructed
