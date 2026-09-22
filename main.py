@@ -176,8 +176,23 @@ CONTAINER_BY_EXTENSION = {
     ".rm": "RealMedia", ".rmvb": "RealMedia", ".f4v": "Flash Video",
 }
 
+# Sound files. Same idea as video: the extension names a container, and the
+# container has to be one the backend can actually open.
+AUDIO_CONTAINER_BY_EXTENSION = {
+    ".mp3": "MP3", ".wav": "Wave", ".wave": "Wave", ".flac": "FLAC",
+    ".m4a": "MPEG-4 Audio", ".aac": "AAC", ".wma": "WMA",
+    ".ogg": "Ogg", ".oga": "Ogg", ".opus": "Ogg",
+    ".aiff": "AIFF", ".aif": "AIFF", ".alac": "MPEG-4 Audio",
+}
+
 IMAGE_EXTENSIONS = _readable_image_extensions()
 VIDEO_EXTENSIONS = set(CONTAINER_BY_EXTENSION)
+AUDIO_EXTENSIONS = set(AUDIO_CONTAINER_BY_EXTENSION)
+
+# Sound desk: eight cues on F1-F8, which is what an award ceremony needs -
+# a fanfare per category, the anthem, and a bed of background music.
+SOUND_SLOTS = 8
+SOUND_FADE_MS = 400
 
 
 def _filter_clause(extensions) -> str:
@@ -349,12 +364,16 @@ def describe_media(path: str) -> str:
         _check_video(path, extension)
         return "video"
 
+    if extension in AUDIO_EXTENSIONS:
+        _check_audio(path, extension)
+        return "audio"
+
     raise MediaProblem(
         "Unsupported file type",
-        f"{os.path.basename(path)}\n\n“{extension}” is not an image or video type "
-        "this app can show.",
+        f"{os.path.basename(path)}\n\n“{extension}” is not a type this app can use.",
         "Supported images: " + ", ".join(sorted(e[1:] for e in IMAGE_EXTENSIONS)) + "\n"
-        "Supported video containers: " + ", ".join(sorted(e[1:] for e in VIDEO_EXTENSIONS)),
+        "Supported video: " + ", ".join(sorted(e[1:] for e in VIDEO_EXTENSIONS)) + "\n"
+        "Supported sound: " + ", ".join(sorted(e[1:] for e in AUDIO_EXTENSIONS)),
     )
 
 
@@ -442,6 +461,18 @@ def load_pixmap(path: str) -> QPixmap:
             "for display.",
         )
     return pixmap
+
+
+def _check_audio(path: str, extension: str) -> None:
+    container = AUDIO_CONTAINER_BY_EXTENSION.get(extension, "")
+    available = supported_video_containers()   # one list covers audio and video
+    if available and container and container not in available:
+        raise MediaProblem(
+            "Sound format not supported on this PC",
+            f"{os.path.basename(path)}\n\nThis machine's audio backend cannot open "
+            f"{container} files.\nIt can open: " + ", ".join(sorted(available)) + ".",
+            "Convert it to MP3 or WAV and it will play.",
+        )
 
 
 def format_time(milliseconds: int) -> str:
@@ -967,6 +998,27 @@ QLabel#keyHint {{
     color: #5d6779;
     font-size: 11px;
 }}
+
+QFrame#cuePad {{
+    background: {CLR_INPUT};
+    border: 1px dashed {CLR_LINE};
+    border-radius: 8px;
+}}
+QFrame#cuePad[filled="true"] {{ border: 1px solid {CLR_LINE}; }}
+QFrame#cuePad[filled="true"]:hover {{ border-color: {CLR_ACCENT}; background: {CLR_HOVER}; }}
+QFrame#cuePad[playing="true"] {{
+    background: rgba(76, 201, 138, 0.15);
+    border: 1px solid {CLR_OK};
+}}
+QLabel#cueKey {{
+    color: {CLR_MUTED};
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+}}
+QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
+QLabel#cueName {{ font-size: 12px; font-weight: 600; }}
+QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #4d5769; font-weight: 400; }}
 QLabel {{ background: transparent; }}
 
 QFrame#dropZone {{
@@ -1190,6 +1242,224 @@ class MediaEngine(QObject):
     def _on_error(self, _error, error_string: str) -> None:
         if error_string:
             self.errorOccurred.emit(error_string)
+
+    def set_device(self, device) -> None:
+        if device is not None:
+            self._audio.setDevice(device)
+
+
+# --------------------------------------------------------------------------- #
+# Sound desk
+# --------------------------------------------------------------------------- #
+
+class SoundCue(QObject):
+    """
+    One sound on one key.
+
+    Every cue owns its own player, so a fanfare can fire over a bed of music
+    instead of interrupting it. Stopping fades the level down first: cutting a
+    hall's PA dead is far more noticeable than the sound itself.
+    """
+
+    changed = Signal()
+    failed = Signal(str)
+
+    def __init__(self, index: int, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.index = index
+        self.path = ""
+        self.loop = False
+        self.level = 90          # this cue's own level, 0-100
+        self._master = 90
+
+        self._player = QMediaPlayer(self)
+        self._audio = QAudioOutput(self)
+        self._player.setAudioOutput(self._audio)
+        self._apply_volume()
+
+        self._fade = QPropertyAnimation(self._audio, b"volume", self)
+        self._fade.setEasingCurve(QEasingCurve.OutQuad)
+        self._fade.finished.connect(self._after_fade)
+        self._fading = False
+
+        self._player.playbackStateChanged.connect(lambda _s: self.changed.emit())
+        self._player.errorOccurred.connect(
+            lambda _e, message: self.failed.emit(message or "playback failed")
+        )
+
+    # -- content ------------------------------------------------------------ #
+
+    def assign(self, path: str) -> None:
+        """Point this cue at a file. Raises MediaProblem if it is unusable."""
+        kind = describe_media(path)
+        if kind != "audio":
+            raise MediaProblem(
+                "Not a sound file",
+                f"{os.path.basename(path)} is {'an image' if kind == 'image' else 'a video'}.",
+                "Sound cues take audio files - mp3, wav, m4a, flac and the like.",
+            )
+        self.stop(0)
+        self.path = path
+        self._player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        self.changed.emit()
+
+    def clear(self) -> None:
+        self.stop(0)
+        self.path = ""
+        self._player.setSource(QUrl())
+        self.changed.emit()
+
+    def label(self) -> str:
+        return os.path.splitext(os.path.basename(self.path))[0] if self.path else ""
+
+    # -- transport ---------------------------------------------------------- #
+
+    def is_playing(self) -> bool:
+        states = getattr(QMediaPlayer, "PlaybackState", None)
+        return self._player.playbackState() == getattr(states, "PlayingState", None)
+
+    def play(self) -> None:
+        if not self.path:
+            return
+        self._fade.stop()
+        self._fading = False
+        self._apply_volume()
+        self._player.setPosition(0)
+        self._apply_loop()
+        self._player.play()
+        self.changed.emit()
+
+    def stop(self, fade_ms: int = SOUND_FADE_MS) -> None:
+        if not self.is_playing():
+            self._player.stop()
+            return
+        if fade_ms <= 0:
+            self._player.stop()
+            self._apply_volume()
+            self.changed.emit()
+            return
+        self._fading = True
+        self._fade.stop()
+        self._fade.setDuration(fade_ms)
+        self._fade.setStartValue(self._audio.volume())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+
+    def toggle(self) -> None:
+        self.stop() if self.is_playing() else self.play()
+
+    def _after_fade(self) -> None:
+        if not self._fading:
+            return
+        self._fading = False
+        self._player.stop()
+        self._apply_volume()      # put the level back, ready for next time
+        self.changed.emit()
+
+    # -- settings ----------------------------------------------------------- #
+
+    def set_loop(self, enabled: bool) -> None:
+        self.loop = enabled
+        self._apply_loop()
+        self.changed.emit()
+
+    def set_level(self, percent: int) -> None:
+        self.level = max(0, min(100, percent))
+        if not self._fading:
+            self._apply_volume()
+
+    def set_master(self, percent: int) -> None:
+        self._master = max(0, min(100, percent))
+        if not self._fading:
+            self._apply_volume()
+
+    def set_device(self, device) -> None:
+        if device is not None:
+            self._audio.setDevice(device)
+
+    def position(self) -> int:
+        return self._player.position()
+
+    def duration(self) -> int:
+        return self._player.duration()
+
+    def _apply_volume(self) -> None:
+        self._audio.setVolume((self.level / 100.0) * (self._master / 100.0))
+
+    def _apply_loop(self) -> None:
+        loops = getattr(QMediaPlayer, "Loops", None)
+        infinite = getattr(loops, "Infinite", None) if loops else None
+        if hasattr(self._player, "setLoops") and infinite is not None:
+            try:
+                self._player.setLoops(infinite if self.loop else 1)
+            except (TypeError, ValueError):
+                pass
+
+    def to_dict(self) -> dict:
+        return {"file": self.path, "loop": self.loop, "level": self.level}
+
+    def from_dict(self, data: dict) -> Optional[str]:
+        """Restore a saved cue; returns the file name if it has gone missing."""
+        self.set_loop(bool(data.get("loop", False)))
+        self.set_level(int(data.get("level", 90)))
+        path = data.get("file", "")
+        if not path:
+            self.clear()
+            return None
+        if not os.path.isfile(path):
+            self.clear()
+            return os.path.basename(path)
+        try:
+            self.assign(path)
+        except MediaProblem:
+            self.clear()
+            return os.path.basename(path)
+        return None
+
+
+class SoundDeck(QObject):
+    """The eight cues, a master level, and which device they play out of."""
+
+    changed = Signal()
+    failed = Signal(int, str)
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.master = 90
+        self.cues: List[SoundCue] = []
+        for index in range(SOUND_SLOTS):
+            cue = SoundCue(index, self)
+            cue.set_master(self.master)
+            cue.changed.connect(self.changed.emit)
+            cue.failed.connect(lambda message, i=index: self.failed.emit(i, message))
+            self.cues.append(cue)
+
+    def set_master(self, percent: int) -> None:
+        self.master = max(0, min(100, percent))
+        for cue in self.cues:
+            cue.set_master(self.master)
+
+    def set_device(self, device) -> None:
+        for cue in self.cues:
+            cue.set_device(device)
+
+    def stop_all(self, fade_ms: int = SOUND_FADE_MS) -> None:
+        for cue in self.cues:
+            cue.stop(fade_ms)
+
+    def anything_playing(self) -> bool:
+        return any(cue.is_playing() for cue in self.cues)
+
+    def to_list(self) -> List[dict]:
+        return [cue.to_dict() for cue in self.cues]
+
+    def from_list(self, data: List[dict]) -> List[str]:
+        missing = []
+        for cue, saved in zip(self.cues, list(data) + [{}] * SOUND_SLOTS):
+            gone = cue.from_dict(saved or {})
+            if gone:
+                missing.append(gone)
+        return missing
 
 
 # --------------------------------------------------------------------------- #
@@ -1609,6 +1879,12 @@ class SceneOutputWindow(BaseOutputWindow):
         kind = describe_media(path)          # raises MediaProblem
         if kind == "image":
             return ("image", load_pixmap(path))
+        if kind == "audio":
+            raise MediaProblem(
+                "That is a sound file",
+                f"{os.path.basename(path)} is audio, and a screen cannot show it.",
+                "Drop it on one of the sound cues at the bottom of the Live tab instead.",
+            )
         return ("video", path)
 
     def commit_media(self, payload) -> None:
@@ -1830,8 +2106,8 @@ class DropZone(QFrame):
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(158)
-        self.setMaximumHeight(178)
+        self.setMinimumHeight(118)
+        self.setMaximumHeight(156)
         self.setProperty("dragActive", "false")
         self.setProperty("loaded", "false")
         self._path = ""
@@ -1976,8 +2252,8 @@ class Playlist(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setIconSize(self.ICON)
         self.setUniformItemSizes(True)
-        self.setMinimumHeight(112)
-        self.setMaximumHeight(168)
+        self.setMinimumHeight(88)
+        self.setMaximumHeight(150)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setToolTip("Click an entry to put it on the screen · drag to reorder")
         self.itemClicked.connect(self._on_item_clicked)
@@ -2138,6 +2414,156 @@ class Playlist(QListWidget):
 # Output card (live controls for one output)
 # --------------------------------------------------------------------------- #
 
+class CuePad(QFrame):
+    """
+    One sound cue: press the key, the sound fires. Drop a file on it to assign.
+
+    Deliberately a single click to fire. During a ceremony the presenter says a
+    name and the fanfare has to go now; a confirm step would be worse than a
+    misfire, which the operator simply clicks again to stop.
+    """
+
+    assignRequested = Signal(str)
+    triggered = Signal()
+    cleared = Signal()
+    loopToggled = Signal(bool)
+
+    def __init__(self, index: int, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.index = index
+        self.setObjectName("cuePad")
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setProperty("playing", "false")
+        self.setProperty("filled", "false")
+        self.setFixedHeight(66)
+        self.setMinimumWidth(118)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 6)
+        layout.setSpacing(2)
+
+        top = QHBoxLayout()
+        top.setSpacing(4)
+        self.key_label = QLabel(f"F{index + 1}")
+        self.key_label.setObjectName("cueKey")
+        top.addWidget(self.key_label)
+        top.addStretch(1)
+
+        self.loop_btn = icon_button("repeat", "Loop this cue", CLR_MUTED, 13)
+        self.loop_btn.setObjectName("ghost")
+        self.loop_btn.setCheckable(True)
+        self.loop_btn.setFixedSize(20, 20)
+        self.loop_btn.toggled.connect(self._on_loop)
+        top.addWidget(self.loop_btn)
+
+        self.clear_btn = icon_button("close", "Empty this cue", CLR_MUTED, 12)
+        self.clear_btn.setObjectName("ghost")
+        self.clear_btn.setFixedSize(20, 20)
+        self.clear_btn.clicked.connect(self.cleared.emit)
+        top.addWidget(self.clear_btn)
+        layout.addLayout(top)
+
+        self.name_label = QLabel()
+        self.name_label.setObjectName("cueName")
+        layout.addWidget(self.name_label)
+
+        self.time_label = QLabel()
+        self.time_label.setObjectName("timecode")
+        layout.addWidget(self.time_label)
+
+        self.show_cue(None)
+
+    # -- display ------------------------------------------------------------ #
+
+    def _restyle(self) -> None:
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def show_cue(self, cue: Optional[SoundCue]) -> None:
+        filled = bool(cue and cue.path)
+        playing = bool(cue and cue.is_playing())
+
+        if filled:
+            metrics = self.name_label.fontMetrics()
+            self.name_label.setText(
+                metrics.elidedText(cue.label(), Qt.ElideRight, max(70, self.width() - 22)))
+            self.name_label.setToolTip(cue.path)
+            self.setToolTip(f"{cue.path}\n\nF{self.index + 1} plays and stops it")
+        else:
+            self.name_label.setText("empty")
+            self.name_label.setToolTip("")
+            self.setToolTip(f"Drop a sound file here, or press F{self.index + 1} once filled")
+
+        if playing:
+            remaining = max(0, cue.duration() - cue.position())
+            self.time_label.setText(("∞  " if cue.loop else "") + format_time(remaining))
+        else:
+            self.time_label.setText(format_time(cue.duration()) if filled else "")
+
+        self.loop_btn.blockSignals(True)
+        self.loop_btn.setChecked(bool(cue and cue.loop))
+        self.loop_btn.blockSignals(False)
+        self.loop_btn.setIcon(Icons.get("repeat", CLR_ACCENT if (cue and cue.loop) else CLR_MUTED, 13))
+        self.clear_btn.setVisible(filled)
+        self.loop_btn.setVisible(filled)
+
+        self.setProperty("filled", "true" if filled else "false")
+        self.setProperty("playing", "true" if playing else "false")
+        self._restyle()
+
+    # -- interaction -------------------------------------------------------- #
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            if self.property("filled") == "true":
+                self.triggered.emit()
+            else:
+                path, _ = QFileDialog.getOpenFileName(
+                    self, f"Sound for F{self.index + 1}", "",
+                    "Sound files (" + " ".join(sorted("*" + e for e in AUDIO_EXTENSIONS))
+                    + ");;All files (*.*)")
+                if path:
+                    self.assignRequested.emit(os.path.normpath(path))
+        event.accept()
+
+    @Slot(bool)
+    def _on_loop(self, enabled: bool) -> None:
+        self.loopToggled.emit(enabled)
+
+    @staticmethod
+    def _sound_from(mime) -> Optional[str]:
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = os.path.normpath(url.toLocalFile())
+            if os.path.splitext(path)[1].lower() in AUDIO_EXTENSIONS:
+                return path
+        return None
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._sound_from(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._sound_from(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        path = self._sound_from(event.mimeData())
+        if not path:
+            event.ignore()
+            return
+        self.assignRequested.emit(path)
+        event.acceptProposedAction()
+
+
 class OutputCard(QFrame):
     """Live controls for a single output: preview, playlist, transport, volume."""
 
@@ -2165,8 +2591,8 @@ class OutputCard(QFrame):
         self._scrubbing = False
 
         self.root = QVBoxLayout(self)
-        self.root.setContentsMargins(14, 12, 14, 12)
-        self.root.setSpacing(9)
+        self.root.setContentsMargins(13, 10, 13, 11)
+        self.root.setSpacing(7)
 
         # --- header -------------------------------------------------------- #
         header = QHBoxLayout()
@@ -2930,6 +3356,8 @@ class ControlPanel(QMainWindow):
         self.active_role = ROLE_MAIN
         self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self._freshly_opened: set = set()
+        self.sound = SoundDeck(self)
+        self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
         self._preset_dirty = False
 
@@ -2954,6 +3382,8 @@ class ControlPanel(QMainWindow):
         self._refresh_screen_combos(initial=True)
         self._refresh_preset_combo()
         self._load_fade_setting()
+        self._refresh_audio_devices()
+        self.sound_master.setValue(int(self.settings.value('sound/master', 90)))
         self._load_autostart_state()
         self._describe_preset_state()
         self._update_output_status()
@@ -2963,7 +3393,7 @@ class ControlPanel(QMainWindow):
 
         hint = QLabel(
             "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
-            "B blackout · F5 open outputs"
+            "F1–F8 sound cues · B blackout · Ctrl+O open outputs"
         )
         hint.setObjectName("keyHint")
         self.statusBar().addPermanentWidget(hint)
@@ -3107,8 +3537,13 @@ class ControlPanel(QMainWindow):
 
     def _build_live_tab(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 10, 0, 0)
+        outer.setSpacing(11)
+
+        screens = QWidget()
+        layout = QHBoxLayout(screens)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(11)
 
         self.main_card = OutputCard("Main Stage", "large central screen", ScaleMode.FIT)
@@ -3151,7 +3586,178 @@ class ControlPanel(QMainWindow):
         }
         for role, card in self.cards.items():
             card.activated.connect(lambda bound=role: self.set_active_role(bound))
+
+        outer.addWidget(screens, 1)
+        outer.addWidget(self._build_sound_bar())
         return page
+
+    # ----------------------------------------------------------- sound ----- #
+
+    def _build_sound_bar(self) -> QWidget:
+        """
+        The sound desk, kept on the Live tab rather than a tab of its own.
+
+        During a ceremony the operator is switching backgrounds and firing
+        fanfares in the same minute; putting sound behind a tab would mean
+        looking away from the screens at exactly the wrong moment.
+        """
+        bar = QFrame()
+        bar.setObjectName("card")
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        glyph = QLabel()
+        glyph.setPixmap(Icons.get("volume", CLR_ACCENT, 16).pixmap(16, 16))
+        header.addWidget(glyph)
+        title = QLabel("SOUND CUES")
+        title.setObjectName("sectionTitle")
+        header.addWidget(title)
+
+        hint = QLabel("drop sound files onto a pad · F1–F8 fire them")
+        hint.setObjectName("keyHint")
+        header.addWidget(hint)
+        header.addStretch(1)
+
+        header.addWidget(QLabel("Output"))
+        self.audio_device_combo = QComboBox()
+        self.audio_device_combo.setMinimumWidth(190)
+        self.audio_device_combo.setToolTip("Which sound device every cue and video plays out of")
+        self.audio_device_combo.currentIndexChanged.connect(self._on_audio_device_changed)
+        header.addWidget(self.audio_device_combo)
+
+        header.addSpacing(8)
+        header.addWidget(QLabel("Master"))
+        self.sound_master = QSlider(Qt.Horizontal)
+        self.sound_master.setRange(0, 100)
+        self.sound_master.setValue(self.sound.master)
+        self.sound_master.setMaximumWidth(130)
+        self.sound_master.valueChanged.connect(self._on_master_volume)
+        header.addWidget(self.sound_master)
+
+        stop_all = QPushButton("  STOP SOUND")
+        stop_all.setObjectName("danger")
+        stop_all.setIcon(Icons.get("stop", CLR_DANGER, 15))
+        stop_all.setToolTip("Fade out every cue (Ctrl+Space)")
+        stop_all.clicked.connect(self._stop_all_sound)
+        header.addWidget(stop_all)
+        layout.addLayout(header)
+
+        pads = QHBoxLayout()
+        pads.setSpacing(7)
+        self.cue_pads: List[CuePad] = []
+        for index in range(SOUND_SLOTS):
+            pad = CuePad(index)
+            pad.assignRequested.connect(lambda path, i=index: self._assign_cue(i, path))
+            pad.triggered.connect(lambda i=index: self._fire_cue(i))
+            pad.cleared.connect(lambda i=index: self._clear_cue(i))
+            pad.loopToggled.connect(lambda on, i=index: self.sound.cues[i].set_loop(on))
+            pads.addWidget(pad, 1)
+            self.cue_pads.append(pad)
+        layout.addLayout(pads)
+
+        # One timer keeps the countdowns honest without a signal per cue.
+        ticker = QTimer(self)
+        ticker.timeout.connect(self._refresh_cue_pads)
+        ticker.start(250)
+        return bar
+
+    def _refresh_audio_devices(self) -> None:
+        from PySide6.QtMultimedia import QMediaDevices
+
+        wanted = self.settings.value("sound/device", "")
+        devices = QMediaDevices.audioOutputs()
+        self.audio_device_combo.blockSignals(True)
+        self.audio_device_combo.clear()
+        self.audio_device_combo.addItem("System default", None)
+        for device in devices:
+            self.audio_device_combo.addItem(device.description(), device.description())
+        index = self.audio_device_combo.findData(wanted) if wanted else -1
+        self.audio_device_combo.setCurrentIndex(max(0, index))
+        self.audio_device_combo.blockSignals(False)
+        self._apply_audio_device()
+
+    def _apply_audio_device(self) -> None:
+        from PySide6.QtMultimedia import QMediaDevices
+
+        wanted = self.audio_device_combo.currentData()
+        device = None
+        if wanted:
+            device = next((d for d in QMediaDevices.audioOutputs()
+                           if d.description() == wanted), None)
+        if device is None:
+            device = QMediaDevices.defaultAudioOutput()
+        self.sound.set_device(device)
+        for window in self._outputs():
+            window.engine.set_device(device)
+
+    @Slot()
+    def _on_audio_device_changed(self) -> None:
+        self.settings.setValue("sound/device", self.audio_device_combo.currentData() or "")
+        self._apply_audio_device()
+        self.statusBar().showMessage(
+            f"Sound output: {self.audio_device_combo.currentText()}", 5000)
+
+    @Slot(int)
+    def _on_master_volume(self, value: int) -> None:
+        self.sound.set_master(value)
+        self.settings.setValue("sound/master", value)
+
+    def _refresh_cue_pads(self) -> None:
+        for pad, cue in zip(self.cue_pads, self.sound.cues):
+            pad.show_cue(cue)
+
+    def _assign_cue(self, index: int, path: str) -> None:
+        try:
+            self.sound.cues[index].assign(path)
+        except MediaProblem as problem:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(problem.title)
+            box.setText(f"<b>{problem.title}</b><br>Cue F{index + 1} was not changed.")
+            box.setInformativeText(problem.message())
+            box.setDetailedText(f"File:\n{path}")
+            box.exec()
+            return
+        self._mark_preset_dirty()
+        self._refresh_cue_pads()
+        self.statusBar().showMessage(
+            f"F{index + 1}: {os.path.basename(path)}", 5000)
+
+    def _fire_cue(self, index: int) -> None:
+        cue = self.sound.cues[index]
+        if not cue.path:
+            self.statusBar().showMessage(
+                f"F{index + 1} is empty — drop a sound file on it first.", 5000)
+            return
+        cue.toggle()
+        self._refresh_cue_pads()
+        self.statusBar().showMessage(
+            f"F{index + 1} {'playing' if cue.is_playing() else 'stopped'}: {cue.label()}", 4000)
+
+    def _clear_cue(self, index: int) -> None:
+        self.sound.cues[index].clear()
+        self._mark_preset_dirty()
+        self._refresh_cue_pads()
+
+    @Slot()
+    def _stop_all_sound(self) -> None:
+        self.sound.stop_all()
+        self.statusBar().showMessage("All sound cues fading out.", 4000)
+
+    def _on_cue_failed(self, index: int, message: str) -> None:
+        cue = self.sound.cues[index]
+        name = cue.label() or f"cue F{index + 1}"
+        cue.clear()
+        self._refresh_cue_pads()
+        QMessageBox.warning(
+            self, "Sound will not play",
+            f"<b>{name}</b> could not be played.<br><br>"
+            f"The audio backend said: {message}<br><br>"
+            "Convert it to MP3 or WAV and assign it again.",
+        )
 
     # ------------------------------------------------------- keyboard ------ #
 
@@ -3219,8 +3825,14 @@ class ControlPanel(QMainWindow):
             ("Right", lambda: self._active_card().playlist.step(1)),
             ("Left", lambda: self._active_card().playlist.step(-1)),
             ("B", self._blackout_all),
-            ("F5", self._apply_routing),
+            ("Ctrl+O", self._apply_routing),
+            ("Ctrl+Space", self._stop_all_sound),
         )
+        bindings += tuple(
+            (f"F{slot + 1}", lambda i=slot: self._fire_cue(i))
+            for slot in range(SOUND_SLOTS)
+        )
+
         for key, handler in bindings:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.setContext(Qt.ApplicationShortcut)
@@ -4028,6 +4640,7 @@ class ControlPanel(QMainWindow):
         payload = {
             "routing": {role: row.config().to_dict() for role, row in self.routing_rows.items()},
             "outputs": {},
+            "sound": {"master": self.sound.master, "cues": self.sound.to_list()},
             "top": {
                 "background": self.top_card.background_colour().name(),
                 "marquee": self.top_card.marquee_state(),
@@ -4059,6 +4672,12 @@ class ControlPanel(QMainWindow):
             if data:
                 default_on_top = False if role == ROLE_MAIN else legacy_on_top
                 row.apply_config(RouteConfig.from_dict(data, default_on_top), names)
+
+        sound_data = payload.get("sound", {})
+        if sound_data:
+            self.sound_master.setValue(int(sound_data.get("master", self.sound.master)))
+            missing += self.sound.from_list(sound_data.get("cues", []))
+            self._refresh_cue_pads()
 
         top_data = payload.get("top", {})
         self.top_card.set_background_colour_value(QColor(top_data.get("background", "#101828")))
@@ -4185,6 +4804,7 @@ class ControlPanel(QMainWindow):
                 event.ignore()
                 return
 
+        self.sound.stop_all(0)
         self.settings.setValue("window/geometry", self.saveGeometry())
         for window in live:
             window.clear_output()

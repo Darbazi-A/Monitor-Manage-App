@@ -28,8 +28,12 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   playlists show the footage rather than a film icon.
 - **Position bar** — elapsed / total per screen, draggable to seek, so nobody is
   guessing how long a clip has left.
+- **Sound cues** — eight sounds on `F1`–`F8`, each with its own player so a
+  fanfare fires over a bed of music instead of interrupting it. Per-cue loop and
+  level, a master level, a sound-device picker, and a stop that fades rather
+  than cutting.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
-  playlist, `Space` plays/pauses, `B` blacks out, `F5` opens the outputs.
+  playlist, `Space` plays/pauses, `F1`–`F8` fire sound cues, `B` blacks out.
 - **Drag & drop** everywhere; drop several files at once to fill a playlist.
 - **Transitions** — a crossfade that dissolves the old picture into the new one,
   or a fade through black. Off / Fast / Normal / Slow, applied to every screen,
@@ -82,8 +86,26 @@ blacks out the hall.
 | `1` `2` `3` | choose the screen the keyboard drives (it gets an accent border) |
 | `←` `→` | previous / next entry in that screen's playlist |
 | `Space` | play / pause that screen |
-| `B` | blackout every screen |
-| `F5` | apply routing / open outputs |
+| `F1`–`F8` | fire / stop that sound cue |
+| `Ctrl`+`Space` | fade out every sound cue |
+| `B` | blackout every screen (pictures only — sound keeps playing) |
+| `Ctrl`+`O` | apply routing / open outputs |
+
+## Sound
+
+The desk sits along the bottom of the Live tab rather than behind a tab of its
+own: during a ceremony the operator changes a background and fires a fanfare in
+the same minute, and looking away from the screens is exactly the wrong thing to
+ask for. Drop a sound file on a pad, or click an empty one to browse.
+
+Each cue owns a separate `QMediaPlayer`, which is what lets a fanfare play over
+music. Stopping animates the level to zero first (`QAudioOutput.volume`) — a PA
+cut dead is far more noticeable than the sound itself. Blackout is deliberately
+visual only; `Ctrl`+`Space` is the sound equivalent.
+
+**Output device** picks which sound card everything plays through — cues *and*
+video audio. On a hall PC feeding a mixing console this matters: the default
+Windows device is rarely the one going to the PA.
 
 ## Transitions
 
@@ -125,6 +147,8 @@ refused up front with the reason and a conversion recipe rather than freezing th
 player. Playback errors that only surface at decode time are caught too: the
 screen is cleared rather than left on a frozen half-frame.
 
+Sound files are checked the same way, and a sound file dropped on a screen (or a picture dropped on a cue) is refused with a note saying where it does belong.
+
 Supported image types come from `QImageReader.supportedImageFormats()` at
 startup, so whatever the installed Qt can read — SVG, ICO, JFIF, TGA and the rest
 — is accepted rather than rejected by a hardcoded list.
@@ -152,6 +176,8 @@ Everything lives in `main.py`:
 | --- | --- |
 | `Icons` | line icons drawn with `QPainter` — no image assets |
 | `MediaEngine` | `QMediaPlayer` wrapper: looping, safe source swapping, audio |
+| `SoundCue`, `SoundDeck` | one sound per key, with fade-out and its own level |
+| `CuePad` | a drop target and fire button for one cue |
 | `BaseOutputWindow` | frameless, un-closable, taskbar-less stage window |
 | `SceneOutputWindow` | any output, drawn through a `QGraphicsScene` |
 | `StandardOutputWindow` / `TopOutputWindow` | Main+Sides / the ceiling strip |
