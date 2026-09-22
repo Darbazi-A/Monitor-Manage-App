@@ -34,6 +34,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   than cutting.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `F1`–`F8` fire sound cues, `B` blacks out.
+- **Media library** — browse the folders the event material lives in, with real
+  thumbnails, a name filter and pinned folders. Send one item straight to a
+  screen, fill a playlist from a multi-selection, or drop a sound onto a cue.
 - **Drag & drop** everywhere; drop several files at once to fill a playlist.
 - **Transitions** — a crossfade that dissolves the old picture into the new one,
   or a fade through black. Off / Fast / Normal / Slow, applied to every screen,
@@ -49,7 +52,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Presets** — routing, geometry, playlists, scaling, volumes and marquee
   settings saved as JSON, on their own labelled row that shows which preset is
   on the screens and whether it has unsaved changes. Loading one transitions
-  every screen rather than cutting.
+  every screen rather than cutting, and **New** clears everything back to blank
+  for building the next show (monitor routing is kept — that is the hall's
+  wiring, not the event).
 - **Start with Windows** — optionally open the app at login and put a chosen
   preset on the screens, after a delay that lets LED processors finish booting.
 - **Blackout** — clears every stage screen at once.
@@ -106,6 +111,19 @@ visual only; `Ctrl`+`Space` is the sound equivalent.
 **Output device** picks which sound card everything plays through — cues *and*
 video audio. On a hall PC feeding a mixing console this matters: the default
 Windows device is rarely the one going to the PA.
+
+## Library
+
+![Library tab](docs/library.png)
+
+Pin the folders an event's material lives in and they stay in the picker. The
+grid shows what each file actually is — a frame pulled from every clip, the
+picture itself for images — on fixed-size tiles so the rows stay even whatever
+shape the media is, including the 2816×128 strips cut for the ceiling.
+
+Selecting one item enables **Show now on**; selecting several enables **Add to
+playlist**, which is how an event gets prepared. Sound files offer the cue slots
+instead, and the buttons that do not apply are simply disabled.
 
 ## Transitions
 
@@ -185,6 +203,7 @@ Everything lives in `main.py`:
 | `MediaProblem`, `describe_media` | why a file was refused, in plain language |
 | `FadeOverlay` | crossfades or dips one output between pictures |
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
+| `MediaLibrary` | folder browser with thumbnails, feeding screens and cues |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |
 | `Autostart` | the per-user "run at login" registry entry |
