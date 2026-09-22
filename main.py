@@ -69,6 +69,7 @@ from PySide6.QtCore import (
     QPoint,
     QPointF,
     QPropertyAnimation,
+    QVariantAnimation,
     QRect,
     QRectF,
     QSettings,
@@ -122,6 +123,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -1868,6 +1870,34 @@ class SceneOutputWindow(BaseOutputWindow):
         self._text_item.setVisible(False)
         self._scene.addItem(self._text_item)
 
+        # --- slide layer: a name and a line under it, over whatever is running #
+        self._slide_scrim = self._scene.addRect(QRectF(), QPen(Qt.NoPen),
+                                                QBrush(QColor(0, 0, 0, 150)))
+        self._slide_scrim.setZValue(15)
+        self._slide_scrim.setVisible(False)
+
+        self._slide_title = QGraphicsSimpleTextItem("")
+        self._slide_title.setZValue(20)
+        self._slide_title.setVisible(False)
+        self._scene.addItem(self._slide_title)
+
+        self._slide_subtitle = QGraphicsSimpleTextItem("")
+        self._slide_subtitle.setZValue(20)
+        self._slide_subtitle.setVisible(False)
+        self._scene.addItem(self._slide_subtitle)
+
+        self._slide_style = {
+            "family": "", "title_px": 84, "subtitle_px": 44,
+            "colour": "#ffffff", "subtitle_colour": "#cfd8e6",
+            "position": "middle", "scrim": True,
+        }
+        self._slide_opacity = 0.0
+        self._slide_wanted = False
+        self._slide_anim = QVariantAnimation(self)
+        self._slide_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._slide_anim.valueChanged.connect(self._set_slide_opacity)
+        self._slide_anim.finished.connect(self._after_slide_fade)
+
         self._marquee_text = ""
         self._marquee_color = QColor("white")
         self._marquee_font_size = 64
@@ -1922,6 +1952,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self._pixmap_item.setVisible(False)
         self._pixmap_item.setPixmap(QPixmap())
         self._video_item.setVisible(False)
+        self.hide_slide(0)
 
     def set_scale_mode(self, mode: ScaleMode) -> None:
         self._scale_mode = mode
@@ -2019,6 +2050,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self._layout_pixmap()
         self._layout_video()
         self._position_marquee_vertically()
+        self._layout_slide()
 
     def _layout_pixmap(self) -> None:
         pixmap = self._pixmap_item.pixmap()
@@ -2061,6 +2093,127 @@ class SceneOutputWindow(BaseOutputWindow):
         )
         self._video_item.setSize(QSizeF(rect.width(), rect.height()))
         self._video_item.setPos(0, 0)
+
+    # -- text slides -------------------------------------------------------- #
+
+    def set_slide_style(self, style: dict) -> None:
+        self._slide_style.update(style)
+        self._apply_slide_style()
+
+    def show_slide(self, title: str, subtitle: str = "", fade_ms: int = 300) -> None:
+        """
+        Put a name (and an optional line under it) over whatever is running.
+
+        Drawn into the same scene as the background, so it composites over live
+        video - which is the whole reason the outputs stopped using QVideoWidget.
+        """
+        self._slide_title.setText(title)
+        self._slide_subtitle.setText(subtitle)
+        self._apply_slide_style()
+        self._layout_slide()
+        for item in self._slide_items():
+            item.setVisible(True)
+        self._slide_scrim.setVisible(bool(self._slide_style.get("scrim")))
+        self._slide_wanted = True
+        self._fade_slide_to(1.0, fade_ms)
+
+    def hide_slide(self, fade_ms: int = 300) -> None:
+        if not self._slide_wanted and self._slide_opacity <= 0.0:
+            return
+        self._slide_wanted = False
+        self._fade_slide_to(0.0, fade_ms)
+
+    def slide_visible(self) -> bool:
+        """Whether a slide is meant to be on screen - true from the moment it is
+        asked for, not only once the fade-in has ticked."""
+        return self._slide_wanted or self._slide_opacity > 0.01
+
+    def _slide_items(self):
+        return (self._slide_scrim, self._slide_title, self._slide_subtitle)
+
+    def _fade_slide_to(self, target: float, fade_ms: int) -> None:
+        self._slide_anim.stop()
+        if fade_ms <= 0:
+            self._set_slide_opacity(target)
+            self._after_slide_fade()
+            return
+        self._slide_anim.setDuration(max(60, fade_ms))
+        self._slide_anim.setStartValue(float(self._slide_opacity))
+        self._slide_anim.setEndValue(float(target))
+        self._slide_anim.start()
+
+    def _set_slide_opacity(self, value) -> None:
+        self._slide_opacity = float(value)
+        for item in self._slide_items():
+            item.setOpacity(self._slide_opacity)
+
+    def _after_slide_fade(self) -> None:
+        if not self._slide_wanted and self._slide_opacity <= 0.01:
+            for item in self._slide_items():
+                item.setVisible(False)
+
+    def _apply_slide_style(self) -> None:
+        style = self._slide_style
+        for item, colour_key in ((self._slide_title, "colour"),
+                                 (self._slide_subtitle, "subtitle_colour")):
+            item.setBrush(QBrush(QColor(style.get(colour_key, "#ffffff"))))
+            item.setPen(QPen(Qt.NoPen))
+        self._layout_slide()
+
+    def _fit_text(self, item, requested_px: int, available: float) -> None:
+        """
+        Size the text, shrinking it if the line is too long for the screen.
+
+        A name that does not fit used to be chopped off at both edges, which is
+        not something anyone wants to discover during an awards ceremony.
+        """
+        style = self._slide_style
+        font = QFont()
+        if style.get("family"):
+            font.setFamily(style["family"])
+        font.setBold(item is self._slide_title)
+        size = max(8, int(requested_px))
+        font.setPixelSize(size)
+        item.setFont(font)
+        if not item.text() or available <= 0:
+            return
+        width = item.boundingRect().width()
+        if width <= available:
+            return
+        fitted = max(10, int(size * available / width))
+        font.setPixelSize(fitted)
+        item.setFont(font)
+
+    def _layout_slide(self) -> None:
+        rect = self._scene.sceneRect()
+        if rect.isEmpty():
+            return
+        available = rect.width() * 0.92
+        self._fit_text(self._slide_title, self._slide_style.get("title_px", 84), available)
+        self._fit_text(self._slide_subtitle, self._slide_style.get("subtitle_px", 44), available)
+        title_rect = self._slide_title.boundingRect()
+        sub_rect = self._slide_subtitle.boundingRect() if self._slide_subtitle.text() else QRectF()
+
+        gap = title_rect.height() * 0.18 if sub_rect.height() else 0
+        block = title_rect.height() + gap + sub_rect.height()
+
+        position = self._slide_style.get("position", "middle")
+        if position == "top":
+            top = rect.height() * 0.10
+        elif position == "bottom":
+            top = rect.height() - block - rect.height() * 0.12
+        else:
+            top = (rect.height() - block) / 2.0
+        top = max(0.0, min(top, max(0.0, rect.height() - block)))
+
+        self._slide_title.setPos((rect.width() - title_rect.width()) / 2.0, top)
+        if sub_rect.height():
+            self._slide_subtitle.setPos((rect.width() - sub_rect.width()) / 2.0,
+                                        top + title_rect.height() + gap)
+
+        pad = max(18.0, block * 0.22)
+        self._slide_scrim.setRect(QRectF(0, max(0.0, top - pad), rect.width(),
+                                         min(rect.height(), block + pad * 2)))
 
     # -- transitions -------------------------------------------------------- #
 
@@ -2964,6 +3117,304 @@ class MediaLibrary(QWidget):
             self.queueRequested.emit("", [path])   # "" means the active card
 
 
+class TextSlides(QWidget):
+    """
+    Names on screen, prepared in advance and stepped through live.
+
+    The running order is a plain text box, one slide per line, because that is
+    the fastest way in: an award list already exists in a document and can be
+    pasted straight here. A line may carry a second, smaller line after "|".
+    """
+
+    showRequested = Signal(str, str)     # title, subtitle
+    hideRequested = Signal()
+    styleChanged = Signal()
+    targetChanged = Signal(str)
+
+    SEPARATOR = "|"
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._title_colour = QColor("#ffffff")
+        self._subtitle_colour = QColor("#cfd8e6")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 10, 0, 0)
+        root.setSpacing(11)
+
+        card = QFrame()
+        card.setObjectName("card")
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(10)
+
+        # --- header -------------------------------------------------------- #
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        glyph = QLabel()
+        glyph.setPixmap(Icons.get("text", CLR_ACCENT, 16).pixmap(16, 16))
+        header.addWidget(glyph)
+        title = QLabel("TEXT SLIDES")
+        title.setObjectName("sectionTitle")
+        header.addWidget(title)
+        hint = QLabel("one line per slide · use “|” for a second, smaller line")
+        hint.setObjectName("keyHint")
+        header.addWidget(hint)
+        header.addStretch(1)
+
+        header.addWidget(QLabel("Show on"))
+        self.target = QComboBox()
+        for role in STAGE_ROLES:
+            self.target.addItem(ROLE_LABELS[role], role)
+        self.target.setToolTip("Which screen the names appear on")
+        self.target.currentIndexChanged.connect(
+            lambda _i: self.targetChanged.emit(self.target.currentData()))
+        header.addWidget(self.target)
+        outer.addLayout(header)
+
+        # --- running order + list ------------------------------------------ #
+        body = QHBoxLayout()
+        body.setSpacing(10)
+
+        left = QVBoxLayout()
+        left.setSpacing(5)
+        caption = QLabel("RUNNING ORDER")
+        caption.setObjectName("sectionTitle")
+        left.addWidget(caption)
+        self.editor = QPlainTextEdit()
+        self.editor.setPlaceholderText(
+            "Nino Beridze | Grade 5, Mathematics\n"
+            "Giorgi Kapanadze | Grade 7, Science\n"
+            "\n"
+            "Welcome to the Spring Concert")
+        self.editor.textChanged.connect(self._rebuild_list)
+        left.addWidget(self.editor, 1)
+        body.addLayout(left, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(5)
+        caption2 = QLabel("SLIDES  —  click one to put it on screen")
+        caption2.setObjectName("sectionTitle")
+        right.addWidget(caption2)
+        self.slides = QListWidget()
+        self.slides.setAlternatingRowColors(False)
+        self.slides.itemClicked.connect(self._on_slide_clicked)
+        right.addWidget(self.slides, 1)
+        body.addLayout(right, 1)
+        outer.addLayout(body, 1)
+
+        # --- look ----------------------------------------------------------- #
+        look = QHBoxLayout()
+        look.setSpacing(7)
+        self.font_combo = QFontComboBox()
+        self.font_combo.setCurrentFont(QFont("Segoe UI"))
+        self.font_combo.setMaximumWidth(210)
+        self.font_combo.currentFontChanged.connect(lambda _f: self.styleChanged.emit())
+        look.addWidget(self.font_combo)
+
+        look.addWidget(QLabel("Name"))
+        self.title_size = QSpinBox()
+        self.title_size.setRange(12, 400)
+        self.title_size.setValue(84)
+        self.title_size.setSuffix(" px")
+        self.title_size.valueChanged.connect(lambda _v: self.styleChanged.emit())
+        look.addWidget(self.title_size)
+
+        title_colour = icon_button("palette", "Colour of the big line", CLR_MUTED, 15)
+        title_colour.setObjectName("ghost")
+        title_colour.clicked.connect(lambda: self._pick_colour("title"))
+        look.addWidget(title_colour)
+        self.title_swatch = QLabel()
+        self.title_swatch.setFixedSize(16, 16)
+        look.addWidget(self.title_swatch)
+
+        look.addSpacing(8)
+        look.addWidget(QLabel("Second line"))
+        self.subtitle_size = QSpinBox()
+        self.subtitle_size.setRange(10, 300)
+        self.subtitle_size.setValue(44)
+        self.subtitle_size.setSuffix(" px")
+        self.subtitle_size.valueChanged.connect(lambda _v: self.styleChanged.emit())
+        look.addWidget(self.subtitle_size)
+
+        sub_colour = icon_button("palette", "Colour of the small line", CLR_MUTED, 15)
+        sub_colour.setObjectName("ghost")
+        sub_colour.clicked.connect(lambda: self._pick_colour("subtitle"))
+        look.addWidget(sub_colour)
+        self.subtitle_swatch = QLabel()
+        self.subtitle_swatch.setFixedSize(16, 16)
+        look.addWidget(self.subtitle_swatch)
+
+        look.addSpacing(8)
+        look.addWidget(QLabel("Position"))
+        self.position = QComboBox()
+        for caption_text, value in (("Middle", "middle"), ("Top", "top"), ("Bottom", "bottom")):
+            self.position.addItem(caption_text, value)
+        self.position.currentIndexChanged.connect(lambda _i: self.styleChanged.emit())
+        look.addWidget(self.position)
+
+        self.scrim = QCheckBox("Shade behind")
+        self.scrim.setChecked(True)
+        self.scrim.setToolTip("A dark band behind the text so it stays readable over video")
+        self.scrim.toggled.connect(lambda _v: self.styleChanged.emit())
+        look.addWidget(self.scrim)
+        look.addStretch(1)
+        outer.addLayout(look)
+        self._update_swatches()
+
+        # --- transport ------------------------------------------------------ #
+        transport = QHBoxLayout()
+        transport.setSpacing(7)
+        prev_btn = QPushButton("  Previous")
+        prev_btn.setIcon(Icons.get("prev", CLR_TEXT, 15))
+        prev_btn.clicked.connect(lambda: self.step(-1))
+        transport.addWidget(prev_btn)
+
+        self.show_btn = QPushButton("  SHOW THIS NAME")
+        self.show_btn.setObjectName("primary")
+        self.show_btn.setIcon(Icons.get("play", "#0b0e13", 15))
+        self.show_btn.setMinimumWidth(210)
+        self.show_btn.clicked.connect(self.show_current)
+        transport.addWidget(self.show_btn)
+
+        next_btn = QPushButton("  Next")
+        next_btn.setIcon(Icons.get("next", CLR_TEXT, 15))
+        next_btn.clicked.connect(lambda: self.step(1))
+        transport.addWidget(next_btn)
+
+        hide_btn = QPushButton("  Hide text")
+        hide_btn.setObjectName("danger")
+        hide_btn.setIcon(Icons.get("close", CLR_DANGER, 15))
+        hide_btn.clicked.connect(self.hideRequested.emit)
+        transport.addWidget(hide_btn)
+
+        transport.addSpacing(12)
+        keys = QLabel("Ctrl+→ next · Ctrl+← previous · Ctrl+H hide")
+        keys.setObjectName("keyHint")
+        transport.addWidget(keys)
+        transport.addStretch(1)
+        outer.addLayout(transport)
+
+        root.addWidget(card, 1)
+
+    # -- running order ------------------------------------------------------ #
+
+    def _rebuild_list(self) -> None:
+        current = self.slides.currentRow()
+        self.slides.clear()
+        for index, (title, subtitle) in enumerate(self.entries(), start=1):
+            item = QListWidgetItem(f"{index}.  {title}" + (f"    —  {subtitle}" if subtitle else ""))
+            item.setData(Qt.UserRole, (title, subtitle))
+            self.slides.addItem(item)
+        if 0 <= current < self.slides.count():
+            self.slides.setCurrentRow(current)
+        elif self.slides.count():
+            self.slides.setCurrentRow(0)
+        self.styleChanged.emit()   # keeps presets marked as changed
+
+    def entries(self) -> List[tuple]:
+        found = []
+        for raw in self.editor.toPlainText().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if self.SEPARATOR in line:
+                title, subtitle = line.split(self.SEPARATOR, 1)
+                found.append((title.strip(), subtitle.strip()))
+            else:
+                found.append((line, ""))
+        return found
+
+    def set_text(self, text: str) -> None:
+        self.editor.setPlainText(text or "")
+
+    def text(self) -> str:
+        return self.editor.toPlainText()
+
+    # -- performing --------------------------------------------------------- #
+
+    @Slot(QListWidgetItem)
+    def _on_slide_clicked(self, item: QListWidgetItem) -> None:
+        title, subtitle = item.data(Qt.UserRole)
+        self.showRequested.emit(title, subtitle)
+
+    def show_current(self) -> None:
+        item = self.slides.currentItem()
+        if item is None and self.slides.count():
+            self.slides.setCurrentRow(0)
+            item = self.slides.currentItem()
+        if item is not None:
+            self._on_slide_clicked(item)
+
+    def step(self, delta: int) -> None:
+        if not self.slides.count():
+            return
+        row = self.slides.currentRow()
+        row = (row + delta) % self.slides.count() if row >= 0 else 0
+        self.slides.setCurrentRow(row)
+        self.show_current()
+
+    # -- look --------------------------------------------------------------- #
+
+    def _pick_colour(self, which: str) -> None:
+        current = self._title_colour if which == "title" else self._subtitle_colour
+        colour = QColorDialog.getColor(current, self, "Text colour")
+        if not colour.isValid():
+            return
+        if which == "title":
+            self._title_colour = colour
+        else:
+            self._subtitle_colour = colour
+        self._update_swatches()
+        self.styleChanged.emit()
+
+    def _update_swatches(self) -> None:
+        for label, colour in ((self.title_swatch, self._title_colour),
+                              (self.subtitle_swatch, self._subtitle_colour)):
+            label.setStyleSheet(
+                f"background-color: {colour.name()}; border: 1px solid {CLR_LINE};"
+                "border-radius: 4px;")
+
+    def style_dict(self) -> dict:
+        return {
+            "family": self.font_combo.currentFont().family(),
+            "title_px": self.title_size.value(),
+            "subtitle_px": self.subtitle_size.value(),
+            "colour": self._title_colour.name(),
+            "subtitle_colour": self._subtitle_colour.name(),
+            "position": self.position.currentData(),
+            "scrim": self.scrim.isChecked(),
+        }
+
+    def to_dict(self) -> dict:
+        data = {"text": self.text(), "target": self.target.currentData()}
+        data.update(self.style_dict())
+        return data
+
+    def from_dict(self, data: dict) -> None:
+        blocked = (self.editor, self.font_combo, self.title_size, self.subtitle_size,
+                   self.position, self.scrim, self.target)
+        for widget in blocked:
+            widget.blockSignals(True)
+        family = data.get("family")
+        if family:
+            self.font_combo.setCurrentFont(QFont(family))
+        self.title_size.setValue(int(data.get("title_px", 84)))
+        self.subtitle_size.setValue(int(data.get("subtitle_px", 44)))
+        self._title_colour = QColor(data.get("colour", "#ffffff"))
+        self._subtitle_colour = QColor(data.get("subtitle_colour", "#cfd8e6"))
+        index = self.position.findData(data.get("position", "middle"))
+        self.position.setCurrentIndex(max(0, index))
+        self.scrim.setChecked(bool(data.get("scrim", True)))
+        index = self.target.findData(data.get("target", ROLE_MAIN))
+        self.target.setCurrentIndex(max(0, index))
+        self.editor.setPlainText(data.get("text", ""))
+        for widget in blocked:
+            widget.blockSignals(False)
+        self._update_swatches()
+        self._rebuild_list()
+
+
 class OutputCard(QFrame):
     """Live controls for a single output: preview, playlist, transport, volume."""
 
@@ -3771,6 +4222,7 @@ class ControlPanel(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
         self.tabs.addTab(self._build_library_tab(), "  Library  ")
+        self.tabs.addTab(self._build_text_tab(), "  Text  ")
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
         self.tabs.addTab(self._build_screens_tab(), "  Screens && Setup  ")
         root.addWidget(self.tabs, 1)
@@ -3998,6 +4450,57 @@ class ControlPanel(QMainWindow):
         outer.addWidget(screens, 1)
         outer.addWidget(self._build_sound_bar())
         return page
+
+    # ------------------------------------------------------ text slides ---- #
+
+    def _build_text_tab(self) -> QWidget:
+        self.text_slides = TextSlides()
+        self.text_slides.showRequested.connect(self._show_slide)
+        self.text_slides.hideRequested.connect(self._hide_slide)
+        self.text_slides.styleChanged.connect(self._on_slide_style_changed)
+        self.text_slides.targetChanged.connect(self._on_slide_target_changed)
+        return self.text_slides
+
+    def _slide_output(self):
+        role = self.text_slides.target.currentData() or ROLE_MAIN
+        return role, getattr(self, self.OUTPUT_ATTRS[role], None)
+
+    @Slot(str, str)
+    def _show_slide(self, title: str, subtitle: str) -> None:
+        role, window = self._slide_output()
+        if window is None:
+            QMessageBox.warning(
+                self, "Output not open",
+                f"“{ROLE_LABELS[role]}” has no output window yet.\n\n"
+                "Open the “Screens & Setup” tab, pick a monitor for it, then press "
+                "“OPEN OUTPUTS”.")
+            return
+        window.set_slide_style(self.text_slides.style_dict())
+        window.show_slide(title, subtitle, max(120, self.fade_ms() // 2))
+        self.statusBar().showMessage(
+            f"{ROLE_LABELS[role]}: {title}" + (f" — {subtitle}" if subtitle else ""), 8000)
+
+    @Slot()
+    def _hide_slide(self) -> None:
+        role, window = self._slide_output()
+        if window is None:
+            return
+        window.hide_slide(max(120, self.fade_ms() // 2))
+        self.statusBar().showMessage(f"{ROLE_LABELS[role]}: text hidden.", 5000)
+
+    @Slot()
+    def _on_slide_style_changed(self) -> None:
+        self._mark_preset_dirty()
+        _role, window = self._slide_output()
+        if window is not None and window.slide_visible():
+            window.set_slide_style(self.text_slides.style_dict())
+
+    @Slot(str)
+    def _on_slide_target_changed(self, _role: str) -> None:
+        """Moving the text to another screen must not leave it on the old one."""
+        for window in self._outputs():
+            window.hide_slide(200)
+        self._mark_preset_dirty()
 
     # --------------------------------------------------------- library ----- #
 
@@ -4274,6 +4777,9 @@ class ControlPanel(QMainWindow):
             ("B", self._blackout_all),
             ("Ctrl+O", self._apply_routing),
             ("Ctrl+Space", self._stop_all_sound),
+            ("Ctrl+Right", lambda: self.text_slides.step(1)),
+            ("Ctrl+Left", lambda: self.text_slides.step(-1)),
+            ("Ctrl+H", self._hide_slide),
         )
         bindings += tuple(
             (f"F{slot + 1}", lambda i=slot: self._fire_cue(i))
@@ -5088,6 +5594,7 @@ class ControlPanel(QMainWindow):
             "routing": {role: row.config().to_dict() for role, row in self.routing_rows.items()},
             "outputs": {},
             "sound": {"master": self.sound.master, "cues": self.sound.to_list()},
+            "slides": self.text_slides.to_dict(),
             "top": {
                 "background": self.top_card.background_colour().name(),
                 "marquee": self.top_card.marquee_state(),
@@ -5119,6 +5626,8 @@ class ControlPanel(QMainWindow):
             if data:
                 default_on_top = False if role == ROLE_MAIN else legacy_on_top
                 row.apply_config(RouteConfig.from_dict(data, default_on_top), names)
+
+        self.text_slides.from_dict(payload.get("slides", {}))
 
         sound_data = payload.get("sound", {})
         if sound_data:
@@ -5201,6 +5710,9 @@ class ControlPanel(QMainWindow):
         self.top_card.size_spin.setValue(max(24, int(DEFAULT_TOP_HEIGHT * 0.72)))
         self.top_card.speed_slider.setValue(180)
         self.top_card.set_background_colour_value(QColor("#101828"))
+
+        self.text_slides.set_text("")
+        self._hide_slide()
 
         for cue in self.sound.cues:
             cue.clear()

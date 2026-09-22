@@ -34,6 +34,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   than cutting.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `F1`–`F8` fire sound cues, `B` blacks out.
+- **Text slides** — names on screen over whatever is running, prepared as a
+  plain running order (one line per slide) and stepped through live. Sized to
+  fit, so a long name shrinks instead of being chopped off.
 - **Media library** — browse the folders the event material lives in, with real
   thumbnails, a name filter and pinned folders. Send one item straight to a
   screen, fill a playlist from a multi-selection, or drop a sound onto a cue.
@@ -93,6 +96,8 @@ blacks out the hall.
 | `Space` | play / pause that screen |
 | `F1`–`F8` | fire / stop that sound cue |
 | `Ctrl`+`Space` | fade out every sound cue |
+| `Ctrl`+`→` / `Ctrl`+`←` | next / previous name on the Text tab |
+| `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
 
@@ -111,6 +116,21 @@ visual only; `Ctrl`+`Space` is the sound equivalent.
 **Output device** picks which sound card everything plays through — cues *and*
 video audio. On a hall PC feeding a mixing console this matters: the default
 Windows device is rarely the one going to the PA.
+
+## Text slides
+
+![Text tab](docs/text.png)
+
+Built for award ceremonies. The running order is a plain text box, one slide per
+line, because the list already exists in a document and can be pasted straight
+in; a line may carry a second, smaller line after `|`. Click a slide, or use
+`Ctrl`+`→`, and it appears on the chosen screen.
+
+The text is drawn into the same `QGraphicsScene` as the background, so it
+composites over live video — the reason the outputs stopped using `QVideoWidget`.
+A dark band behind it keeps it readable over busy footage, and anything wider
+than the screen is scaled down rather than clipped at the edges. Clearing a
+screen takes the text with it, so a blackout cannot leave a name floating.
 
 ## Library
 
@@ -204,6 +224,7 @@ Everything lives in `main.py`:
 | `FadeOverlay` | crossfades or dips one output between pictures |
 | `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
 | `MediaLibrary` | folder browser with thumbnails, feeding screens and cues |
+| `TextSlides` | the running order of names, and how they are styled |
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |
 | `Autostart` | the per-user "run at login" registry entry |
