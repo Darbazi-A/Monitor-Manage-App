@@ -37,6 +37,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Text slides** — names on screen over whatever is running, prepared as a
   plain running order (one line per slide) and stepped through live. Sized to
   fit, so a long name shrinks instead of being chopped off.
+- **Build a show from a folder** — point it at the event's folder and it sorts
+  everything onto the right screens by shape and by name, fills the three
+  playlists and the sound cues, and shows you the plan before it acts.
 - **Media library** — browse the folders the event material lives in, with real
   thumbnails, a name filter and pinned folders. Send one item straight to a
   screen, fill a playlist from a multi-selection, or drop a sound onto a cue.
@@ -61,7 +64,8 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Start with Windows** — optionally open the app at login and put a chosen
   preset on the screens, after a delay that lets LED processors finish booting.
 - **Compact bar** — shrink the dashboard to a strip that floats above
-  everything: preset, previous/next, the eight cues, stop sound and blackout.
+  everything: which screen the arrows drive and what is on it, play/pause,
+  preset, the eight cues with what is running, silence and blackout.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -107,6 +111,34 @@ blacks out the hall.
 | `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
+
+## Building a show from a folder
+
+![Event folder](docs/event.png)
+
+An event's material already lives in one folder — the backgrounds, the clips,
+the fanfares. **Library → Build a show from a folder…** reads that folder,
+works out where each file belongs, and fills the three playlists and the sound
+cues in one step.
+
+It decides by two things:
+
+- **Name.** Any word in the file name or the folders under the event that says
+  where it goes — `top`, `zeda`, `ზედა`, `ceiling`, `strip`, `ჭერ` for the
+  ceiling; `side`, `gverd`, `გვერდ` for the sides; `main`, `ცენტრ` for the
+  middle. A folder called `Top` does it too.
+- **Shape.** Failing a name, the pixels decide: `≥ 4:1` is the ceiling strip,
+  anything taller than it is wide goes to the mirrored side screens, the rest to
+  the main screen, and audio becomes a sound cue.
+
+Name beats shape on purpose: a 1280×720 clip called
+`ლაზერების ფონი გვერდების.mp4` is 16:9 but the operator wrote "of the sides" in
+its name, and meant it.
+
+Sizes come from container metadata rather than decoded frames — six clips take
+about 0.2 s — so a whole folder is sorted while you wait. Nothing is applied
+until you have seen the list, and every row has a dropdown to move it or skip
+it.
 
 ## The compact bar
 
@@ -252,6 +284,8 @@ Everything lives in `main.py`:
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |
 | `Autostart` | the per-user "run at login" registry entry |
+| `classify_media`, `scan_event_folder` | where each file in an event folder belongs |
+| `EventFolderDialog` | the plan, shown before anything is applied |
 | `MiniBar` | the floating strip the dashboard shrinks to |
 | `ControlPanel` | the dashboard |
 

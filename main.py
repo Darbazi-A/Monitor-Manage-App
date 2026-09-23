@@ -106,6 +106,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFontComboBox,
     QFrame,
@@ -124,9 +125,12 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -443,6 +447,118 @@ def _check_video(path: str, extension: str) -> None:
             f"{container} files.\nIt can open: " + ", ".join(sorted(available)) + ".",
             CONVERT_ADVICE,
         )
+
+
+# Words that say which screen a file belongs to, in the two languages the
+# material is actually named in. Checked against the file name and every folder
+# above it, which is why "VIDEO ZEDA" and "ფონი გვერდების" land correctly.
+ROLE_HINTS = {
+    ROLE_TOP: ("top", "zeda", "\u10d6\u10d4\u10d3\u10d0", "ceiling", "strip", "\u10ed\u10d4\u10e0"),
+    ROLE_SIDES: ("side", "gverd", "\u10d2\u10d5\u10d4\u10e0\u10d3", "left", "right"),
+    ROLE_MAIN: ("main", "centre", "center", "\u10ea\u10d4\u10dc\u10e2\u10e0", "\u10db\u10d7\u10d0\u10d5\u10d0\u10e0"),
+}
+
+# Shape thresholds. The ceiling clips really are 2816x128 and the side clips
+# really are 256x640, so the media sorts itself if you just look at it.
+WIDE_RATIO = 4.0
+TALL_RATIO = 0.95
+
+
+def probe_media_size(path: str) -> Optional[QSize]:
+    """
+    Pixel size of an image or video, without decoding a frame.
+
+    Videos come from container metadata, which is near-instant - six clips took
+    0.2s - so a whole event folder can be sorted while the operator waits.
+    """
+    extension = os.path.splitext(path)[1].lower()
+    if extension in IMAGE_EXTENSIONS:
+        try:
+            from PySide6.QtGui import QImageReader
+
+            reader = QImageReader(path)
+            reader.setDecideFormatFromContent(True)
+            size = reader.size()
+            return size if size.isValid() else None
+        except Exception:
+            return None
+    if extension not in VIDEO_EXTENSIONS:
+        return None
+
+    from PySide6.QtCore import QEventLoop
+    from PySide6.QtMultimedia import QMediaMetaData
+
+    player = QMediaPlayer()
+    sink = QVideoSink()
+    player.setVideoSink(sink)
+    loop = QEventLoop()
+    found = {}
+
+    def on_status(status):
+        media_status = getattr(QMediaPlayer, "MediaStatus", None)
+        ready = {getattr(media_status, "LoadedMedia", None),
+                 getattr(media_status, "BufferedMedia", None)}
+        invalid = {getattr(media_status, "InvalidMedia", None),
+                   getattr(media_status, "NoMedia", None)}
+        if status in ready:
+            found["size"] = player.metaData().value(QMediaMetaData.Key.Resolution)
+            loop.quit()
+        elif status in invalid:
+            loop.quit()
+
+    player.mediaStatusChanged.connect(on_status)
+    player.errorOccurred.connect(lambda *_a: loop.quit())
+    QTimer.singleShot(2500, loop.quit)          # never hang on one bad file
+    player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+    loop.exec()
+    player.stop()
+    player.setSource(QUrl())
+
+    size = found.get("size")
+    return size if isinstance(size, QSize) and size.isValid() else None
+
+
+def classify_media(path: str, size: Optional[QSize] = None,
+                   within: str = "") -> str:
+    """
+    Decide where a file belongs: a stage role, or "sound".
+
+    Names win over shape, because an operator who wrote "gverdebis" in the file
+    name meant it, and a 16:9 clip can still be destined for the side screens.
+    """
+    extension = os.path.splitext(path)[1].lower()
+    if extension in AUDIO_EXTENSIONS:
+        return "sound"
+
+    relative = path[len(within):] if within and path.startswith(within) else path
+    haystack = relative.lower().replace("\\", "/")
+    for role, words in ROLE_HINTS.items():
+        if any(word in haystack for word in words):
+            return role
+
+    if size is not None and size.height():
+        ratio = size.width() / size.height()
+        if ratio >= WIDE_RATIO:
+            return ROLE_TOP
+        if ratio <= TALL_RATIO:
+            return ROLE_SIDES
+    return ROLE_MAIN
+
+
+def scan_event_folder(folder: str, depth: int = 3) -> List[str]:
+    """Every playable file under `folder`, sorted, subfolders included."""
+    found = []
+    root_depth = folder.rstrip("\\/").count(os.sep)
+    for current, dirs, files in os.walk(folder):
+        if current.count(os.sep) - root_depth >= depth:
+            dirs[:] = []
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(files):
+            extension = os.path.splitext(name)[1].lower()
+            if extension in IMAGE_EXTENSIONS or extension in VIDEO_EXTENSIONS \
+                    or extension in AUDIO_EXTENSIONS:
+                found.append(os.path.join(current, name))
+    return found
 
 
 def load_pixmap(path: str) -> QPixmap:
@@ -990,6 +1106,10 @@ def icon_button(name: str, tooltip: str, colour: str = CLR_TEXT, size: int = 18)
 # --------------------------------------------------------------------------- #
 
 STYLESHEET = f"""
+QMainWindow {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #111725, stop:0.35 {CLR_BG}, stop:1 {CLR_BG});
+}}
 QWidget {{
     background-color: {CLR_BG};
     color: {CLR_TEXT};
@@ -1009,7 +1129,11 @@ QTabBar::tab {{
     font-weight: 500;
 }}
 QTabBar::tab:hover {{ color: {CLR_DIM}; }}
-QTabBar::tab:selected {{ color: {CLR_TEXT}; font-weight: 600; }}
+QTabBar::tab:selected {{
+    color: {CLR_TEXT};
+    font-weight: 600;
+    border-bottom: 2px solid {CLR_ACCENT};
+}}
 
 /* Surfaces: a hairline lit from above, and the faintest vertical gradient, so a
    card reads as a raised sheet rather than a flat rectangle with a box around it. */
@@ -1229,6 +1353,15 @@ QFrame#miniCard {{
     border-top: 1px solid {CLR_EDGE_LIT};
     border-radius: 14px;
 }}
+QPushButton#miniScreen {{
+    padding: 6px 12px; font-size: 12px; font-weight: 600; color: {CLR_MUTED};
+}}
+QPushButton#miniScreen:checked {{
+    background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT};
+    border-color: rgba(227, 178, 60, 0.5);
+}}
+QPushButton#miniScreen[live="true"] {{ color: {CLR_OK}; }}
+QLabel#miniNow {{ color: {CLR_DIM}; font-size: 12px; }}
 QPushButton#miniCue {{
     padding: 7px 0px; font-size: 11px; font-weight: 600; color: {CLR_DIM};
 }}
@@ -2942,6 +3075,7 @@ class MediaLibrary(QWidget):
     showRequested = Signal(str, str)      # role, path
     queueRequested = Signal(str, list)    # role, paths
     cueRequested = Signal(int, str)       # slot, path
+    buildRequested = Signal()
 
     GRID = QSize(158, 132)
     THUMB = QSize(138, 78)
@@ -2988,6 +3122,13 @@ class MediaLibrary(QWidget):
         unpin.setIcon(Icons.get("minus", CLR_TEXT, 15))
         unpin.clicked.connect(self._unpin_current)
         bar.addWidget(unpin)
+
+        build = QPushButton("  Build a show from a folder…")
+        build.setObjectName("primary")
+        build.setIcon(Icons.get("folder", CLR_INK, 15))
+        build.setToolTip("Scan an event folder and sort everything onto the right screens")
+        build.clicked.connect(self.buildRequested.emit)
+        bar.addWidget(build)
 
         browse = QPushButton("  Open folder…")
         browse.setIcon(Icons.get("open", CLR_TEXT, 15))
@@ -4390,13 +4531,125 @@ class PresetStore:
 # Control panel
 # --------------------------------------------------------------------------- #
 
+class EventFolderDialog(QDialog):
+    """
+    What the app worked out about an event folder, before it acts on it.
+
+    Nothing is applied until the operator has seen the list and can change any
+    row - an import that silently guessed wrong would be worse than no import.
+    """
+
+    DEST_LABELS = (
+        ("Main Stage", ROLE_MAIN),
+        ("Side Screens", ROLE_SIDES),
+        ("Top Screen", ROLE_TOP),
+        ("Sound cue", "sound"),
+        ("Skip", "skip"),
+    )
+
+    def __init__(self, folder: str, rows: List[tuple], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Build a show from a folder")
+        self.setMinimumSize(760, 560)
+        self._rows = rows
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        heading = QLabel(os.path.basename(folder) or folder)
+        heading.setObjectName("cardTitle")
+        layout.addWidget(heading)
+
+        self.summary = QLabel()
+        self.summary.setObjectName("cardHint")
+        layout.addWidget(self.summary)
+
+        self.table = QTableWidget(len(rows), 3)
+        self.table.setHorizontalHeaderLabels(["File", "Shape", "Goes to"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.setColumnWidth(0, 400)
+        self.table.setColumnWidth(1, 130)
+        self.table.setColumnWidth(2, 160)
+        self.combos: List[QComboBox] = []
+
+        for index, (path, size, role) in enumerate(rows):
+            name = QTableWidgetItem(os.path.relpath(path, folder))
+            name.setToolTip(path)
+            self.table.setItem(index, 0, name)
+
+            if os.path.splitext(path)[1].lower() in AUDIO_EXTENSIONS:
+                shape = "sound"
+            elif size is not None and size.height():
+                ratio = size.width() / size.height()
+                shape = f"{size.width()}\u00d7{size.height()}   {ratio:.2f}:1"
+            else:
+                shape = "unknown"
+            item = QTableWidgetItem(shape)
+            item.setForeground(QColor(CLR_MUTED))
+            self.table.setItem(index, 1, item)
+
+            combo = QComboBox()
+            for label, value in self.DEST_LABELS:
+                combo.addItem(label, value)
+            combo.setCurrentIndex(max(0, combo.findData(role)))
+            combo.currentIndexChanged.connect(lambda _i: self._update_summary())
+            self.table.setCellWidget(index, 2, combo)
+            self.combos.append(combo)
+
+        layout.addWidget(self.table, 1)
+
+        self.replace_check = QCheckBox("Clear the current show first")
+        self.replace_check.setChecked(True)
+        layout.addWidget(self.replace_check)
+
+        self.go_live_check = QCheckBox("Put the first item of each screen on straight away")
+        layout.addWidget(self.go_live_check)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        build = QPushButton("  Build the show")
+        build.setObjectName("primary")
+        build.setIcon(Icons.get("play", CLR_INK, 15))
+        build.clicked.connect(self.accept)
+        buttons.addWidget(build)
+        layout.addLayout(buttons)
+
+        self._update_summary()
+
+    def _update_summary(self) -> None:
+        counts = {}
+        for combo in self.combos:
+            counts[combo.currentData()] = counts.get(combo.currentData(), 0) + 1
+        parts = []
+        for label, value in self.DEST_LABELS:
+            if counts.get(value):
+                parts.append(f"{counts[value]} \u2192 {label}")
+        self.summary.setText("   \u00b7   ".join(parts) if parts else "nothing to import")
+
+    def assignments(self) -> Dict[str, List[str]]:
+        result: Dict[str, List[str]] = {}
+        for (path, _size, _role), combo in zip(self._rows, self.combos):
+            destination = combo.currentData()
+            if destination == "skip":
+                continue
+            result.setdefault(destination, []).append(path)
+        return result
+
+
 class MiniBar(QWidget):
     """
     The dashboard shrunk to a strip that stays on top of everything.
 
-    For the stretches of an event where nothing needs preparing and the operator
-    only wants the few controls that get used under pressure: a preset, a
-    blackout, the running order, and the sound cues.
+    It carries the controls that get used under pressure, and - just as
+    important - enough state to act without expanding: which screen the arrows
+    will move, what is on it, and which cues are running.
     """
 
     expandRequested = Signal()
@@ -4404,13 +4657,14 @@ class MiniBar(QWidget):
     blackoutRequested = Signal()
     stopSoundRequested = Signal()
     stepRequested = Signal(int)
+    playPauseRequested = Signal()
     cueRequested = Signal(int)
+    screenChosen = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
                          | Qt.Tool)
         self.setObjectName("miniBar")
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
         self._drag_from = None
 
         shell = QVBoxLayout(self)
@@ -4419,58 +4673,94 @@ class MiniBar(QWidget):
         card.setObjectName("miniCard")
         shell.addWidget(card)
 
-        row = QHBoxLayout(card)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(7)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(12, 9, 12, 10)
+        body.setSpacing(8)
+
+        # --- row 1: which screen, what is on it, and the running order ------- #
+        top = QHBoxLayout()
+        top.setSpacing(6)
 
         grip = QLabel()
-        grip.setPixmap(Icons.get("grip", CLR_MUTED, 16).pixmap(16, 16))
+        grip.setPixmap(Icons.get("grip", CLR_MUTED, 15).pixmap(15, 15))
         grip.setToolTip("Drag to move")
-        row.addWidget(grip)
+        top.addWidget(grip)
+        top.addSpacing(2)
+
+        self.screen_buttons: Dict[str, QPushButton] = {}
+        for role, short in ((ROLE_MAIN, "Main"), (ROLE_SIDES, "Sides"), (ROLE_TOP, "Top")):
+            button = QPushButton(short)
+            button.setObjectName("miniScreen")
+            button.setCheckable(True)
+            button.setToolTip(f"Arrows and play act on {ROLE_LABELS[role]}")
+            button.clicked.connect(lambda _c=False, r=role: self.screenChosen.emit(r))
+            top.addWidget(button)
+            self.screen_buttons[role] = button
+
+        top.addSpacing(4)
+        prev_btn = icon_button("prev", "Previous in that screen's playlist", CLR_TEXT, 15)
+        prev_btn.clicked.connect(lambda: self.stepRequested.emit(-1))
+        top.addWidget(prev_btn)
+
+        self.play_btn = icon_button("play", "Play / pause that screen", CLR_TEXT, 15)
+        self.play_btn.clicked.connect(self.playPauseRequested.emit)
+        top.addWidget(self.play_btn)
+
+        next_btn = icon_button("next", "Next in that screen's playlist", CLR_TEXT, 15)
+        next_btn.clicked.connect(lambda: self.stepRequested.emit(1))
+        top.addWidget(next_btn)
+
+        top.addSpacing(6)
+        self.now_label = QLabel()
+        self.now_label.setObjectName("miniNow")
+        self.now_label.setMinimumWidth(210)
+        top.addWidget(self.now_label, 1)
 
         self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(150)
+        self.preset_combo.setMinimumWidth(140)
         self.preset_combo.setToolTip("Saved shows")
-        row.addWidget(self.preset_combo)
+        top.addWidget(self.preset_combo)
 
         load = QPushButton("Load")
         load.setObjectName("primary")
         load.setToolTip("Put this preset on the screens")
         load.clicked.connect(lambda: self.presetRequested.emit(self.preset_combo.currentText()))
-        row.addWidget(load)
+        top.addWidget(load)
+        body.addLayout(top)
 
-        row.addSpacing(4)
-        prev_btn = icon_button("prev", "Previous background on the active screen", CLR_TEXT, 15)
-        prev_btn.clicked.connect(lambda: self.stepRequested.emit(-1))
-        row.addWidget(prev_btn)
-        next_btn = icon_button("next", "Next background on the active screen", CLR_TEXT, 15)
-        next_btn.clicked.connect(lambda: self.stepRequested.emit(1))
-        row.addWidget(next_btn)
+        # --- row 2: sound and the panic buttons ------------------------------ #
+        bottom = QHBoxLayout()
+        bottom.setSpacing(5)
 
-        row.addSpacing(4)
         self.cue_buttons: List[QPushButton] = []
         for slot in range(SOUND_SLOTS):
             button = QPushButton(f"F{slot + 1}")
             button.setObjectName("miniCue")
-            button.setFixedWidth(34)
-            button.setToolTip(f"Sound cue F{slot + 1}")
+            button.setFixedWidth(40)
             button.clicked.connect(lambda _c=False, i=slot: self.cueRequested.emit(i))
-            row.addWidget(button)
+            bottom.addWidget(button)
             self.cue_buttons.append(button)
 
-        row.addSpacing(4)
-        quiet = icon_button("mute", "Fade out all sound", CLR_DIM, 15)
+        bottom.addSpacing(6)
+        self.sound_label = QLabel()
+        self.sound_label.setObjectName("miniNow")
+        bottom.addWidget(self.sound_label, 1)
+
+        quiet = QPushButton("  Silence")
+        quiet.setIcon(Icons.get("mute", CLR_DIM, 15))
+        quiet.setToolTip("Fade out every sound cue")
         quiet.clicked.connect(self.stopSoundRequested.emit)
-        row.addWidget(quiet)
+        bottom.addWidget(quiet)
 
         blackout = QPushButton("BLACKOUT")
         blackout.setObjectName("danger")
         blackout.clicked.connect(self.blackoutRequested.emit)
-        row.addWidget(blackout)
+        bottom.addWidget(blackout)
 
         expand = icon_button("expand", "Back to the full dashboard", CLR_DIM, 16)
         expand.clicked.connect(self.expandRequested.emit)
-        row.addWidget(expand)
+        bottom.addWidget(expand)
+        body.addLayout(bottom)
 
     # -- state --------------------------------------------------------------- #
 
@@ -4489,7 +4779,21 @@ class MiniBar(QWidget):
             self.preset_combo.setEnabled(False)
         self.preset_combo.blockSignals(False)
 
+    def show_screen(self, role: str, name: str, live: bool, playing: bool) -> None:
+        for key, button in self.screen_buttons.items():
+            button.setChecked(key == role)
+            button.setProperty("live", "true" if live and key == role else "false")
+            button.style().unpolish(button)
+            button.style().polish(button)
+        metrics = self.now_label.fontMetrics()
+        self.now_label.setText(
+            metrics.elidedText(name or "nothing on this screen", Qt.ElideMiddle,
+                               max(140, self.now_label.width())))
+        self.now_label.setToolTip(name)
+        self.play_btn.setIcon(Icons.get("pause" if playing else "play", CLR_TEXT, 15))
+
     def show_cues(self, cues) -> None:
+        running = []
         for button, cue in zip(self.cue_buttons, cues):
             filled = bool(cue.path)
             button.setEnabled(filled)
@@ -4498,6 +4802,13 @@ class MiniBar(QWidget):
             button.setToolTip(cue.label() if filled else f"F{cue.index + 1} is empty")
             button.style().unpolish(button)
             button.style().polish(button)
+            if cue.is_playing():
+                running.append(f"{cue.label()}  {format_time(cue.position())}")
+        metrics = self.sound_label.fontMetrics()
+        text = "   \u00b7   ".join(running) if running else ""
+        self.sound_label.setText(
+            metrics.elidedText(text, Qt.ElideRight, max(120, self.sound_label.width())))
+        self.sound_label.setToolTip(text)
 
     # -- dragging ------------------------------------------------------------ #
 
@@ -4806,9 +5117,11 @@ class ControlPanel(QMainWindow):
             self.mini.stepRequested.connect(
                 lambda delta: self._active_card().playlist.step(delta))
             self.mini.cueRequested.connect(self._fire_cue)
+            self.mini.playPauseRequested.connect(self._toggle_active_playback)
+            self.mini.screenChosen.connect(self.set_active_role)
 
         self.mini.set_presets(self.presets.names(), self.loaded_preset)
-        self.mini.show_cues(self.sound.cues)
+        self._refresh_mini_now()
         self.mini.adjustSize()
 
         stored = self.settings.value("window/mini_pos")
@@ -4823,6 +5136,13 @@ class ControlPanel(QMainWindow):
         self.hide()
         self._mini_ticker.start(400)
 
+    def _refresh_mini_now(self) -> None:
+        """Fill the bar before it is shown, so it never appears blank."""
+        was_visible = self.mini.isVisible()
+        self.mini.setVisible(True)
+        self._refresh_mini()
+        self.mini.setVisible(was_visible)
+
     def restore_from_bar(self) -> None:
         if self.mini is not None:
             self.settings.setValue("window/mini_pos", self.mini.pos())
@@ -4833,8 +5153,19 @@ class ControlPanel(QMainWindow):
         self.activateWindow()
 
     def _refresh_mini(self) -> None:
-        if self.mini is not None and self.mini.isVisible():
-            self.mini.show_cues(self.sound.cues)
+        if self.mini is None or not self.mini.isVisible():
+            return
+        role = self.active_role
+        card = self.cards[role]
+        window = getattr(self, self.OUTPUT_ATTRS[role], None)
+        playing = False
+        if window is not None:
+            states = getattr(QMediaPlayer, "PlaybackState", None)
+            playing = window.engine.player.playbackState() == getattr(
+                states, "PlayingState", None)
+        name = os.path.basename(card.current_path()) if card.current_path() else ""
+        self.mini.show_screen(role, name, window is not None, playing)
+        self.mini.show_cues(self.sound.cues)
 
     @Slot(str)
     def _mini_load_preset(self, name: str) -> None:
@@ -4900,11 +5231,110 @@ class ControlPanel(QMainWindow):
 
     # --------------------------------------------------------- library ----- #
 
+    @Slot()
+    def build_show_from_folder(self) -> None:
+        """
+        Turn one event folder into a whole show.
+
+        Everything for an assembly usually lives in a single folder already -
+        the backgrounds, the clips, the fanfares. Reading the shape of each file
+        is enough to sort it: the ceiling clips are 2816x128, the side clips are
+        portrait, the rest is 16:9, and the sound is whatever is audio.
+        """
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose the folder for this event", self.library.current_folder() or "")
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+
+        files = scan_event_folder(folder)
+        if not files:
+            QMessageBox.information(
+                self, "Nothing to import",
+                f"No images, videos or sounds were found in\n{folder}")
+            return
+
+        progress = QProgressDialog("Looking at the files…", "Cancel", 0, len(files), self)
+        progress.setWindowTitle("Building a show")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        rows = []
+        for index, path in enumerate(files):
+            if progress.wasCanceled():
+                return
+            progress.setValue(index)
+            progress.setLabelText(os.path.basename(path))
+            QApplication.processEvents()
+            size = probe_media_size(path)
+            rows.append((path, size, classify_media(path, size, folder)))
+        progress.setValue(len(files))
+
+        dialog = EventFolderDialog(folder, rows, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._apply_event_folder(folder, dialog.assignments(),
+                                 dialog.replace_check.isChecked(),
+                                 dialog.go_live_check.isChecked())
+
+    def _apply_event_folder(self, folder: str, assignments: Dict[str, List[str]],
+                            replace: bool, go_live: bool) -> None:
+        if replace:
+            for card in self.cards.values():
+                card.playlist.clear_all()
+                card.reset_file()
+            for cue in self.sound.cues:
+                cue.clear()
+
+        placed = []
+        for role in STAGE_ROLES:
+            paths = assignments.get(role, [])
+            if not paths:
+                continue
+            self.cards[role].playlist.add_paths(paths, announce=False)
+            placed.append(f"{len(paths)} on {ROLE_LABELS[role]}")
+
+        sounds = assignments.get("sound", [])
+        skipped_sounds = max(0, len(sounds) - SOUND_SLOTS)
+        for slot, path in enumerate(sounds[:SOUND_SLOTS]):
+            try:
+                self.sound.cues[slot].assign(path)
+            except MediaProblem:
+                pass
+        if sounds:
+            placed.append(f"{min(len(sounds), SOUND_SLOTS)} sound cue(s)")
+        self._refresh_cue_pads()
+
+        live_note = ""
+        if go_live:
+            # Only screens that actually have a window; otherwise this would
+            # fire one "output not open" dialog per screen, in a row.
+            open_roles = [r for r in STAGE_ROLES
+                          if getattr(self, self.OUTPUT_ATTRS[r], None) is not None]
+            for role in open_roles:
+                card = self.cards[role]
+                if card.playlist.count():
+                    card.playlist.setCurrentRow(0)
+                    card.loadRequested.emit(card.playlist.item(0).data(Qt.UserRole))
+            if not open_roles:
+                live_note = "  — nothing is on yet: press OPEN OUTPUTS first"
+
+
+        self._mark_preset_dirty()
+        self.library.set_folder(folder)
+        self.tabs.setCurrentIndex(0)
+        message = "Built from " + os.path.basename(folder) + ": " + ", ".join(placed)
+        if skipped_sounds:
+            message += f"  ({skipped_sounds} extra sound file(s) left out - only {SOUND_SLOTS} cues)"
+        message += live_note
+        self.statusBar().showMessage(message, 15000)
+
     def _build_library_tab(self) -> QWidget:
         self.library = MediaLibrary()
         self.library.showRequested.connect(self._library_show)
         self.library.queueRequested.connect(self._library_queue)
         self.library.cueRequested.connect(self._assign_cue)
+        self.library.buildRequested.connect(self.build_show_from_folder)
         return self.library
 
     def _restore_library_places(self) -> None:
