@@ -60,6 +60,8 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   wiring, not the event).
 - **Start with Windows** — optionally open the app at login and put a chosen
   preset on the screens, after a delay that lets LED processors finish booting.
+- **Compact bar** — shrink the dashboard to a strip that floats above
+  everything: preset, previous/next, the eight cues, stop sound and blackout.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -83,6 +85,10 @@ MP4 is the safe choice).
 3. During the event, click a playlist entry (or the ◀ ▶ arrows) to switch.
 4. Save it all as a preset so the next assembly is one click away.
 
+The dashboard opens filling the screen and comes back the size it was left.
+Applying a preset never moves or un-maximises it — that used to drag the window
+to one side before every show.
+
 `Escape` on a stage screen closes just that window; press **OPEN OUTPUTS** to
 bring it back. Quitting while outputs are live asks first — closing the app
 blacks out the hall.
@@ -101,6 +107,17 @@ blacks out the hall.
 | `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
+
+## The compact bar
+
+![Compact bar](docs/mini.png)
+
+The ⤡ button in the header shrinks the dashboard to this strip, which stays on
+top of whatever else is running and can be dragged anywhere. It carries only
+what gets used under pressure: pick a preset and load it, step the running
+order, fire the eight cues, silence the sound, blackout. Cue buttons light green
+while playing and gold while paused, exactly as the full pads do. ⤢ brings the
+dashboard back where it was.
 
 ## Sound
 
@@ -235,6 +252,7 @@ Everything lives in `main.py`:
 | `OutputCard`, `TopCard` | one output's live controls |
 | `RoutingRow`, `PresetStore` | setup and persistence |
 | `Autostart` | the per-user "run at login" registry entry |
+| `MiniBar` | the floating strip the dashboard shrinks to |
 | `ControlPanel` | the dashboard |
 
 `presets.json` is deliberately git-ignored: it holds absolute paths to media on

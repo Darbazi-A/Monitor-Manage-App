@@ -257,6 +257,14 @@ CLR_INPUT = "#111724"
 CLR_HOVER = "#1f2838"
 CLR_LINE = "#232c3d"
 CLR_LINE_SOFT = "#1b2230"
+# Edges: a lit hairline on top, a darker one elsewhere. Depth without shadows.
+CLR_EDGE = "#222b3c"
+CLR_EDGE_SOFT = "#1a2130"
+CLR_EDGE_HI = "#2c3750"
+CLR_EDGE_LIT = "#313d55"
+CLR_WELL = "#0f141e"
+CLR_BTN_TOP = "#212a3a"
+CLR_BTN_BOTTOM = "#182030"
 CLR_TEXT = "#e9edf5"
 CLR_DIM = "#9aa6bb"
 CLR_MUTED = "#6c7891"
@@ -749,6 +757,46 @@ class Icons:
         p.drawPath(inner)
 
     @staticmethod
+    def _compress(p: QPainter) -> None:
+        """Two arrows pulling inwards - corner brackets read as a plus at 16px."""
+        p.drawLine(QPointF(20.5, 3.5), QPointF(13.5, 10.5))
+        head = QPainterPath()
+        head.moveTo(13.5, 6.0)
+        head.lineTo(13.5, 10.5)
+        head.lineTo(18.0, 10.5)
+        p.drawPath(head)
+        p.drawLine(QPointF(3.5, 20.5), QPointF(10.5, 13.5))
+        tail = QPainterPath()
+        tail.moveTo(10.5, 18.0)
+        tail.lineTo(10.5, 13.5)
+        tail.lineTo(6.0, 13.5)
+        p.drawPath(tail)
+
+    @staticmethod
+    def _expand(p: QPainter) -> None:
+        p.drawLine(QPointF(13.5, 10.5), QPointF(20.5, 3.5))
+        head = QPainterPath()
+        head.moveTo(15.5, 3.5)
+        head.lineTo(20.5, 3.5)
+        head.lineTo(20.5, 8.5)
+        p.drawPath(head)
+        p.drawLine(QPointF(10.5, 13.5), QPointF(3.5, 20.5))
+        tail = QPainterPath()
+        tail.moveTo(8.5, 20.5)
+        tail.lineTo(3.5, 20.5)
+        tail.lineTo(3.5, 15.5)
+        p.drawPath(tail)
+
+    @staticmethod
+    def _grip(p: QPainter) -> None:
+        brush = p.pen().brush()
+        for y in (8.0, 12.0, 16.0):
+            for x in (9.5, 14.5):
+                dot = QPainterPath()
+                dot.addEllipse(QPointF(x, y), 1.2, 1.2)
+                p.fillPath(dot, brush)
+
+    @staticmethod
     def _warning(p: QPainter) -> None:
         path = QPainterPath()
         path.moveTo(12, 3.8)
@@ -963,185 +1011,241 @@ QTabBar::tab {{
 QTabBar::tab:hover {{ color: {CLR_DIM}; }}
 QTabBar::tab:selected {{ color: {CLR_TEXT}; font-weight: 600; }}
 
+/* Surfaces: a hairline lit from above, and the faintest vertical gradient, so a
+   card reads as a raised sheet rather than a flat rectangle with a box around it. */
 QFrame#card, QFrame#bar {{
-    background: {CLR_CARD};
-    border: 1px solid {CLR_LINE_SOFT};
-    border-radius: 14px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 {CLR_RAISED}, stop:0.55 {CLR_CARD}, stop:1 {CLR_CARD});
+    border: 1px solid {CLR_EDGE};
+    border-top: 1px solid {CLR_EDGE_LIT};
+    border-radius: 15px;
 }}
 QFrame#card[active="true"] {{
-    border: 1px solid rgba(227, 178, 60, 0.55);
-    background: {CLR_RAISED};
+    border: 1px solid rgba(227, 178, 60, 0.42);
+    border-top: 1px solid rgba(227, 178, 60, 0.58);
 }}
 
 QLabel#cardTitle {{ font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }}
 QLabel#cardSub {{ color: {CLR_MUTED}; font-size: 11px; }}
 QLabel#cardHint {{ color: {CLR_DIM}; }}
-QLabel#sectionTitle {{
-    color: {CLR_MUTED};
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
-}}
-QLabel#brand {{
-    font-size: 14px; font-weight: 700; letter-spacing: 0.4px; color: {CLR_TEXT};
-}}
+QLabel#sectionTitle {{ color: {CLR_MUTED}; font-size: 11px; font-weight: 600; }}
+QLabel#brand {{ font-size: 14px; font-weight: 700; letter-spacing: 0.4px; }}
 QLabel#clock {{
-    color: {CLR_DIM};
-    font-size: 16px;
-    font-weight: 500;
+    color: {CLR_DIM}; font-size: 16px; font-weight: 500;
     font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
 }}
-QLabel#timecode {{
-    color: {CLR_MUTED};
-    font-family: "Consolas", monospace;
-    font-size: 11px;
-}}
+QLabel#timecode {{ color: {CLR_MUTED}; font-family: "Consolas", monospace; font-size: 11px; }}
 QLabel#keyHint {{ color: {CLR_MUTED}; font-size: 11px; }}
 QLabel {{ background: transparent; }}
 
 QLabel#badgeLive, QLabel#badgeOff {{
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.4px;
-    padding: 3px 9px;
-    border-radius: 9px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    padding: 3px 10px; border-radius: 10px;
 }}
-QLabel#badgeLive {{ color: {CLR_OK}; background: rgba(87, 201, 138, 0.15); }}
-QLabel#badgeOff {{ color: {CLR_MUTED}; background: rgba(108, 120, 145, 0.14); }}
+QLabel#badgeLive {{
+    color: {CLR_OK};
+    background: rgba(87, 201, 138, 0.13);
+    border: 1px solid rgba(87, 201, 138, 0.28);
+}}
+QLabel#badgeOff {{
+    color: {CLR_MUTED};
+    background: rgba(108, 120, 145, 0.10);
+    border: 1px solid rgba(108, 120, 145, 0.22);
+}}
 
 QFrame#dropZone {{
-    background: {CLR_INPUT};
-    border: 1px solid {CLR_LINE_SOFT};
-    border-radius: 11px;
+    background: {CLR_WELL};
+    border: 1px solid {CLR_EDGE};
+    border-radius: 12px;
 }}
 QFrame#dropZone[dragActive="true"] {{
     background: {CLR_ACCENT_SOFT};
-    border: 1px solid {CLR_ACCENT};
+    border: 1px solid rgba(227, 178, 60, 0.6);
 }}
 
-/* Buttons: quiet by default, one gold primary per context. */
+/* Buttons: a hairline, a whisper of a gradient, and a lit top edge. */
 QPushButton {{
-    background: {CLR_RAISED};
-    border: 1px solid transparent;
-    border-radius: 9px;
-    padding: 8px 14px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 {CLR_BTN_TOP}, stop:1 {CLR_BTN_BOTTOM});
+    border: 1px solid {CLR_EDGE};
+    border-top: 1px solid {CLR_EDGE_LIT};
+    border-radius: 10px;
+    padding: 8px 15px;
     color: {CLR_TEXT};
     font-weight: 500;
 }}
-QPushButton:hover {{ background: {CLR_HOVER}; }}
-QPushButton:pressed {{ background: {CLR_INPUT}; }}
-QPushButton:disabled {{ color: #4a5468; background: {CLR_INPUT}; }}
+QPushButton:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #262f42, stop:1 #1d2533);
+    border-color: {CLR_EDGE_HI};
+}}
+QPushButton:pressed {{
+    background: {CLR_WELL};
+    border-top: 1px solid {CLR_EDGE};
+}}
+QPushButton:disabled {{
+    background: {CLR_WELL}; color: #48526640; color: #485266;
+    border-color: {CLR_EDGE_SOFT}; border-top-color: {CLR_EDGE_SOFT};
+}}
 QPushButton:checked {{
     background: {CLR_ACCENT_SOFT};
     border: 1px solid rgba(227, 178, 60, 0.45);
+    border-top: 1px solid rgba(227, 178, 60, 0.6);
 }}
+
 QPushButton#primary {{
-    background: {CLR_ACCENT};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #f2c556, stop:1 {CLR_ACCENT});
     color: {CLR_INK};
     font-weight: 600;
-    border: none;
+    border: 1px solid #c9992f;
+    border-top: 1px solid #f7d783;
 }}
-QPushButton#primary:hover {{ background: #f0c254; }}
-QPushButton#primary:pressed {{ background: #cfa033; }}
-QPushButton#primary:disabled {{ background: {CLR_INPUT}; color: #4a5468; }}
+QPushButton#primary:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7ce63, stop:1 #e8ba46);
+}}
+QPushButton#primary:pressed {{ background: {CLR_ACCENT}; border-top-color: #c9992f; }}
+QPushButton#primary:disabled {{
+    background: {CLR_WELL}; color: #485266; border-color: {CLR_EDGE_SOFT};
+}}
+
 QPushButton#danger {{
     background: transparent;
     color: {CLR_DANGER};
-    border: 1px solid rgba(224, 96, 92, 0.35);
+    border: 1px solid rgba(224, 96, 92, 0.32);
+    border-top: 1px solid rgba(224, 96, 92, 0.45);
     font-weight: 600;
 }}
-QPushButton#danger:hover {{ background: rgba(224, 96, 92, 0.12); }}
+QPushButton#danger:hover {{ background: rgba(224, 96, 92, 0.1); }}
 QPushButton#ghost {{ background: transparent; border: none; padding: 5px; }}
-QPushButton#ghost:hover {{ background: {CLR_HOVER}; }}
+QPushButton#ghost:hover {{ background: {CLR_HOVER}; border: none; }}
+QPushButton#ghost:disabled {{ background: transparent; border: none; }}
 QPushButton#transport {{ font-size: 15px; font-weight: 600; padding: 9px 0px; }}
 
+/* Inputs sit in a well: recessed, no outline until they matter. */
 QComboBox, QSpinBox, QLineEdit, QFontComboBox, QPlainTextEdit {{
-    background: {CLR_INPUT};
-    border: 1px solid transparent;
-    border-radius: 9px;
-    padding: 7px 10px;
+    background: {CLR_WELL};
+    border: 1px solid {CLR_EDGE_SOFT};
+    border-top: 1px solid #0c1119;
+    border-radius: 10px;
+    padding: 7px 11px;
     selection-background-color: {CLR_ACCENT};
     selection-color: {CLR_INK};
 }}
 QComboBox:hover, QSpinBox:hover, QLineEdit:hover, QFontComboBox:hover {{
-    background: {CLR_HOVER};
+    border-color: {CLR_EDGE_HI};
 }}
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{
-    border: 1px solid rgba(227, 178, 60, 0.5);
-    background: {CLR_INPUT};
+    border: 1px solid rgba(227, 178, 60, 0.55);
 }}
-QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
     background: {CLR_RAISED};
-    border: 1px solid {CLR_LINE};
-    border-radius: 8px;
-    padding: 4px;
+    border: 1px solid {CLR_EDGE};
+    border-radius: 10px;
+    padding: 5px;
     selection-background-color: {CLR_ACCENT};
     selection-color: {CLR_INK};
     outline: none;
 }}
-QSpinBox:disabled, QComboBox:disabled {{ color: #4a5468; background: #0f141e; }}
+QSpinBox:disabled, QComboBox:disabled {{ color: #485266; background: #0e131c; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none; background: transparent; }}
 
 QListWidget {{
-    background: {CLR_INPUT};
-    border: none;
-    border-radius: 10px;
+    background: {CLR_WELL};
+    border: 1px solid {CLR_EDGE_SOFT};
+    border-radius: 11px;
     outline: none;
-    padding: 4px;
+    padding: 5px;
 }}
-QListWidget::item {{ padding: 5px 7px; border-radius: 7px; color: {CLR_DIM}; }}
+QListWidget::item {{ padding: 6px 8px; border-radius: 8px; color: {CLR_DIM}; }}
 QListWidget::item:hover {{ background: {CLR_HOVER}; color: {CLR_TEXT}; }}
-QListWidget::item:selected {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; }}
-
-QSlider::groove:horizontal {{ height: 4px; background: #202838; border-radius: 2px; }}
-QSlider::handle:horizontal {{
-    background: {CLR_TEXT}; width: 12px; height: 12px;
-    margin: -5px 0; border-radius: 6px;
+QListWidget::item:selected {{
+    background: {CLR_ACCENT_SOFT};
+    color: {CLR_TEXT};
+    border: 1px solid rgba(227, 178, 60, 0.3);
 }}
-QSlider::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
 
-QSlider#scrub::groove:horizontal {{ height: 3px; background: #1d2432; border-radius: 2px; }}
+QSlider::groove:horizontal {{ height: 4px; background: #1b2231; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #c9d2e2);
+    width: 13px; height: 13px; margin: -5px 0; border-radius: 7px;
+    border: 1px solid #0c1119;
+}}
+QSlider::sub-page:horizontal {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #c79a32, stop:1 {CLR_ACCENT});
+    border-radius: 2px;
+}}
+QSlider#scrub::groove:horizontal {{ height: 3px; background: #1b2231; border-radius: 2px; }}
 QSlider#scrub::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
 QSlider#scrub::handle:horizontal {{
-    background: transparent; width: 10px; margin: -4px 0; border-radius: 5px;
+    background: transparent; border: none; width: 10px; margin: -4px 0; border-radius: 5px;
 }}
-QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; }}
-QSlider#scrub:disabled::sub-page:horizontal {{ background: #1d2432; }}
+QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; border: none; }}
+QSlider#scrub:disabled::sub-page:horizontal {{ background: #1b2231; }}
 
 QCheckBox {{ background: transparent; color: {CLR_DIM}; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px; border-radius: 5px;
-    border: 1px solid {CLR_LINE}; background: {CLR_INPUT};
+    border: 1px solid {CLR_EDGE_HI}; background: {CLR_WELL};
 }}
-QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: {CLR_ACCENT}; }}
+QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: #c9992f; }}
 
 QFrame#cuePad {{
-    background: {CLR_INPUT};
-    border: 1px solid {CLR_LINE_SOFT};
-    border-radius: 11px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 {CLR_BTN_TOP}, stop:1 {CLR_WELL});
+    border: 1px solid {CLR_EDGE};
+    border-top: 1px solid {CLR_EDGE_LIT};
+    border-radius: 12px;
 }}
-QFrame#cuePad[filled="false"] {{ background: transparent; border: 1px dashed {CLR_LINE}; }}
-QFrame#cuePad[filled="true"]:hover {{ background: {CLR_HOVER}; }}
+QFrame#cuePad[filled="false"] {{
+    background: transparent;
+    border: 1px dashed {CLR_EDGE_HI};
+    border-top: 1px dashed {CLR_EDGE_HI};
+}}
+QFrame#cuePad[filled="true"]:hover {{ border-color: {CLR_EDGE_HI}; }}
 QFrame#cuePad[playing="true"] {{
-    background: rgba(87, 201, 138, 0.13);
-    border: 1px solid rgba(87, 201, 138, 0.5);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(87, 201, 138, 0.17), stop:1 rgba(87, 201, 138, 0.07));
+    border: 1px solid rgba(87, 201, 138, 0.45);
+    border-top: 1px solid rgba(87, 201, 138, 0.6);
 }}
 QFrame#cuePad[paused="true"] {{
     background: {CLR_ACCENT_SOFT};
-    border: 1px solid rgba(227, 178, 60, 0.45);
+    border: 1px solid rgba(227, 178, 60, 0.42);
+    border-top: 1px solid rgba(227, 178, 60, 0.55);
 }}
 QLabel#cueKey {{ color: {CLR_MUTED}; font-size: 10px; font-weight: 700; }}
 QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
 QFrame#cuePad[paused="true"] QLabel#cueKey {{ color: {CLR_ACCENT}; }}
 QLabel#cueName {{ font-size: 12px; font-weight: 500; }}
-QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #46506330; color: #465063; }}
+QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #465063; }}
 
-QStatusBar {{ background: {CLR_CARD}; color: {CLR_MUTED}; border: none; }}
+/* The floating strip. */
+QFrame#miniCard {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 {CLR_RAISED}, stop:1 {CLR_CARD});
+    border: 1px solid {CLR_EDGE_HI};
+    border-top: 1px solid {CLR_EDGE_LIT};
+    border-radius: 14px;
+}}
+QPushButton#miniCue {{
+    padding: 7px 0px; font-size: 11px; font-weight: 600; color: {CLR_DIM};
+}}
+QPushButton#miniCue[playing="true"] {{
+    background: rgba(87, 201, 138, 0.18); color: {CLR_OK};
+    border-color: rgba(87, 201, 138, 0.45);
+}}
+QPushButton#miniCue[paused="true"] {{
+    background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT};
+    border-color: rgba(227, 178, 60, 0.45);
+}}
+
+QStatusBar {{ background: transparent; color: {CLR_MUTED}; border: none; }}
 QStatusBar::item {{ border: none; }}
 QToolTip {{
     background: {CLR_RAISED}; color: {CLR_TEXT};
-    border: 1px solid {CLR_LINE}; padding: 6px 8px; border-radius: 6px;
+    border: 1px solid {CLR_EDGE_HI}; padding: 6px 9px; border-radius: 8px;
 }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: #2b3547; border-radius: 5px; min-height: 28px; }}
@@ -4286,6 +4390,132 @@ class PresetStore:
 # Control panel
 # --------------------------------------------------------------------------- #
 
+class MiniBar(QWidget):
+    """
+    The dashboard shrunk to a strip that stays on top of everything.
+
+    For the stretches of an event where nothing needs preparing and the operator
+    only wants the few controls that get used under pressure: a preset, a
+    blackout, the running order, and the sound cues.
+    """
+
+    expandRequested = Signal()
+    presetRequested = Signal(str)
+    blackoutRequested = Signal()
+    stopSoundRequested = Signal()
+    stepRequested = Signal(int)
+    cueRequested = Signal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(None, Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                         | Qt.Tool)
+        self.setObjectName("miniBar")
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self._drag_from = None
+
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        card = QFrame()
+        card.setObjectName("miniCard")
+        shell.addWidget(card)
+
+        row = QHBoxLayout(card)
+        row.setContentsMargins(10, 8, 10, 8)
+        row.setSpacing(7)
+
+        grip = QLabel()
+        grip.setPixmap(Icons.get("grip", CLR_MUTED, 16).pixmap(16, 16))
+        grip.setToolTip("Drag to move")
+        row.addWidget(grip)
+
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(150)
+        self.preset_combo.setToolTip("Saved shows")
+        row.addWidget(self.preset_combo)
+
+        load = QPushButton("Load")
+        load.setObjectName("primary")
+        load.setToolTip("Put this preset on the screens")
+        load.clicked.connect(lambda: self.presetRequested.emit(self.preset_combo.currentText()))
+        row.addWidget(load)
+
+        row.addSpacing(4)
+        prev_btn = icon_button("prev", "Previous background on the active screen", CLR_TEXT, 15)
+        prev_btn.clicked.connect(lambda: self.stepRequested.emit(-1))
+        row.addWidget(prev_btn)
+        next_btn = icon_button("next", "Next background on the active screen", CLR_TEXT, 15)
+        next_btn.clicked.connect(lambda: self.stepRequested.emit(1))
+        row.addWidget(next_btn)
+
+        row.addSpacing(4)
+        self.cue_buttons: List[QPushButton] = []
+        for slot in range(SOUND_SLOTS):
+            button = QPushButton(f"F{slot + 1}")
+            button.setObjectName("miniCue")
+            button.setFixedWidth(34)
+            button.setToolTip(f"Sound cue F{slot + 1}")
+            button.clicked.connect(lambda _c=False, i=slot: self.cueRequested.emit(i))
+            row.addWidget(button)
+            self.cue_buttons.append(button)
+
+        row.addSpacing(4)
+        quiet = icon_button("mute", "Fade out all sound", CLR_DIM, 15)
+        quiet.clicked.connect(self.stopSoundRequested.emit)
+        row.addWidget(quiet)
+
+        blackout = QPushButton("BLACKOUT")
+        blackout.setObjectName("danger")
+        blackout.clicked.connect(self.blackoutRequested.emit)
+        row.addWidget(blackout)
+
+        expand = icon_button("expand", "Back to the full dashboard", CLR_DIM, 16)
+        expand.clicked.connect(self.expandRequested.emit)
+        row.addWidget(expand)
+
+    # -- state --------------------------------------------------------------- #
+
+    def set_presets(self, names: List[str], current: Optional[str]) -> None:
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        if names:
+            self.preset_combo.addItems(names)
+            self.preset_combo.setEnabled(True)
+            if current:
+                index = self.preset_combo.findText(current)
+                if index >= 0:
+                    self.preset_combo.setCurrentIndex(index)
+        else:
+            self.preset_combo.addItem("no presets")
+            self.preset_combo.setEnabled(False)
+        self.preset_combo.blockSignals(False)
+
+    def show_cues(self, cues) -> None:
+        for button, cue in zip(self.cue_buttons, cues):
+            filled = bool(cue.path)
+            button.setEnabled(filled)
+            button.setProperty("playing", "true" if cue.is_playing() else "false")
+            button.setProperty("paused", "true" if cue.is_paused() else "false")
+            button.setToolTip(cue.label() if filled else f"F{cue.index + 1} is empty")
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    # -- dragging ------------------------------------------------------------ #
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._drag_from = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._drag_from is not None and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_from)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag_from = None
+        event.accept()
+
+
 class ControlPanel(QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
@@ -4310,6 +4540,9 @@ class ControlPanel(QMainWindow):
         self.active_role = ROLE_MAIN
         self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
         self._freshly_opened: set = set()
+        self.mini: Optional[MiniBar] = None
+        self._mini_ticker = QTimer(self)
+        self._mini_ticker.timeout.connect(self._refresh_mini)
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -4407,6 +4640,12 @@ class ControlPanel(QMainWindow):
         blackout.setToolTip("Instantly clear every stage screen to black")
         blackout.clicked.connect(self._blackout_all)
         layout.addWidget(blackout)
+
+        shrink = icon_button("compress", "Shrink to a small bar that stays on top",
+                             CLR_DIM, 16)
+        shrink.setObjectName("ghost")
+        shrink.clicked.connect(self.shrink_to_bar)
+        layout.addWidget(shrink)
         # "Close outputs" deliberately lives on the Screens tab: an X in the
         # header corner reads like "quit the app" during a show.
         return bar
@@ -4553,6 +4792,60 @@ class ControlPanel(QMainWindow):
         outer.addWidget(screens, 1)
         outer.addWidget(self._build_sound_bar())
         return page
+
+    # -------------------------------------------------------- mini bar ----- #
+
+    def shrink_to_bar(self) -> None:
+        """Hide the dashboard and leave a strip floating over everything else."""
+        if self.mini is None:
+            self.mini = MiniBar()
+            self.mini.expandRequested.connect(self.restore_from_bar)
+            self.mini.presetRequested.connect(self._mini_load_preset)
+            self.mini.blackoutRequested.connect(self._blackout_all)
+            self.mini.stopSoundRequested.connect(self._stop_all_sound)
+            self.mini.stepRequested.connect(
+                lambda delta: self._active_card().playlist.step(delta))
+            self.mini.cueRequested.connect(self._fire_cue)
+
+        self.mini.set_presets(self.presets.names(), self.loaded_preset)
+        self.mini.show_cues(self.sound.cues)
+        self.mini.adjustSize()
+
+        stored = self.settings.value("window/mini_pos")
+        if stored is not None:
+            self.mini.move(stored)
+        else:
+            available = QGuiApplication.primaryScreen().availableGeometry()
+            self.mini.move(available.center().x() - self.mini.width() // 2,
+                           available.bottom() - self.mini.height() - 60)
+        self.mini.show()
+        self.mini.raise_()
+        self.hide()
+        self._mini_ticker.start(400)
+
+    def restore_from_bar(self) -> None:
+        if self.mini is not None:
+            self.settings.setValue("window/mini_pos", self.mini.pos())
+            self.mini.hide()
+        self._mini_ticker.stop()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _refresh_mini(self) -> None:
+        if self.mini is not None and self.mini.isVisible():
+            self.mini.show_cues(self.sound.cues)
+
+    @Slot(str)
+    def _mini_load_preset(self, name: str) -> None:
+        payload = self.presets.get(name)
+        if not payload:
+            return
+        self._apply_preset(payload)
+        self.loaded_preset = name
+        self._preset_dirty = False
+        self._describe_preset_state()
+        self._refresh_preset_combo(name)
 
     # ------------------------------------------------------ text slides ---- #
 
@@ -5538,11 +5831,26 @@ class ControlPanel(QMainWindow):
         )
 
     def _move_self_to(self, screen: QScreen) -> None:
-        geometry = screen.geometry()
+        """
+        Put the dashboard on the operator's monitor - but only if it is not
+        already there.
+
+        Applying a preset used to drag the window to a fixed offset every time,
+        un-maximising it and shoving it off to one side, which then had to be
+        dragged back by hand before every show.
+        """
         handle = self.windowHandle()
+        if handle is not None and handle.screen() is screen:
+            return
+        was_maximised = self.isMaximized()
+        if was_maximised:
+            self.showNormal()
+        geometry = screen.geometry()
         if handle is not None:
             handle.setScreen(screen)
         self.move(geometry.x() + 50, geometry.y() + 40)
+        if was_maximised:
+            self.showMaximized()
 
     @Slot(str, bool)
     def _on_output_on_top_changed(self, role: str, on_top: bool) -> None:
@@ -5914,9 +6222,17 @@ class ControlPanel(QMainWindow):
     # ------------------------------------------------------------ shutdown -- #
 
     def _restore_window_geometry(self) -> None:
-        saved = self.settings.value("window/geometry")
+        """
+        Come back the size it was left, and fill the screen the first time.
+
+        The key is versioned: the old one held a small hand-sized window from
+        before this defaulted to maximised, and that would have kept winning.
+        """
+        saved = self.settings.value("window/geometry2")
         if saved is not None:
             self.restoreGeometry(saved)
+        else:
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Closing the control panel tears down every stage window, then quits."""
@@ -5936,8 +6252,11 @@ class ControlPanel(QMainWindow):
                 return
 
         self.sound.stop_all(0)
+        if self.mini is not None:
+            self.settings.setValue("window/mini_pos", self.mini.pos())
+            self.mini.close()
         self._remember_library_places()
-        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.setValue("window/geometry2", self.saveGeometry())
         for window in live:
             window.clear_output()
             window.force_close()
