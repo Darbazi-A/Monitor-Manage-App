@@ -28,10 +28,10 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   playlists show the footage rather than a film icon.
 - **Position bar** — elapsed / total per screen, draggable to seek, so nobody is
   guessing how long a clip has left.
-- **Sound cues** — eight sounds on `F1`–`F8`, each with its own player so a
-  fanfare fires over a bed of music instead of interrupting it. Per-cue loop and
-  level, a master level, a sound-device picker, and a stop that fades rather
-  than cutting.
+- **Sound cues** — eight small players on `F1`–`F8`: play, pause, resume, stop
+  and a seek bar each. Every cue has its own player, so a fanfare fires over a
+  bed of music instead of interrupting it. Per-cue loop, a master level, a
+  sound-device picker, and fades rather than hard cuts.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `F1`–`F8` fire sound cues, `B` blacks out.
 - **Text slides** — names on screen over whatever is running, prepared as a
@@ -94,7 +94,8 @@ blacks out the hall.
 | `1` `2` `3` | choose the screen the keyboard drives (it gets an accent border) |
 | `←` `→` | previous / next entry in that screen's playlist |
 | `Space` | play / pause that screen |
-| `F1`–`F8` | fire / stop that sound cue |
+| `F1`–`F8` | play / pause that sound cue |
+| `Shift`+`F1`–`F8` | stop it and rewind |
 | `Ctrl`+`Space` | fade out every sound cue |
 | `Ctrl`+`→` / `Ctrl`+`←` | next / previous name on the Text tab |
 | `Ctrl`+`H` | hide the text |
@@ -108,10 +109,16 @@ own: during a ceremony the operator changes a background and fires a fanfare in
 the same minute, and looking away from the screens is exactly the wrong thing to
 ask for. Drop a sound file on a pad, or click an empty one to browse.
 
+Each pad is a small player — play/pause, stop, elapsed and remaining, and a bar
+you can drag to move through the sound. `F1` plays and pauses; `Shift`+`F1`
+stops and rewinds. Clicking the pad body plays or pauses too, because during a
+ceremony that is the fast path.
+
 Each cue owns a separate `QMediaPlayer`, which is what lets a fanfare play over
-music. Stopping animates the level to zero first (`QAudioOutput.volume`) — a PA
-cut dead is far more noticeable than the sound itself. Blackout is deliberately
-visual only; `Ctrl`+`Space` is the sound equivalent.
+music. Pausing and stopping animate the level to zero first
+(`QAudioOutput.volume`) and starting fades up — a PA cut dead is far more
+noticeable than the sound itself. Blackout is deliberately visual only;
+`Ctrl`+`Space` is the sound equivalent.
 
 **Output device** picks which sound card everything plays through — cues *and*
 video audio. On a hall PC feeding a mixing console this matters: the default
@@ -215,7 +222,7 @@ Everything lives in `main.py`:
 | `Icons` | line icons drawn with `QPainter` — no image assets |
 | `MediaEngine` | `QMediaPlayer` wrapper: looping, safe source swapping, audio |
 | `SoundCue`, `SoundDeck` | one sound per key, with fade-out and its own level |
-| `CuePad` | a drop target and fire button for one cue |
+| `CuePad` | one cue as a small player: drop target, transport, seek bar |
 | `BaseOutputWindow` | frameless, un-closable, taskbar-less stage window |
 | `SceneOutputWindow` | any output, drawn through a `QGraphicsScene` |
 | `StandardOutputWindow` / `TopOutputWindow` | Main+Sides / the ceiling strip |

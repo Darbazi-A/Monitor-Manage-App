@@ -247,18 +247,25 @@ TRANSITION_STYLES = (
     ("Through black", TRANSITION_DIP),
 )
 
-# Palette - a quiet, low-contrast dark theme so the stage stays the bright thing.
-CLR_BG = "#0f1218"
-CLR_CARD = "#191e26"
-CLR_INPUT = "#151a21"
-CLR_HOVER = "#242b36"
-CLR_LINE = "#2b3442"
-CLR_TEXT = "#e3e8f0"
-CLR_MUTED = "#79839a"
-CLR_ACCENT = "#5aa9f0"
-CLR_OK = "#4cc98a"
-CLR_WARN = "#e8a44c"
-CLR_DANGER = "#e8615f"
+# Palette. Navy ground and a gold accent, taken from the school's own colours -
+# a generic dark-grey-and-blue theme looked like every other dark-grey-and-blue
+# theme. One accent only; green, amber and red are kept for state, nothing else.
+CLR_BG = "#0c1018"
+CLR_CARD = "#141a26"
+CLR_RAISED = "#1a2130"
+CLR_INPUT = "#111724"
+CLR_HOVER = "#1f2838"
+CLR_LINE = "#232c3d"
+CLR_LINE_SOFT = "#1b2230"
+CLR_TEXT = "#e9edf5"
+CLR_DIM = "#9aa6bb"
+CLR_MUTED = "#6c7891"
+CLR_ACCENT = "#e3b23c"
+CLR_ACCENT_SOFT = "rgba(227, 178, 60, 0.14)"
+CLR_INK = "#12161f"
+CLR_OK = "#57c98a"
+CLR_WARN = "#d9853f"
+CLR_DANGER = "#e0605c"
 
 
 class ScaleMode(Enum):
@@ -938,199 +945,209 @@ STYLESHEET = f"""
 QWidget {{
     background-color: {CLR_BG};
     color: {CLR_TEXT};
-    font-family: "Segoe UI", "Noto Sans Georgian", sans-serif;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Noto Sans Georgian", sans-serif;
     font-size: 13px;
 }}
+
+/* Tabs read as navigation, not as buttons. */
 QTabWidget::pane {{ border: none; background: {CLR_BG}; }}
 QTabBar::tab {{
     background: transparent;
     color: {CLR_MUTED};
-    padding: 8px 18px;
-    margin-right: 2px;
+    padding: 9px 20px 10px 4px;
+    margin-right: 22px;
     border: none;
-    border-bottom: 2px solid transparent;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 500;
 }}
-QTabBar::tab:hover {{ color: {CLR_TEXT}; }}
-QTabBar::tab:selected {{
-    color: {CLR_TEXT};
-    border-bottom: 2px solid {CLR_ACCENT};
-}}
+QTabBar::tab:hover {{ color: {CLR_DIM}; }}
+QTabBar::tab:selected {{ color: {CLR_TEXT}; font-weight: 600; }}
 
 QFrame#card, QFrame#bar {{
     background: {CLR_CARD};
-    border: 1px solid {CLR_LINE};
-    border-radius: 10px;
+    border: 1px solid {CLR_LINE_SOFT};
+    border-radius: 14px;
 }}
-/* The card the keyboard acts on. */
 QFrame#card[active="true"] {{
-    border: 1px solid {CLR_ACCENT};
-    background: #1b2230;
+    border: 1px solid rgba(227, 178, 60, 0.55);
+    background: {CLR_RAISED};
 }}
-QLabel#cardTitle {{ font-size: 14px; font-weight: 700; }}
-QLabel#cardHint {{ color: {CLR_MUTED}; }}
+
+QLabel#cardTitle {{ font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }}
+QLabel#cardSub {{ color: {CLR_MUTED}; font-size: 11px; }}
+QLabel#cardHint {{ color: {CLR_DIM}; }}
 QLabel#sectionTitle {{
     color: {CLR_MUTED};
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-}}
-QLabel#cardSub {{ color: {CLR_MUTED}; font-size: 11px; }}
-QLabel#brand {{ font-size: 13px; font-weight: 800; letter-spacing: 1.2px; }}
-QLabel#clock {{
-    color: {CLR_MUTED};
-    font-size: 15px;
+    font-size: 11px;
     font-weight: 600;
-    font-family: "Consolas", "Segoe UI", monospace;
+    letter-spacing: 0.3px;
+}}
+QLabel#brand {{
+    font-size: 14px; font-weight: 700; letter-spacing: 0.4px; color: {CLR_TEXT};
+}}
+QLabel#clock {{
+    color: {CLR_DIM};
+    font-size: 16px;
+    font-weight: 500;
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
 }}
 QLabel#timecode {{
     color: {CLR_MUTED};
     font-family: "Consolas", monospace;
     font-size: 11px;
 }}
-QLabel#badgeLive, QLabel#badgeOff {{
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 1px;
-    padding: 3px 7px;
-    border-radius: 4px;
-}}
-QLabel#badgeLive {{ color: #0b1a12; background: {CLR_OK}; }}
-QLabel#badgeOff {{ color: {CLR_WARN}; background: rgba(232, 164, 76, 0.14); }}
-QLabel#keyHint {{
-    color: #5d6779;
-    font-size: 11px;
-}}
-
-QFrame#cuePad {{
-    background: {CLR_INPUT};
-    border: 1px dashed {CLR_LINE};
-    border-radius: 8px;
-}}
-QFrame#cuePad[filled="true"] {{ border: 1px solid {CLR_LINE}; }}
-QFrame#cuePad[filled="true"]:hover {{ border-color: {CLR_ACCENT}; background: {CLR_HOVER}; }}
-QFrame#cuePad[playing="true"] {{
-    background: rgba(76, 201, 138, 0.15);
-    border: 1px solid {CLR_OK};
-}}
-QLabel#cueKey {{
-    color: {CLR_MUTED};
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 0.6px;
-}}
-QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
-QLabel#cueName {{ font-size: 12px; font-weight: 600; }}
-QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #4d5769; font-weight: 400; }}
+QLabel#keyHint {{ color: {CLR_MUTED}; font-size: 11px; }}
 QLabel {{ background: transparent; }}
+
+QLabel#badgeLive, QLabel#badgeOff {{
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    padding: 3px 9px;
+    border-radius: 9px;
+}}
+QLabel#badgeLive {{ color: {CLR_OK}; background: rgba(87, 201, 138, 0.15); }}
+QLabel#badgeOff {{ color: {CLR_MUTED}; background: rgba(108, 120, 145, 0.14); }}
 
 QFrame#dropZone {{
     background: {CLR_INPUT};
-    border: 1px dashed {CLR_LINE};
-    border-radius: 9px;
+    border: 1px solid {CLR_LINE_SOFT};
+    border-radius: 11px;
 }}
 QFrame#dropZone[dragActive="true"] {{
-    background: {CLR_HOVER};
-    border: 1px dashed {CLR_ACCENT};
+    background: {CLR_ACCENT_SOFT};
+    border: 1px solid {CLR_ACCENT};
 }}
-QFrame#dropZone[loaded="true"] {{ border: 1px solid {CLR_LINE}; }}
 
+/* Buttons: quiet by default, one gold primary per context. */
 QPushButton {{
-    background: {CLR_INPUT};
-    border: 1px solid {CLR_LINE};
-    border-radius: 7px;
-    padding: 7px 13px;
+    background: {CLR_RAISED};
+    border: 1px solid transparent;
+    border-radius: 9px;
+    padding: 8px 14px;
+    color: {CLR_TEXT};
+    font-weight: 500;
 }}
-QPushButton:hover {{ background: {CLR_HOVER}; border-color: #3b4657; }}
-QPushButton:pressed {{ background: #11151b; }}
-QPushButton:disabled {{ color: #4d5769; border-color: #232a34; }}
+QPushButton:hover {{ background: {CLR_HOVER}; }}
+QPushButton:pressed {{ background: {CLR_INPUT}; }}
+QPushButton:disabled {{ color: #4a5468; background: {CLR_INPUT}; }}
 QPushButton:checked {{
-    background: rgba(90, 169, 240, 0.16);
-    border-color: {CLR_ACCENT};
+    background: {CLR_ACCENT_SOFT};
+    border: 1px solid rgba(227, 178, 60, 0.45);
 }}
 QPushButton#primary {{
     background: {CLR_ACCENT};
-    color: #0b0e13;
-    font-weight: 700;
-    border: 1px solid {CLR_ACCENT};
+    color: {CLR_INK};
+    font-weight: 600;
+    border: none;
 }}
-QPushButton#primary:hover {{ background: #74b8f5; }}
-QPushButton#primary:disabled {{
-    background: {CLR_INPUT};
-    color: #4d5769;
-    border: 1px solid #232a34;
-}}
+QPushButton#primary:hover {{ background: #f0c254; }}
+QPushButton#primary:pressed {{ background: #cfa033; }}
+QPushButton#primary:disabled {{ background: {CLR_INPUT}; color: #4a5468; }}
 QPushButton#danger {{
     background: transparent;
     color: {CLR_DANGER};
-    border: 1px solid rgba(232, 97, 95, 0.45);
-    font-weight: 700;
+    border: 1px solid rgba(224, 96, 92, 0.35);
+    font-weight: 600;
 }}
-QPushButton#danger:hover {{ background: rgba(232, 97, 95, 0.12); }}
-QPushButton#ghost {{ background: transparent; border: 1px solid transparent; padding: 5px; }}
+QPushButton#danger:hover {{ background: rgba(224, 96, 92, 0.12); }}
+QPushButton#ghost {{ background: transparent; border: none; padding: 5px; }}
 QPushButton#ghost:hover {{ background: {CLR_HOVER}; }}
+QPushButton#transport {{ font-size: 15px; font-weight: 600; padding: 9px 0px; }}
 
-QComboBox, QSpinBox, QLineEdit, QFontComboBox {{
+QComboBox, QSpinBox, QLineEdit, QFontComboBox, QPlainTextEdit {{
     background: {CLR_INPUT};
-    border: 1px solid {CLR_LINE};
-    border-radius: 7px;
-    padding: 6px 9px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    padding: 7px 10px;
     selection-background-color: {CLR_ACCENT};
-    selection-color: #0b0e13;
+    selection-color: {CLR_INK};
 }}
-QComboBox:focus, QSpinBox:focus, QLineEdit:focus {{ border-color: {CLR_ACCENT}; }}
+QComboBox:hover, QSpinBox:hover, QLineEdit:hover, QFontComboBox:hover {{
+    background: {CLR_HOVER};
+}}
+QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{
+    border: 1px solid rgba(227, 178, 60, 0.5);
+    background: {CLR_INPUT};
+}}
 QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox QAbstractItemView {{
-    background: {CLR_CARD};
+    background: {CLR_RAISED};
     border: 1px solid {CLR_LINE};
+    border-radius: 8px;
+    padding: 4px;
     selection-background-color: {CLR_ACCENT};
-    selection-color: #0b0e13;
+    selection-color: {CLR_INK};
     outline: none;
 }}
-QSpinBox:disabled, QComboBox:disabled {{ color: #4d5769; background: #101419; }}
+QSpinBox:disabled, QComboBox:disabled {{ color: #4a5468; background: #0f141e; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none; background: transparent; }}
 
 QListWidget {{
     background: {CLR_INPUT};
-    border: 1px solid {CLR_LINE};
-    border-radius: 8px;
+    border: none;
+    border-radius: 10px;
     outline: none;
-    padding: 3px;
+    padding: 4px;
 }}
-QListWidget::item {{ padding: 4px 6px; border-radius: 5px; color: {CLR_MUTED}; }}
+QListWidget::item {{ padding: 5px 7px; border-radius: 7px; color: {CLR_DIM}; }}
 QListWidget::item:hover {{ background: {CLR_HOVER}; color: {CLR_TEXT}; }}
-QListWidget::item:selected {{ background: rgba(90, 169, 240, 0.18); color: {CLR_TEXT}; }}
+QListWidget::item:selected {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; }}
 
-QSlider::groove:horizontal {{ height: 4px; background: #262e3a; border-radius: 2px; }}
+QSlider::groove:horizontal {{ height: 4px; background: #202838; border-radius: 2px; }}
 QSlider::handle:horizontal {{
     background: {CLR_TEXT}; width: 12px; height: 12px;
     margin: -5px 0; border-radius: 6px;
 }}
 QSlider::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
 
-/* Playback position: a hairline that only grows a handle on hover. */
-QSlider#scrub::groove:horizontal {{ height: 3px; background: #232b36; border-radius: 2px; }}
+QSlider#scrub::groove:horizontal {{ height: 3px; background: #1d2432; border-radius: 2px; }}
 QSlider#scrub::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
 QSlider#scrub::handle:horizontal {{
     background: transparent; width: 10px; margin: -4px 0; border-radius: 5px;
 }}
 QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; }}
-QSlider#scrub:disabled::sub-page:horizontal {{ background: #2d3542; }}
+QSlider#scrub:disabled::sub-page:horizontal {{ background: #1d2432; }}
 
-QCheckBox {{ background: transparent; }}
+QCheckBox {{ background: transparent; color: {CLR_DIM}; }}
 QCheckBox::indicator {{
-    width: 15px; height: 15px; border-radius: 4px;
+    width: 16px; height: 16px; border-radius: 5px;
     border: 1px solid {CLR_LINE}; background: {CLR_INPUT};
 }}
 QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: {CLR_ACCENT}; }}
 
-QStatusBar {{ background: {CLR_CARD}; color: {CLR_MUTED}; border-top: 1px solid {CLR_LINE}; }}
-QToolTip {{
-    background: {CLR_CARD}; color: {CLR_TEXT};
-    border: 1px solid {CLR_LINE}; padding: 5px; border-radius: 4px;
+QFrame#cuePad {{
+    background: {CLR_INPUT};
+    border: 1px solid {CLR_LINE_SOFT};
+    border-radius: 11px;
 }}
-QScrollBar:vertical {{ background: transparent; width: 9px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #303a49; border-radius: 4px; min-height: 26px; }}
+QFrame#cuePad[filled="false"] {{ background: transparent; border: 1px dashed {CLR_LINE}; }}
+QFrame#cuePad[filled="true"]:hover {{ background: {CLR_HOVER}; }}
+QFrame#cuePad[playing="true"] {{
+    background: rgba(87, 201, 138, 0.13);
+    border: 1px solid rgba(87, 201, 138, 0.5);
+}}
+QFrame#cuePad[paused="true"] {{
+    background: {CLR_ACCENT_SOFT};
+    border: 1px solid rgba(227, 178, 60, 0.45);
+}}
+QLabel#cueKey {{ color: {CLR_MUTED}; font-size: 10px; font-weight: 700; }}
+QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
+QFrame#cuePad[paused="true"] QLabel#cueKey {{ color: {CLR_ACCENT}; }}
+QLabel#cueName {{ font-size: 12px; font-weight: 500; }}
+QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #46506330; color: #465063; }}
+
+QStatusBar {{ background: {CLR_CARD}; color: {CLR_MUTED}; border: none; }}
+QStatusBar::item {{ border: none; }}
+QToolTip {{
+    background: {CLR_RAISED}; color: {CLR_TEXT};
+    border: 1px solid {CLR_LINE}; padding: 6px 8px; border-radius: 6px;
+}}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: #2b3547; border-radius: 5px; min-height: 28px; }}
+QScrollBar::handle:vertical:hover {{ background: #3a4659; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+QScrollBar::handle:horizontal {{ background: #2b3547; border-radius: 5px; min-width: 28px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 """
@@ -1288,7 +1305,7 @@ class SoundCue(QObject):
         self._fade = QPropertyAnimation(self._audio, b"volume", self)
         self._fade.setEasingCurve(QEasingCurve.OutQuad)
         self._fade.finished.connect(self._after_fade)
-        self._fading = False
+        self._fade_mode: Optional[str] = None
 
         self._player.playbackStateChanged.connect(lambda _s: self.changed.emit())
         self._player.errorOccurred.connect(
@@ -1322,47 +1339,84 @@ class SoundCue(QObject):
 
     # -- transport ---------------------------------------------------------- #
 
+    def _state(self):
+        return self._player.playbackState()
+
+    @staticmethod
+    def _states():
+        return getattr(QMediaPlayer, "PlaybackState", None)
+
     def is_playing(self) -> bool:
-        states = getattr(QMediaPlayer, "PlaybackState", None)
-        return self._player.playbackState() == getattr(states, "PlayingState", None)
+        return self._state() == getattr(self._states(), "PlayingState", None)
+
+    def is_paused(self) -> bool:
+        return self._state() == getattr(self._states(), "PausedState", None)
+
+    def target_volume(self) -> float:
+        return (self.level / 100.0) * (self._master / 100.0)
 
     def play(self) -> None:
+        """Start, or pick up where a pause left off."""
         if not self.path:
             return
         self._fade.stop()
-        self._fading = False
-        self._apply_volume()
-        self._player.setPosition(0)
+        self._fade_mode = None
         self._apply_loop()
+        self._audio.setVolume(0.0)
         self._player.play()
+        self._fade_volume(self.target_volume(), 220)
         self.changed.emit()
 
+    def pause(self) -> None:
+        if not self.is_playing():
+            return
+        self._fade_volume(0.0, 200, "pause")
+
+    def toggle(self) -> None:
+        """What a play button does: pause if it is running, otherwise play."""
+        self.pause() if self.is_playing() else self.play()
+
     def stop(self, fade_ms: int = SOUND_FADE_MS) -> None:
+        """Back to the start. Fades first - a hall PA cut dead is jarring."""
+        if self.is_paused():
+            self._player.stop()
+            self._audio.setVolume(self.target_volume())
+            self.changed.emit()
+            return
         if not self.is_playing():
             self._player.stop()
             return
         if fade_ms <= 0:
+            self._fade.stop()
+            self._fade_mode = None
             self._player.stop()
-            self._apply_volume()
+            self._audio.setVolume(self.target_volume())
             self.changed.emit()
             return
-        self._fading = True
+        self._fade_volume(0.0, fade_ms, "stop")
+
+    def seek(self, milliseconds: int) -> None:
+        if self.path:
+            self._player.setPosition(max(0, milliseconds))
+            self.changed.emit()
+
+    def _fade_volume(self, target: float, duration_ms: int, mode: Optional[str] = None) -> None:
+        self._fade_mode = mode
         self._fade.stop()
-        self._fade.setDuration(fade_ms)
-        self._fade.setStartValue(self._audio.volume())
-        self._fade.setEndValue(0.0)
+        self._fade.setDuration(max(40, duration_ms))
+        self._fade.setStartValue(float(self._audio.volume()))
+        self._fade.setEndValue(float(target))
         self._fade.start()
 
-    def toggle(self) -> None:
-        self.stop() if self.is_playing() else self.play()
-
     def _after_fade(self) -> None:
-        if not self._fading:
-            return
-        self._fading = False
-        self._player.stop()
-        self._apply_volume()      # put the level back, ready for next time
-        self.changed.emit()
+        mode, self._fade_mode = self._fade_mode, None
+        if mode == "stop":
+            self._player.stop()
+        elif mode == "pause":
+            self._player.pause()
+        if mode:
+            self._audio.setVolume(self.target_volume())   # ready for next time
+            self.changed.emit()
 
     # -- settings ----------------------------------------------------------- #
 
@@ -1373,12 +1427,12 @@ class SoundCue(QObject):
 
     def set_level(self, percent: int) -> None:
         self.level = max(0, min(100, percent))
-        if not self._fading:
+        if not self._fade_mode:
             self._apply_volume()
 
     def set_master(self, percent: int) -> None:
         self._master = max(0, min(100, percent))
-        if not self._fading:
+        if not self._fade_mode:
             self._apply_volume()
 
     def set_device(self, device) -> None:
@@ -1392,7 +1446,7 @@ class SoundCue(QObject):
         return self._player.duration()
 
     def _apply_volume(self) -> None:
-        self._audio.setVolume((self.level / 100.0) * (self._master / 100.0))
+        self._audio.setVolume(self.target_volume())
 
     def _apply_loop(self) -> None:
         loops = getattr(QMediaPlayer, "Loops", None)
@@ -2575,15 +2629,17 @@ class Playlist(QListWidget):
 
 class CuePad(QFrame):
     """
-    One sound cue: press the key, the sound fires. Drop a file on it to assign.
+    One sound cue as a small player: play/pause, stop, and a seek bar.
 
-    Deliberately a single click to fire. During a ceremony the presenter says a
-    name and the fanfare has to go now; a confirm step would be worse than a
-    misfire, which the operator simply clicks again to stop.
+    It used to be a single toggle that always restarted from zero - fine for a
+    two-second fanfare, useless for the anthem. Clicking the body still plays or
+    pauses, because that is the fast path when a name has just been read out.
     """
 
     assignRequested = Signal(str)
-    triggered = Signal()
+    playPauseRequested = Signal()
+    stopRequested = Signal()
+    seekRequested = Signal(int)
     cleared = Signal()
     loopToggled = Signal(bool)
 
@@ -2592,19 +2648,21 @@ class CuePad(QFrame):
         self.index = index
         self.setObjectName("cuePad")
         self.setAcceptDrops(True)
-        self.setCursor(Qt.PointingHandCursor)
         self.setProperty("playing", "false")
+        self.setProperty("paused", "false")
         self.setProperty("filled", "false")
-        self.setFixedHeight(66)
-        self.setMinimumWidth(118)
+        self.setFixedHeight(88)
+        self.setMinimumWidth(140)
+        self._scrubbing = False
+        self._duration = 0
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 5, 8, 6)
-        layout.setSpacing(2)
+        layout.setContentsMargins(9, 6, 9, 7)
+        layout.setSpacing(3)
 
         top = QHBoxLayout()
-        top.setSpacing(4)
-        self.key_label = QLabel(f"F{index + 1}")
+        top.setSpacing(3)
+        self.key_label = QLabel("F" + str(index + 1))
         self.key_label.setObjectName("cueKey")
         top.addWidget(self.key_label)
         top.addStretch(1)
@@ -2612,13 +2670,13 @@ class CuePad(QFrame):
         self.loop_btn = icon_button("repeat", "Loop this cue", CLR_MUTED, 13)
         self.loop_btn.setObjectName("ghost")
         self.loop_btn.setCheckable(True)
-        self.loop_btn.setFixedSize(20, 20)
-        self.loop_btn.toggled.connect(self._on_loop)
+        self.loop_btn.setFixedSize(19, 19)
+        self.loop_btn.toggled.connect(self.loopToggled.emit)
         top.addWidget(self.loop_btn)
 
         self.clear_btn = icon_button("close", "Empty this cue", CLR_MUTED, 12)
         self.clear_btn.setObjectName("ghost")
-        self.clear_btn.setFixedSize(20, 20)
+        self.clear_btn.setFixedSize(19, 19)
         self.clear_btn.clicked.connect(self.cleared.emit)
         top.addWidget(self.clear_btn)
         layout.addLayout(top)
@@ -2627,9 +2685,34 @@ class CuePad(QFrame):
         self.name_label.setObjectName("cueName")
         layout.addWidget(self.name_label)
 
+        transport = QHBoxLayout()
+        transport.setSpacing(4)
+        self.play_btn = icon_button("play", "Play / pause", CLR_TEXT, 13)
+        self.play_btn.setObjectName("ghost")
+        self.play_btn.setFixedSize(21, 19)
+        self.play_btn.clicked.connect(self.playPauseRequested.emit)
+        transport.addWidget(self.play_btn)
+
+        self.stop_btn = icon_button("stop", "Stop and rewind", CLR_MUTED, 12)
+        self.stop_btn.setObjectName("ghost")
+        self.stop_btn.setFixedSize(21, 19)
+        self.stop_btn.clicked.connect(self.stopRequested.emit)
+        transport.addWidget(self.stop_btn)
+
         self.time_label = QLabel()
         self.time_label.setObjectName("timecode")
-        layout.addWidget(self.time_label)
+        self.time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        transport.addWidget(self.time_label, 1)
+        layout.addLayout(transport)
+
+        self.scrub = QSlider(Qt.Horizontal)
+        self.scrub.setObjectName("scrub")
+        self.scrub.setRange(0, 1)
+        self.scrub.setFixedHeight(12)
+        self.scrub.setToolTip("Position - drag to move through the sound")
+        self.scrub.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
+        self.scrub.sliderReleased.connect(self._on_scrub_released)
+        layout.addWidget(self.scrub)
 
         self.show_cue(None)
 
@@ -2642,53 +2725,73 @@ class CuePad(QFrame):
     def show_cue(self, cue: Optional[SoundCue]) -> None:
         filled = bool(cue and cue.path)
         playing = bool(cue and cue.is_playing())
+        paused = bool(cue and cue.is_paused())
 
         if filled:
             metrics = self.name_label.fontMetrics()
             self.name_label.setText(
-                metrics.elidedText(cue.label(), Qt.ElideRight, max(70, self.width() - 22)))
-            self.name_label.setToolTip(cue.path)
-            self.setToolTip(f"{cue.path}\n\nF{self.index + 1} plays and stops it")
+                metrics.elidedText(cue.label(), Qt.ElideRight, max(70, self.width() - 24)))
+            self.setToolTip(cue.path + "\n\nF" + str(self.index + 1)
+                            + " plays and pauses, Shift+F" + str(self.index + 1) + " stops")
         else:
-            self.name_label.setText("empty")
-            self.name_label.setToolTip("")
-            self.setToolTip(f"Drop a sound file here, or press F{self.index + 1} once filled")
+            self.name_label.setText("drop a sound")
+            self.setToolTip("Drop a sound file here, or click to choose one for F"
+                            + str(self.index + 1))
 
-        if playing:
-            remaining = max(0, cue.duration() - cue.position())
-            self.time_label.setText(("∞  " if cue.loop else "") + format_time(remaining))
+        self._duration = cue.duration() if filled else 0
+        if filled and self._duration > 0:
+            self.scrub.setRange(0, self._duration)
+            if not self._scrubbing:
+                self.scrub.setValue(cue.position())
+            self.time_label.setText(
+                format_time(cue.position()) + " / " + format_time(self._duration))
         else:
-            self.time_label.setText(format_time(cue.duration()) if filled else "")
+            self.scrub.setRange(0, 1)
+            self.scrub.setValue(0)
+            self.time_label.setText("")
 
+        self.play_btn.setIcon(Icons.get("pause" if playing else "play",
+                                        CLR_TEXT if filled else CLR_LINE, 13))
+        for widget in (self.play_btn, self.stop_btn):
+            widget.setEnabled(filled)
+        # An empty pad shows no transport at all: a dead position bar on seven
+        # unused pads was just noise along the bottom of the window.
+        self.scrub.setVisible(filled)
+        self.play_btn.setVisible(filled)
+        self.stop_btn.setVisible(filled)
+        self.clear_btn.setVisible(filled)
+        self.loop_btn.setVisible(filled)
         self.loop_btn.blockSignals(True)
         self.loop_btn.setChecked(bool(cue and cue.loop))
         self.loop_btn.blockSignals(False)
-        self.loop_btn.setIcon(Icons.get("repeat", CLR_ACCENT if (cue and cue.loop) else CLR_MUTED, 13))
-        self.clear_btn.setVisible(filled)
-        self.loop_btn.setVisible(filled)
+        self.loop_btn.setIcon(
+            Icons.get("repeat", CLR_ACCENT if (cue and cue.loop) else CLR_MUTED, 13))
 
         self.setProperty("filled", "true" if filled else "false")
         self.setProperty("playing", "true" if playing else "false")
+        self.setProperty("paused", "true" if paused else "false")
         self._restyle()
+
+    @Slot()
+    def _on_scrub_released(self) -> None:
+        self._scrubbing = False
+        if self._duration > 0:
+            self.seekRequested.emit(self.scrub.value())
 
     # -- interaction -------------------------------------------------------- #
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             if self.property("filled") == "true":
-                self.triggered.emit()
+                self.playPauseRequested.emit()
             else:
+                chooser = "Sound files (" + " ".join(
+                    sorted("*" + e for e in AUDIO_EXTENSIONS)) + ");;All files (*.*)"
                 path, _ = QFileDialog.getOpenFileName(
-                    self, f"Sound for F{self.index + 1}", "",
-                    "Sound files (" + " ".join(sorted("*" + e for e in AUDIO_EXTENSIONS))
-                    + ");;All files (*.*)")
+                    self, "Sound for F" + str(self.index + 1), "", chooser)
                 if path:
                     self.assignRequested.emit(os.path.normpath(path))
         event.accept()
-
-    @Slot(bool)
-    def _on_loop(self, enabled: bool) -> None:
-        self.loopToggled.emit(enabled)
 
     @staticmethod
     def _sound_from(mime) -> Optional[str]:
@@ -3559,7 +3662,7 @@ class OutputCard(QFrame):
         # --- playlist ------------------------------------------------------ #
         queue_header = QHBoxLayout()
         queue_header.setSpacing(4)
-        queue_title = QLabel("PLAYLIST")
+        queue_title = QLabel("Playlist")
         queue_title.setObjectName("sectionTitle")
         queue_header.addWidget(queue_title)
         queue_header.addStretch(1)
@@ -3754,7 +3857,7 @@ class TopCard(OutputCard):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("text", CLR_MUTED, 14).pixmap(14, 14))
         section.addWidget(glyph)
-        label = QLabel("MARQUEE")
+        label = QLabel("Marquee")
         label.setObjectName("sectionTitle")
         section.addWidget(label)
         section.addStretch(1)
@@ -4247,7 +4350,7 @@ class ControlPanel(QMainWindow):
 
         hint = QLabel(
             "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
-            "F1–F8 sound cues · B blackout · Ctrl+O open outputs"
+            "F1–F8 play/pause sound · Shift+F… stop · B blackout"
         )
         hint.setObjectName("keyHint")
         self.statusBar().addPermanentWidget(hint)
@@ -4269,7 +4372,7 @@ class ControlPanel(QMainWindow):
         mark.setPixmap(Icons.get("monitor", CLR_ACCENT, 19).pixmap(19, 19))
         layout.addWidget(mark)
 
-        title = QLabel("STAGE DISPLAY")
+        title = QLabel("Stage Display")
         title.setObjectName("brand")
         layout.addWidget(title)
         layout.addSpacing(14)
@@ -4326,7 +4429,7 @@ class ControlPanel(QMainWindow):
         glyph.setPixmap(Icons.get("list", CLR_MUTED, 16).pixmap(16, 16))
         layout.addWidget(glyph)
 
-        caption = QLabel("PRESET")
+        caption = QLabel("Preset")
         caption.setObjectName("sectionTitle")
         layout.addWidget(caption)
 
@@ -4562,11 +4665,12 @@ class ControlPanel(QMainWindow):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("volume", CLR_ACCENT, 16).pixmap(16, 16))
         header.addWidget(glyph)
-        title = QLabel("SOUND CUES")
+        title = QLabel("Sound cues")
         title.setObjectName("sectionTitle")
         header.addWidget(title)
 
-        hint = QLabel("drop sound files onto a pad · F1–F8 fire them")
+        hint = QLabel("drop sound files onto a pad · F1–F8 play and pause "
+                      "· Shift+F… stops")
         hint.setObjectName("keyHint")
         header.addWidget(hint)
         header.addStretch(1)
@@ -4590,7 +4694,7 @@ class ControlPanel(QMainWindow):
         stop_all = QPushButton("  STOP SOUND")
         stop_all.setObjectName("danger")
         stop_all.setIcon(Icons.get("stop", CLR_DANGER, 15))
-        stop_all.setToolTip("Fade out every cue (Ctrl+Space)")
+        stop_all.setToolTip("Fade out and rewind every cue (Ctrl+Space)")
         stop_all.clicked.connect(self._stop_all_sound)
         header.addWidget(stop_all)
         layout.addLayout(header)
@@ -4601,7 +4705,9 @@ class ControlPanel(QMainWindow):
         for index in range(SOUND_SLOTS):
             pad = CuePad(index)
             pad.assignRequested.connect(lambda path, i=index: self._assign_cue(i, path))
-            pad.triggered.connect(lambda i=index: self._fire_cue(i))
+            pad.playPauseRequested.connect(lambda i=index: self._fire_cue(i))
+            pad.stopRequested.connect(lambda i=index: self._stop_cue(i))
+            pad.seekRequested.connect(lambda ms, i=index: self.sound.cues[i].seek(ms))
             pad.cleared.connect(lambda i=index: self._clear_cue(i))
             pad.loopToggled.connect(lambda on, i=index: self.sound.cues[i].set_loop(on))
             pads.addWidget(pad, 1)
@@ -4677,6 +4783,7 @@ class ControlPanel(QMainWindow):
             f"F{index + 1}: {os.path.basename(path)}", 5000)
 
     def _fire_cue(self, index: int) -> None:
+        """Play, or pause if it is already running."""
         cue = self.sound.cues[index]
         if not cue.path:
             self.statusBar().showMessage(
@@ -4685,7 +4792,15 @@ class ControlPanel(QMainWindow):
         cue.toggle()
         self._refresh_cue_pads()
         self.statusBar().showMessage(
-            f"F{index + 1} {'playing' if cue.is_playing() else 'stopped'}: {cue.label()}", 4000)
+            f"F{index + 1} {'playing' if cue.is_playing() else 'paused'}: {cue.label()}", 4000)
+
+    def _stop_cue(self, index: int) -> None:
+        cue = self.sound.cues[index]
+        if not cue.path:
+            return
+        cue.stop()
+        self._refresh_cue_pads()
+        self.statusBar().showMessage(f"F{index + 1} stopped: {cue.label()}", 4000)
 
     def _clear_cue(self, index: int) -> None:
         self.sound.cues[index].clear()
@@ -4785,6 +4900,10 @@ class ControlPanel(QMainWindow):
             (f"F{slot + 1}", lambda i=slot: self._fire_cue(i))
             for slot in range(SOUND_SLOTS)
         )
+        bindings += tuple(
+            (f"Shift+F{slot + 1}", lambda i=slot: self._stop_cue(i))
+            for slot in range(SOUND_SLOTS)
+        )
 
         for key, handler in bindings:
             shortcut = QShortcut(QKeySequence(key), self)
@@ -4816,7 +4935,7 @@ class ControlPanel(QMainWindow):
         card_layout.setContentsMargins(16, 14, 16, 16)
         card_layout.setSpacing(10)
 
-        heading = QLabel("DISPLAY ROUTING")
+        heading = QLabel("Display routing")
         heading.setObjectName("sectionTitle")
         card_layout.addWidget(heading)
 
@@ -4903,7 +5022,7 @@ class ControlPanel(QMainWindow):
         tips_layout = QVBoxLayout(tips)
         tips_layout.setContentsMargins(16, 14, 16, 16)
         tips_layout.setSpacing(8)
-        tip_title = QLabel("RUNNING A SHOW")
+        tip_title = QLabel("Running a show")
         tip_title.setObjectName("sectionTitle")
         tips_layout.addWidget(tip_title)
         tip_text = QLabel(
@@ -4931,7 +5050,7 @@ class ControlPanel(QMainWindow):
         box.setContentsMargins(16, 14, 16, 16)
         box.setSpacing(9)
 
-        heading = QLabel("START WITH WINDOWS")
+        heading = QLabel("Start with Windows")
         heading.setObjectName("sectionTitle")
         box.addWidget(heading)
 
