@@ -6659,9 +6659,21 @@ class ControlPanel(QMainWindow):
         before this defaulted to maximised, and that would have kept winning.
         """
         saved = self.settings.value("window/geometry2")
-        if saved is not None:
-            self.restoreGeometry(saved)
-        else:
+        restored = bool(saved is not None and self.restoreGeometry(saved))
+
+        # A saved geometry is only worth keeping if it still lands on a screen
+        # that exists. The LED processors come and go, and a rectangle recorded
+        # against yesterday's monitor arrangement leaves the window stranded at
+        # an odd size or half off the desktop.
+        if restored and not self.isMaximized():
+            frame = self.frameGeometry()
+            on_screen = any(s.availableGeometry().intersects(frame)
+                            for s in QGuiApplication.screens())
+            too_small = frame.width() < 900 or frame.height() < 600
+            if not on_screen or too_small:
+                restored = False
+
+        if not restored:
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     def closeEvent(self, event) -> None:  # noqa: N802
