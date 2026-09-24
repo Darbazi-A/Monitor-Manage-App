@@ -257,24 +257,42 @@ startup, so whatever the installed Qt can read — SVG, ICO, JFIF, TGA and the r
 A **DJ** tab with two turntables, a three-channel mixer, a techno machine and a
 crate. It runs its own audio engine on a separate thread, so a busy dashboard
 never makes the sound stutter, and it is only started the first time the tab
-opens.
+opens. The preset bar steps aside on this tab to give the desk the height; the
+header, with BLACKOUT, stays.
 
-**Decks.** Drop a track on a deck, double-click it in the crate, or use LOAD….
-On loading, every track is decoded, loudness-matched to the others, and
-analysed for tempo and beat grid (a seven-minute MP3 takes about three
-seconds). Each deck shows:
+**Loading.** Tracks are decoded in a separate process (`dj_decoder.py`) straight
+into shared memory, so decoding never competes with the sound or the screen.
+A deck is playable about **0.05 s** after a drop, even while the other deck and
+the machine are playing; the waveform draws itself in as the file decodes, and
+the tempo and beat grid follow a couple of seconds later (a 7.5-minute MP3:
+~2 s). Tempo, grid and length are remembered per file, so a known track shows
+its BPM at once, and a correction (×2, ÷2, "beat 1 is here") sticks for next
+time. The crate lists the remembered BPM and length next to each track.
 
-- a turntable whose record turns with the real audio position. Hold the record
-  to scratch; drag the outer ring or use the mouse wheel to nudge the tempo.
+**Accuracy.** Tempo is found by autocorrelation and then refined against the
+whole track by folding every onset onto the beat period: on test tracks from
+87.5 to 174 BPM it lands on the exact tempo (within 0.01) and the beat grid
+within 3 ms. Every track is loudness-matched on load. The waveform, turntable
+and clock show what the hall is *hearing*, not what was just sent to the sound
+card (about 80 ms earlier), and CUE, hot cues and loops land on that same
+moment. The pill at the top left shows the sound card's lag, and turns amber if
+the audio ever runs dry.
+
+Each deck shows:
+
+- a turntable whose record turns with the audio. Hold the record to scratch;
+  drag the outer ring or use the mouse wheel to nudge the tempo.
 - a scrolling three-band waveform (blue lows, gold mids, white highs) with the
-  beat grid, and the whole track underneath: click to jump.
-- a pitch fader (±8 / ±16 / ±50 %) and **SYNC**, which matches the tempo and
-  locks the beat to the other deck, or to the machine.
-- CUE, PLAY, four hot cues (click to set or jump, right-click to clear),
+  beat grid. Tap it to zoom; with the deck paused, drag it to move through the
+  track. Below it, the four beats of the bar, and the whole track: tap to jump.
+- a pitch fader (±8 / ±16 / ±50 %, widening by itself when SYNC needs more) and
+  **SYNC**, which matches the tempo and locks the beat to the other deck, or to
+  the machine.
+- CUE, PLAY, four hot cues (tap to set or jump, hold or right-click to clear),
   beat loops of 1–16 beats, and 4-beat jumps.
 
-If the detected tempo is off by an octave, right-click the BPM for ×2 / ÷2, or
-set beat 1 at the current position.
+If the detected tempo is off by an octave, tap the BPM for ×2 / ÷2, or to set
+beat 1 at the current position.
 
 **Mixer.** HI / MID / LOW with full kill, a resonant FILTER (left = low-pass,
 right = high-pass), a tempo-synced ECHO send, channel faders with meters, a
@@ -289,9 +307,9 @@ next track can be lined up without the hall hearing it.
 
 **Techno machine.** A 16-step drum machine (kick, clap, hat, open hat, rim,
 chord stab) with a 303-style acid bass line, all synthesised: nothing is
-sampled. Click steps, right-click for accents (and slides on the acid row),
-wheel on an acid step to change its note, click a row name to mute it. It
-includes:
+sampled. Tap steps on and off, hold (or right-click) for accents and — on the
+acid row — slides, drag an acid step up or down (or use the wheel) to change its
+note, tap a row name to mute it. It includes:
 
 - a pattern bank: Berlin, Acid, Minimal, Detroit, Hard and Rolling.
 - RANDOM, which writes a new pattern that still grooves.
@@ -305,6 +323,52 @@ heard within about a tenth of a second. The pattern and knobs are remembered.
 On the DJ tab, Space, the arrows and 1–3 stop driving the stage screens, so a
 key press cannot pause a background mid-mix. BLACKOUT and the F-key sound cues
 still work.
+
+**On a touch screen** every control takes its own finger, so a scratch, a fader
+move and a knob turn can happen at the same time. Knobs turn by dragging up or
+down and reset with a double-tap; a long press does what right-click does with
+a mouse; the crate scrolls with a flick while the mouse can still drag tracks
+onto decks.
+
+## Touch screens
+
+**Screens & Setup → Touch screen** — *Automatic* (the default) switches to
+finger-sized controls when Windows reports a touch screen; *Larger controls* and
+*Mouse sizes* force it either way. It enlarges what is hard to hit with a finger
+— slider handles, check boxes, scroll bars, list rows, tabs — and makes lists
+scroll with a flick, while keeping every tab on one 1080p screen. Nothing that
+matters is shown only on hover: the position handles are always visible and
+the step-sequencer instructions are written out under the grid. The DJ tab
+picks up a change the next time the app starts.
+
+## Keeping it light
+
+Measured on the hall PC (Python 3.12, a 7.5-minute MP3):
+
+| | before | now |
+| --- | --- | --- |
+| dashboard idle, CPU | 6.6 % | 0 % |
+| DJ tab idle, CPU | 31.6 % | under 1 % |
+| one deck playing, CPU | 48 % | 23–28 % |
+| deck + techno machine, CPU | 63 % | 38 % |
+| track playable after a drop | 15.5 s | 0.04 s |
+| load while the other deck plays | 11 s | 0.02 s playable, 2 s analysed |
+| memory at start-up (peak) | 227 MB | 88 MB |
+| memory with the DJ tab open | 410 MB | 242 MB |
+
+What made the difference:
+
+- **Nothing repaints unless it changed.** The sound-cue pads used to re-resolve
+  the whole stylesheet four times a second; the DJ widgets now compare what
+  they show before redrawing, and the DJ tab's refresh drops from 60 to 8 times
+  a second when nothing is moving.
+- **Silence costs nothing.** An idle deck, machine or echo skips its DSP
+  entirely (0.03 ms per block instead of ~1 ms).
+- **Decoding lives in another process**, so it never queues behind the sound
+  and the screen for Python's lock.
+- **numpy's maths library is held to one thread**; it used to reserve ~180 MB
+  on import for threads the desk never uses.
+- **The Library fills its thumbnails when first opened**, not at start-up.
 
 ## Lighting backgrounds
 
@@ -378,8 +442,9 @@ only imported the first time its tab opens:
 
 | Module | Role |
 | --- | --- |
-| `dj_engine.py` | decoding, tempo/beat analysis, decks, spectral EQ, echo, the techno machine, the audio thread |
-| `dj.py` | the DJ tab: `Platter`, `WaveDetail`, `WaveOverview`, `Knob`, `Fader`, `Meter`, `StepGrid`, deck/mixer/machine/crate views |
+| `dj_engine.py` | tempo/beat analysis, decks, spectral EQ, echo, the techno machine, the audio thread, and `DecoderClient`, which drives the decoder process |
+| `dj_decoder.py` | the decoder process: QAudioDecoder into shared memory, waveform levels as it goes, tempo at the end |
+| `dj.py` | the DJ tab: `Platter`, `WaveDetail`, `BeatBar`, `WaveOverview`, `Knob`, `Fader`, `Meter`, `StepGrid`, deck/mixer/machine/crate views, and `TouchInput`, which gives every control touch, long-press and double-tap |
 
 `presets.json` is deliberately git-ignored: it holds absolute paths to media on
 one particular machine.

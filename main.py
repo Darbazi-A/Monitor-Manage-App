@@ -88,6 +88,7 @@ from PySide6.QtGui import (
     QFont,
     QGuiApplication,
     QIcon,
+    QInputDevice,
     QKeySequence,
     QLinearGradient,
     QPainter,
@@ -127,6 +128,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QScroller,
     QSlider,
     QSpinBox,
     QTableWidget,
@@ -1389,6 +1391,40 @@ QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 """
 
+# Laid over STYLESHEET on a touch screen: the same look, sized for a fingertip
+# (about 9 mm, so roughly 40 px on a 24" 1080p panel). There is no hover on
+# glass, so nothing that matters may appear only on hover.
+TOUCH_STYLESHEET = f"""
+QPushButton {{ padding: 8px 16px; min-height: 19px; }}
+QPushButton#ghost {{ padding: 9px; }}
+QComboBox, QSpinBox, QLineEdit, QFontComboBox {{ padding: 8px 12px; min-height: 19px; }}
+QComboBox::drop-down {{ width: 32px; }}
+QComboBox QAbstractItemView::item {{ min-height: 40px; }}
+QSpinBox::up-button, QSpinBox::down-button {{ width: 24px; }}
+QListWidget::item {{ padding: 9px 10px; }}
+QTabBar::tab {{ padding: 10px 22px 11px 6px; }}
+QSlider::groove:horizontal {{ height: 6px; border-radius: 3px; }}
+QSlider::handle:horizontal {{ width: 24px; height: 24px; margin: -10px 0; border-radius: 12px; }}
+QSlider#scrub::groove:horizontal {{ height: 5px; }}
+QSlider#scrub::handle:horizontal {{
+    background: {CLR_TEXT}; width: 18px; margin: -7px 0; border-radius: 9px;
+}}
+QCheckBox {{ spacing: 10px; }}
+QCheckBox::indicator {{ width: 24px; height: 24px; border-radius: 7px; }}
+QScrollBar:vertical {{ width: 16px; }}
+QScrollBar::handle:vertical {{ border-radius: 7px; min-height: 44px; }}
+QScrollBar:horizontal {{ height: 16px; }}
+QScrollBar::handle:horizontal {{ border-radius: 7px; min-width: 44px; }}
+QMenu::item {{ padding: 11px 26px; }}
+"""
+
+TOUCH_MODES = (("Automatic", "auto"), ("Larger controls", "on"), ("Mouse sizes", "off"))
+
+
+def touch_screen_present() -> bool:
+    return any(device.type() == QInputDevice.DeviceType.TouchScreen
+               for device in QInputDevice.devices())
+
 
 # --------------------------------------------------------------------------- #
 # Media engine
@@ -2556,7 +2592,7 @@ class DropZone(QFrame):
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(118)
+        self.setMinimumHeight(100)
         self.setMaximumHeight(156)
         self.setProperty("dragActive", "false")
         self.setProperty("loaded", "false")
@@ -2702,7 +2738,7 @@ class Playlist(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setIconSize(self.ICON)
         self.setUniformItemSizes(True)
-        self.setMinimumHeight(88)
+        self.setMinimumHeight(80)
         self.setMaximumHeight(150)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setToolTip("Click an entry to put it on the screen · drag to reorder")
@@ -2964,6 +3000,17 @@ class CuePad(QFrame):
         playing = bool(cue and cue.is_playing())
         paused = bool(cue and cue.is_paused())
 
+        # This runs four times a second for all eight pads. Re-polishing a
+        # widget re-resolves the whole stylesheet, so the heavy part only runs
+        # when something the pad shows has actually changed.
+        key = (filled, playing, paused, cue.path if filled else "",
+               bool(cue and cue.loop), self.width())
+        if key == getattr(self, "_shown_key", None):
+            if filled:
+                self._show_position(cue)
+            return
+        self._shown_key = key
+
         if filled:
             metrics = self.name_label.fontMetrics()
             self.name_label.setText(
@@ -2975,14 +3022,10 @@ class CuePad(QFrame):
             self.setToolTip("Drop a sound file here, or click to choose one for F"
                             + str(self.index + 1))
 
-        self._duration = cue.duration() if filled else 0
-        if filled and self._duration > 0:
-            self.scrub.setRange(0, self._duration)
-            if not self._scrubbing:
-                self.scrub.setValue(cue.position())
-            self.time_label.setText(
-                format_time(cue.position()) + " / " + format_time(self._duration))
+        if filled:
+            self._show_position(cue)
         else:
+            self._duration = 0
             self.scrub.setRange(0, 1)
             self.scrub.setValue(0)
             self.time_label.setText("")
@@ -3008,6 +3051,23 @@ class CuePad(QFrame):
         self.setProperty("playing", "true" if playing else "false")
         self.setProperty("paused", "true" if paused else "false")
         self._restyle()
+
+    def _show_position(self, cue: SoundCue) -> None:
+        duration = cue.duration()
+        if duration != self._duration:
+            self._duration = duration
+            self.scrub.setRange(0, max(1, duration))
+            if duration > 0:
+                # the duration arrives after loading: the key above cannot see it
+                self._shown_key = None
+        if duration <= 0:
+            return
+        position = cue.position()
+        if not self._scrubbing and self.scrub.value() != position:
+            self.scrub.setValue(position)
+        text = format_time(position) + " / " + format_time(duration)
+        if self.time_label.text() != text:
+            self.time_label.setText(text)
 
     @Slot()
     def _on_scrub_released(self) -> None:
@@ -3290,14 +3350,30 @@ class MediaLibrary(QWidget):
         if folder:
             self.set_folder(os.path.normpath(folder))
 
-    def set_folder(self, folder: str) -> None:
+    def set_folder(self, folder: str, defer_files: bool = False) -> None:
+        """
+        Show `folder`. With `defer_files`, the thumbnails wait until the
+        Library is first looked at: reading every image and pulling a frame
+        out of every video at start-up cost a second and ~130 MB for a tab
+        that may never be opened.
+        """
         if not folder or not os.path.isdir(folder):
             return
         self._folder = os.path.normpath(folder)
         self.path_label.setText(self._folder)
         self._fill_folders()
-        self._fill_files()
+        if defer_files and not self.isVisible():
+            self._files_stale = True
+        else:
+            self._files_stale = False
+            self._fill_files()
         self._rebuild_places()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if getattr(self, "_files_stale", False):
+            self._files_stale = False
+            self._fill_files()
 
     def current_folder(self) -> str:
         return self._folder
@@ -4097,33 +4173,18 @@ class TopCard(OutputCard):
         divider.setStyleSheet(f"color: {CLR_LINE}; max-height: 1px;")
         self.root.addWidget(divider)
 
-        section = QHBoxLayout()
-        section.setSpacing(6)
-        glyph = QLabel()
-        glyph.setPixmap(Icons.get("text", CLR_MUTED, 14).pixmap(14, 14))
-        section.addWidget(glyph)
-        label = QLabel("Marquee")
-        label.setObjectName("sectionTitle")
-        section.addWidget(label)
-        section.addStretch(1)
-
-        bg_btn = icon_button("palette", "Solid colour background for this screen", CLR_MUTED, 15)
-        bg_btn.setObjectName("ghost")
-        bg_btn.clicked.connect(self._pick_background)
-        section.addWidget(bg_btn)
-        self.bg_preview = QLabel()
-        self.bg_preview.setFixedSize(16, 16)
-        section.addWidget(self.bg_preview)
-        self.root.addLayout(section)
-        self._update_swatch(self.bg_preview, self._bg_color)
-
-        self.text_edit = QLineEdit()
-        self.text_edit.setPlaceholderText("Text to scroll across the strip…")
-        self.text_edit.textChanged.connect(self.marqueeTextChanged.emit)
-        self.root.addWidget(self.text_edit)
-
+        # One row for the heading, the typeface and both colours: the card is
+        # the tallest on the Live tab and has to fit a 1080p screen with
+        # finger-sized controls.
         font_row = QHBoxLayout()
         font_row.setSpacing(6)
+        glyph = QLabel()
+        glyph.setPixmap(Icons.get("text", CLR_MUTED, 14).pixmap(14, 14))
+        glyph.setToolTip("Marquee")
+        font_row.addWidget(glyph)
+        label = QLabel("Marquee")
+        label.setObjectName("sectionTitle")
+        font_row.addWidget(label)
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(QFont("Segoe UI"))
         self.font_combo.setToolTip("Marquee typeface")
@@ -4146,9 +4207,25 @@ class TopCard(OutputCard):
         font_row.addWidget(colour_btn)
         self.text_preview = QLabel()
         self.text_preview.setFixedSize(16, 16)
+        self.text_preview.setToolTip("Text colour")
         font_row.addWidget(self.text_preview)
+        font_row.addSpacing(4)
+        bg_btn = icon_button("palette", "Solid colour background for this screen", CLR_MUTED, 15)
+        bg_btn.setObjectName("ghost")
+        bg_btn.clicked.connect(self._pick_background)
+        font_row.addWidget(bg_btn)
+        self.bg_preview = QLabel()
+        self.bg_preview.setFixedSize(16, 16)
+        self.bg_preview.setToolTip("Background colour")
+        font_row.addWidget(self.bg_preview)
         self.root.addLayout(font_row)
         self._update_swatch(self.text_preview, self._text_color)
+        self._update_swatch(self.bg_preview, self._bg_color)
+
+        self.text_edit = QLineEdit()
+        self.text_edit.setPlaceholderText("Text to scroll across the strip…")
+        self.text_edit.textChanged.connect(self.marqueeTextChanged.emit)
+        self.root.addWidget(self.text_edit)
 
         speed_row = QHBoxLayout()
         speed_row.setSpacing(8)
@@ -4164,20 +4241,17 @@ class TopCard(OutputCard):
         self.speed_label.setObjectName("cardHint")
         self.speed_label.setMinimumWidth(58)
         speed_row.addWidget(self.speed_label)
-        self.root.addLayout(speed_row)
-
-        marquee_buttons = QHBoxLayout()
-        marquee_buttons.setSpacing(6)
-        start = QPushButton("  Start scrolling")
+        start = QPushButton("  Start")
         start.setObjectName("primary")
         start.setIcon(Icons.get("play", "#0b0e13"))
+        start.setToolTip("Start scrolling the text across the strip")
         start.clicked.connect(self.marqueeStart.emit)
         stop = QPushButton("  Stop")
         stop.setIcon(Icons.get("stop", CLR_TEXT))
         stop.clicked.connect(self.marqueeStop.emit)
-        marquee_buttons.addWidget(start, 2)
-        marquee_buttons.addWidget(stop, 1)
-        self.root.addLayout(marquee_buttons)
+        speed_row.addWidget(start)
+        speed_row.addWidget(stop)
+        self.root.addLayout(speed_row)
         self.root.addStretch(1)
 
     # -- helpers ------------------------------------------------------------ #
@@ -4864,7 +4938,8 @@ class ControlPanel(QMainWindow):
         root.setContentsMargins(14, 12, 14, 8)
         root.setSpacing(9)
         root.addWidget(self._build_header())
-        root.addWidget(self._build_preset_bar())
+        self.preset_bar = self._build_preset_bar()
+        root.addWidget(self.preset_bar)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
@@ -4898,6 +4973,7 @@ class ControlPanel(QMainWindow):
         self._update_output_status()
         self._install_shortcuts()
         self.set_active_role(ROLE_MAIN)
+        self._apply_touch_mode()
         self._restore_window_geometry()
 
         hint = QLabel(
@@ -5353,7 +5429,7 @@ class ControlPanel(QMainWindow):
         last = self.settings.value("library/last", "")
         folders = self.library.pinned()
         self.library.set_folder(last if last and os.path.isdir(last)
-                                else (folders[0] if folders else ""))
+                                else (folders[0] if folders else ""), defer_files=True)
 
     def _remember_library_places(self) -> None:
         self.settings.setValue("library/folders", self.library.pinned())
@@ -5651,6 +5727,9 @@ class ControlPanel(QMainWindow):
         on_dj = self.tabs.widget(index) is self.dj_page
         for shortcut in self._stage_shortcuts:
             shortcut.setEnabled(not on_dj)
+        # Presets describe the stage screens; the DJ desk wants the height.
+        # The header, with BLACKOUT, stays.
+        self.preset_bar.setVisible(not on_dj)
         if on_dj and self.dj_panel is None:
             self._build_dj_panel()
 
@@ -5668,7 +5747,8 @@ class ControlPanel(QMainWindow):
             self.dj_page.layout().addWidget(note)
             self.dj_panel = False
             return
-        self.dj_panel = dj.DJPanel(self.settings, self.settings.value("sound/device", "") or None)
+        self.dj_panel = dj.DJPanel(self.settings, self.settings.value("sound/device", "") or None,
+                                   touch=self.touch_enabled())
         self.dj_page.layout().addWidget(self.dj_panel)
 
     @Slot()
@@ -5777,6 +5857,7 @@ class ControlPanel(QMainWindow):
         card_layout.addLayout(buttons)
         layout.addWidget(card)
         layout.addWidget(self._build_autostart_card())
+        layout.addWidget(self._build_touch_card())
 
         tips = QFrame()
         tips.setObjectName("card")
@@ -5803,6 +5884,63 @@ class ControlPanel(QMainWindow):
 
         layout.addStretch(1)
         return page
+
+    def _build_touch_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        box = QHBoxLayout(card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(10)
+        heading = QLabel("Touch screen")
+        heading.setObjectName("sectionTitle")
+        box.addWidget(heading)
+        self.touch_combo = QComboBox()
+        for caption, value in TOUCH_MODES:
+            self.touch_combo.addItem(caption, value)
+        wanted = self.settings.value("ui/touch", "auto")
+        self.touch_combo.setCurrentIndex(max(0, self.touch_combo.findData(wanted)))
+        self.touch_combo.setToolTip(
+            "Larger buttons, sliders and lists for fingers, and lists that scroll with a flick.\n"
+            "Automatic switches them on when Windows reports a touch screen.")
+        self.touch_combo.currentIndexChanged.connect(self._on_touch_changed)
+        box.addWidget(self.touch_combo)
+        self.touch_note = QLabel()
+        self.touch_note.setObjectName("cardHint")
+        box.addWidget(self.touch_note, 1)
+        return card
+
+    def touch_enabled(self) -> bool:
+        mode = self.settings.value("ui/touch", "auto")
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return touch_screen_present()
+
+    def _apply_touch_mode(self) -> None:
+        touch = self.touch_enabled()
+        app = QApplication.instance()
+        sheet = STYLESHEET + (TOUCH_STYLESHEET if touch else "")
+        if app.styleSheet() != sheet:
+            app.setStyleSheet(sheet)
+        # A finger flicks a list rather than rubber-banding a selection; the
+        # mouse still drags items as before. Only item lists: a scroller over
+        # a panel of sliders would steal every drag from the sliders.
+        for area in self.findChildren(QAbstractItemView):
+            if touch:
+                QScroller.grabGesture(area.viewport(), QScroller.TouchGesture)
+            else:
+                QScroller.ungrabGesture(area.viewport())
+        detected = "a touch screen is connected" if touch_screen_present() else "no touch screen found"
+        self.touch_note.setText(
+            f"{'On' if touch else 'Off'} — {detected}."
+            + ("  The DJ tab picks up the change the next time the app starts."
+               if self.dj_panel else ""))
+
+    @Slot()
+    def _on_touch_changed(self) -> None:
+        self.settings.setValue("ui/touch", self.touch_combo.currentData())
+        self._apply_touch_mode()
 
     def _build_autostart_card(self) -> QWidget:
         card = QFrame()
@@ -6712,6 +6850,12 @@ class ControlPanel(QMainWindow):
                 restored = False
 
         if not restored:
+            # Windows ignores "maximised" for a window whose starting size is
+            # below its minimum, which finger-sized controls can push past the
+            # default 1380x940 - and the minimum is not known until the
+            # stylesheet is applied at show time. Start at the work area's size.
+            area = QGuiApplication.primaryScreen().availableGeometry()
+            self.resize(area.width() - 16, area.height() - 40)
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     def closeEvent(self, event) -> None:  # noqa: N802

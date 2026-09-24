@@ -10,18 +10,27 @@ sample (the acid bass filter) is rendered a bar at a time on a helper thread.
 from __future__ import annotations
 
 import collections
+import gc
+import json
 import math
 import os
 import random
+import subprocess
+import sys
 import threading
+import time
 import wave
-from dataclasses import dataclass
+from multiprocessing import shared_memory
 from typing import Callable, Dict, List, Optional, Tuple
 
+# numpy's BLAS reserves memory per CPU core on import (about 180 MB here). The
+# desk only uses FFTs and array arithmetic, so one thread is all it needs.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtMultimedia import (QAudio, QAudioDecoder, QAudioFormat, QAudioSink,
-                                  QMediaDevices)
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
 BLOCK = 512                 # frames rendered per step of the engine
 HOP = 256                   # spectral EQ hop; BLOCK must be a multiple of it
@@ -51,26 +60,39 @@ def engine_sample_rate() -> int:
 # Tracks
 # --------------------------------------------------------------------------- #
 
-@dataclass
 class Track:
-    path: str
-    title: str
-    sr: int
-    pcm: np.ndarray                         # (frames, 2) int16
-    bpm: Optional[float] = None
-    confidence: float = 0.0
-    first_beat: float = 0.0                 # seconds to the first beat of the grid
-    norm: float = 1.0                       # loudness match to a common level
-    overview: Optional[np.ndarray] = None   # (OVERVIEW_BINS, 3) band heights 0..1
-    detail: Optional[np.ndarray] = None     # (DETAIL_H, columns) ARGB uint32
+    """
+    A track on a deck. Its audio and waveform levels live in shared memory that
+    the decoder process fills while the deck may already be playing, so
+    `frames` grows until `complete` is set.
+    """
+
+    def __init__(self, path: str, sr: int, pcm: np.ndarray, levels: Optional[np.ndarray] = None,
+                 duration_hint: float = 0.0) -> None:
+        self.path = path
+        self.title = os.path.splitext(os.path.basename(path))[0]
+        self.sr = sr
+        self.pcm = pcm                          # (capacity, 2) int16
+        self.levels = levels                    # (capacity_cols, 3) float32, raw band levels
+        self.ready = int(pcm.shape[0]) if levels is None else 0
+        self.cols = 0 if levels is not None else 0
+        self.complete = levels is None
+        self.duration_hint = duration_hint
+        self.bpm: Optional[float] = None
+        self.confidence = 0.0
+        self.first_beat = 0.0                   # seconds to the first beat of the grid
+        self.norm = 1.0                         # loudness match to a common level
+        self.refs: Optional[Tuple[float, float, float]] = None   # waveform normalisation
+        self.handles: list = []                 # shared-memory handles to close later
 
     @property
     def frames(self) -> int:
-        return int(self.pcm.shape[0])
+        return self.ready
 
     @property
     def duration(self) -> float:
-        return self.frames / self.sr
+        known = self.ready / self.sr
+        return known if self.complete else max(known, self.duration_hint)
 
     def beat_frames(self) -> Optional[float]:
         return self.sr * 60.0 / self.bpm if self.bpm else None
@@ -88,87 +110,108 @@ class Track:
         first = self.first_beat * self.sr
         return first + round((pos - first) / beat) * beat
 
+    def release(self) -> bool:
+        """Drop the shared memory. False if something still holds a view."""
+        self.pcm = np.zeros((1, 2), np.int16)
+        self.levels = None
+        still = []
+        for handle in self.handles:
+            try:
+                handle.close()
+            except BufferError:
+                still.append(handle)
+            except Exception:
+                pass
+        self.handles = still
+        return not still
 
-def _smooth(values: np.ndarray, width: int) -> np.ndarray:
-    if width <= 1:
-        return values
-    kernel = np.ones(width, np.float32) / width
-    return np.convolve(values, kernel, mode="same")
 
-
-def analyse(track: Track) -> None:
-    """Fill in tempo, beat grid, loudness and both waveforms. Pure numpy."""
-    sr = track.sr
-    mono = track.pcm.astype(np.float32).mean(axis=1) * (1.0 / 32768.0)
-    rms = float(np.sqrt(np.mean(mono ** 2))) if len(mono) else 0.0
-    track.norm = float(np.clip(0.16 / rms, 0.35, 3.0)) if rms > 1e-5 else 1.0
-
-    hop = sr // DETAIL_FPS
-    if len(mono) < FFT + hop:
-        mono = np.pad(mono, (0, FFT + hop - len(mono)))
-    frames = (len(mono) - FFT) // hop + 1
-    view = np.lib.stride_tricks.sliding_window_view(mono, FFT)[::hop][:frames]
-    window = np.hanning(FFT).astype(np.float32)
-    freqs = np.fft.rfftfreq(FFT, 1.0 / sr)
-    low, high = freqs < 150, freqs >= 2500
-    mid = ~low & ~high
-    bands = np.zeros((frames, 3), np.float32)
-    flux = np.zeros(frames, np.float32)
-    top = int(np.searchsorted(freqs, 9000))
-    weight = np.ones(top, np.float32)
-    weight[: int(np.searchsorted(freqs, 300))] = 3.0
-    previous = None
-    for start in range(0, frames, 2048):
-        chunk = view[start:start + 2048] * window
-        mag = np.abs(np.fft.rfft(chunk, axis=1)).astype(np.float32)
-        power = mag ** 2
-        bands[start:start + len(chunk)] = np.stack(
-            [power[:, low].sum(1), power[:, mid].sum(1), power[:, high].sum(1)], axis=1)
-        logm = np.log1p(mag[:, :top] * 20.0)
-        before = previous if previous is not None else logm[:1]
-        diff = np.diff(np.vstack([before, logm]), axis=0)
-        flux[start:start + len(chunk)] = (np.maximum(diff, 0.0) * weight).sum(1)
-        previous = logm[-1:]
-
-    # -- waveforms -------------------------------------------------------- #
-    level = np.sqrt(bands)
+def band_levels_display(levels: np.ndarray, refs) -> np.ndarray:
+    """Raw band levels -> 0..1 heights for drawing (lows full, mids and highs inset)."""
+    out = np.empty_like(levels)
+    scale = (1.0, 0.82, 0.6)
     for band in range(3):
-        ref = float(np.percentile(level[:, band], 99.5)) or 1.0
-        level[:, band] = np.clip(level[:, band] / ref, 0.0, 1.0)
-    level[:, 1] *= 0.82
-    level[:, 2] *= 0.6
-    track.overview = _bin_max(level, OVERVIEW_BINS)
-    track.detail = _detail_image(level)
-
-    # -- tempo ------------------------------------------------------------ #
-    bpm, confidence, first = estimate_tempo(flux, DETAIL_FPS)
-    track.bpm, track.confidence = bpm, confidence
-    track.first_beat = first + (FFT / 2) / sr if bpm else 0.0
-
-
-def _bin_max(level: np.ndarray, bins: int) -> np.ndarray:
-    count = len(level)
-    edges = np.linspace(0, count, bins + 1).astype(int)
-    out = np.zeros((bins, 3), np.float32)
-    for i in range(bins):
-        a, b = edges[i], max(edges[i + 1], edges[i] + 1)
-        out[i] = level[a:min(b, count)].max(axis=0) if a < count else 0.0
+        ref = refs[band] if refs[band] > 0 else 1.0
+        np.clip(levels[:, band] / ref, 0.0, 1.0, out=out[:, band])
+        out[:, band] *= scale[band]
     return out
 
 
-def _detail_image(level: np.ndarray) -> np.ndarray:
+def level_refs(levels: np.ndarray) -> Tuple[float, float, float]:
+    if len(levels) == 0:
+        return (1.0, 1.0, 1.0)
+    return tuple(float(np.percentile(levels[:, b], 99.5)) or 1.0 for b in range(3))
+
+
+def detail_columns(heights: np.ndarray) -> np.ndarray:
+    """(n, 3) heights -> (DETAIL_H, n) ARGB waveform columns."""
     half = (DETAIL_H - 1) / 2.0
     distance = (np.abs(np.arange(DETAIL_H, dtype=np.float32) - half) / (half + 1.0))[:, None]
-    image = np.zeros((DETAIL_H, len(level)), np.uint32)
+    image = np.zeros((DETAIL_H, len(heights)), np.uint32)
     for band in range(3):
-        image[distance <= level[:, band][None, :] * 0.98] = BAND_ARGB[band]
+        image[distance <= heights[:, band][None, :] * 0.98] = BAND_ARGB[band]
     return image
 
 
+_FEATURES: Dict[int, tuple] = {}
+
+
+def _feature_setup(sr: int):
+    if sr not in _FEATURES:
+        window = np.hanning(FFT).astype(np.float32)
+        freqs = np.fft.rfftfreq(FFT, 1.0 / sr)
+        low_end = int(np.searchsorted(freqs, 150))
+        high_start = int(np.searchsorted(freqs, 2500))
+        top = int(np.searchsorted(freqs, 9000))
+        weight = np.ones(top, np.float32)
+        weight[: int(np.searchsorted(freqs, 300))] = 3.0
+        _FEATURES[sr] = (window, low_end, high_start, top, weight)
+    return _FEATURES[sr]
+
+
+def mono_of(pcm: np.ndarray) -> np.ndarray:
+    return (pcm[:, 0].astype(np.float32) + pcm[:, 1]) * (0.5 / 32768.0)
+
+
+def stft_features(mono: np.ndarray, sr: int, previous: Optional[np.ndarray] = None):
+    """
+    Band levels and an onset curve, one row per 1/DETAIL_FPS s.
+    `mono` must hold (n - 1) * hop + FFT samples. Returns (levels, flux, last log row).
+    """
+    window, low_end, high_start, top, weight = _feature_setup(sr)
+    hop = sr // DETAIL_FPS
+    n = (len(mono) - FFT) // hop + 1
+    if n <= 0:
+        return np.zeros((0, 3), np.float32), np.zeros(0, np.float32), previous
+    view = np.lib.stride_tricks.sliding_window_view(mono, FFT)[::hop][:n]
+    levels = np.empty((n, 3), np.float32)
+    flux = np.empty(n, np.float32)
+    for start in range(0, n, 2048):
+        chunk = view[start:start + 2048] * window
+        mag = np.abs(np.fft.rfft(chunk, axis=1)).astype(np.float32)
+        power = mag * mag
+        rows = slice(start, start + len(chunk))
+        levels[rows, 0] = power[:, :low_end].sum(1)
+        levels[rows, 1] = power[:, low_end:high_start].sum(1)
+        levels[rows, 2] = power[:, high_start:].sum(1)
+        logm = np.log1p(mag[:, :top] * 20.0)
+        before = previous if previous is not None else logm[:1]
+        diff = np.diff(np.vstack([before, logm]), axis=0)
+        flux[rows] = (np.maximum(diff, 0.0) * weight).sum(1)
+        previous = logm[-1:]
+    np.sqrt(levels, out=levels)
+    return levels, flux, previous
+
+
 def estimate_tempo(flux: np.ndarray, fps: int) -> Tuple[Optional[float], float, float]:
-    """Tempo (BPM), a confidence ratio and the first beat (seconds) from an onset curve."""
-    onset = flux - _smooth(flux, fps)
-    onset = np.maximum(onset, 0.0).astype(np.float64)
+    """
+    Tempo (BPM), a confidence ratio and the first beat (seconds) from an onset
+    curve. A rough tempo comes from autocorrelation; it is then refined against
+    the whole track by folding the onsets modulo the beat period, which pins
+    the tempo to about 0.01 BPM and the grid to a few milliseconds.
+    """
+    onset = flux.astype(np.float64) - _smooth(flux.astype(np.float64), fps)
+    onset = np.maximum(onset, 0.0)
     if len(onset) < fps * 6 or onset.max() <= 0:
         return None, 0.0, 0.0
     onset /= onset.max()
@@ -178,139 +221,330 @@ def estimate_tempo(flux: np.ndarray, fps: int) -> Tuple[Optional[float], float, 
     ac = np.fft.irfft(np.abs(spectrum) ** 2)[: len(onset)]
     bpms = np.arange(60.0, 200.0, 0.5)
     lags = 60.0 * fps / bpms
-
-    def ac_at(lag):
-        return np.interp(lag, np.arange(len(ac)), ac)
-
-    score = ac_at(lags) + 0.5 * ac_at(lags * 2) + 0.25 * ac_at(lags / 2)
+    grid = np.arange(len(ac))
+    score = np.interp(lags, grid, ac) + 0.5 * np.interp(lags * 2, grid, ac) \
+        + 0.25 * np.interp(lags / 2, grid, ac)
     prior = np.exp(-0.5 * (np.log2(bpms / 124.0) / 0.75) ** 2)
     rough = float(bpms[int(np.argmax(score * prior))])
 
-    # Refine against the whole track with a comb of beat positions.
-    sharp = _smooth(onset, 3)
-    best = (-1.0, rough, 0.0, 1.0)
-    for bpm in np.arange(rough - 1.5, rough + 1.5, 0.02):
+    frames = np.arange(len(onset), dtype=np.float64)
+    weights = onset
+    resolution = 0.25                     # phase bins of a quarter frame (2.5 ms)
+    kernel = np.exp(-0.5 * (np.arange(-8, 9) / 3.0) ** 2)
+
+    def fold(bpm: float):
         period = 60.0 * fps / bpm
-        beats = np.arange(int((len(sharp) - 1) / period))
-        if len(beats) < 8:
-            continue
-        phases = np.arange(0.0, period, 0.5)
-        idx = np.rint(phases[:, None] + beats[None, :] * period).astype(np.int64)
-        np.clip(idx, 0, len(sharp) - 1, out=idx)
-        sums = sharp[idx].sum(axis=1)
-        j = int(np.argmax(sums))
-        if sums[j] > best[0]:
-            best = (float(sums[j]), float(bpm), float(phases[j]), float(sums.mean()) or 1.0)
-    total, bpm, phase, mean = best
-    if total <= 0:
-        return None, 0.0, 0.0
+        bins = max(8, int(round(period / resolution)))
+        phase = (frames % period) * (bins / period)
+        hist = np.bincount(phase.astype(np.int64) % bins, weights=weights, minlength=bins)
+        padded = np.concatenate([hist[-8:], hist, hist[:8]])
+        smooth = np.convolve(padded, kernel, mode="same")[8:-8]
+        j = int(np.argmax(smooth))
+        # parabolic peak for sub-bin phase
+        a, b, c = smooth[j - 1], smooth[j], smooth[(j + 1) % bins]
+        shift = 0.5 * (a - c) / (a - 2 * b + c) if (a - 2 * b + c) != 0 else 0.0
+        return float(b), (j + shift) * period / bins, float(smooth.mean()) or 1.0
+
+    best = (-1.0, rough, 0.0, 1.0)
+    for bpm in np.arange(rough - 1.5, rough + 1.5001, 0.05):
+        peak, phase, mean = fold(bpm)
+        if peak > best[0]:
+            best = (peak, float(bpm), phase, mean)
+    centre = best[1]
+    for bpm in np.arange(centre - 0.06, centre + 0.0601, 0.005):
+        peak, phase, mean = fold(bpm)
+        if peak > best[0]:
+            best = (peak, float(bpm), phase, mean)
+    peak, bpm, phase, mean = best
+    whole = float(round(bpm))
+    if abs(bpm - whole) < 0.08:
+        w_peak, w_phase, w_mean = fold(whole)
+        if w_peak >= peak * 0.97:          # most music is written at a whole tempo
+            peak, bpm, phase, mean = w_peak, whole, w_phase, w_mean
+    confidence = peak / mean
     while bpm < 85:
         bpm *= 2
     while bpm >= 175:
         bpm /= 2
-    if abs(bpm - round(bpm)) < 0.06:
-        bpm = float(round(bpm))
-    return round(bpm, 2), total / mean, phase / fps
+    return round(bpm, 3), confidence, phase / fps
 
 
-class TrackLoader(QObject):
-    """Decodes a file with QAudioDecoder, then analyses it on a worker thread."""
+def analyse(track: Track) -> None:
+    """Offline analysis of a fully decoded track (used by tests and tools)."""
+    mono = mono_of(track.pcm[: track.ready])
+    if len(mono) < FFT:
+        mono = np.pad(mono, (0, FFT - len(mono)))
+    levels, flux, _ = stft_features(mono, track.sr)
+    rms = float(np.sqrt(np.mean(mono ** 2))) if len(mono) else 0.0
+    track.norm = float(np.clip(0.16 / rms, 0.35, 3.0)) if rms > 1e-5 else 1.0
+    track.levels = levels
+    track.cols = len(levels)
+    track.refs = level_refs(levels)
+    bpm, confidence, first = estimate_tempo(flux, DETAIL_FPS)
+    track.bpm, track.confidence = bpm, confidence
+    track.first_beat = first + ONSET_OFFSET / track.sr if bpm else 0.0
+    track.complete = True
 
-    progress = Signal(float)
-    loaded = Signal(object)
+
+def _smooth(values: np.ndarray, width: int) -> np.ndarray:
+    if width <= 1:
+        return values
+    kernel = np.ones(width) / width
+    return np.convolve(values, kernel, mode="same")
+
+
+# The onset of a hit sits between two analysis frames; this is where, in samples.
+ONSET_OFFSET = FFT // 2
+
+
+def track_from_pcm(path: str, sr: int, pcm: np.ndarray) -> Track:
+    """A complete track straight from memory (tests, offline tools)."""
+    track = Track(path, sr, pcm)
+    track.ready = len(pcm)
+    track.complete = True
+    return track
+
+
+# --------------------------------------------------------------------------- #
+# The decoder process
+# --------------------------------------------------------------------------- #
+
+class LoadJob(QObject):
+    """One track being loaded by the decoder process."""
+
+    opened = Signal(object)        # Track: playable from here on
+    progress = Signal(float)       # 0..1 of the file decoded
+    done = Signal(object)          # Track: complete and analysed
     failed = Signal(str)
 
-    def __init__(self, path: str, sr: int, parent: Optional[QObject] = None) -> None:
+    def __init__(self, job_id: int, path: str, sr: int) -> None:
+        super().__init__()
+        self.id, self.path, self.sr = job_id, path, sr
+        self.track: Optional[Track] = None
+        self.cancelled = False
+
+
+class DecoderClient(QObject):
+    """
+    Starts dj_decoder.py as a separate process and routes its messages.
+
+    Decoding and analysis in another process means they never wait on this
+    process's Python lock, so the sound, the turntables and the loading all
+    run at full speed at once.
+    """
+
+    _message = Signal(dict)
+
+    def __init__(self, cache: Optional["AnalysisCache"] = None, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self.path, self.sr = path, sr
-        self.chunks: List[np.ndarray] = []
-        self.rate = sr
-        self._worker: Optional[_Analyser] = None
-        fmt = QAudioFormat()
-        fmt.setSampleRate(sr)
-        fmt.setChannelCount(2)
-        fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
-        self.decoder = QAudioDecoder(self)
-        self.decoder.setAudioFormat(fmt)
-        self.decoder.bufferReady.connect(self._on_buffer)
-        self.decoder.finished.connect(self._on_finished)
-        self.decoder.error.connect(self._on_error)
-        self.decoder.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        self.cache = cache
+        self.jobs: Dict[int, LoadJob] = {}
+        self._next = 1
+        self._proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+        self._message.connect(self._on_message)
+        self._graveyard: List[Tuple[float, Track]] = []
+        self._sweeper = QTimer(self)
+        self._sweeper.timeout.connect(self._sweep)
+        self._sweeper.start(1500)
+        self._spawn()
 
-    def start(self) -> None:
-        self.decoder.start()
+    # -- process ------------------------------------------------------------ #
+    def _spawn(self) -> None:
+        exe = sys.executable
+        folder = os.path.dirname(exe)
+        console = os.path.join(folder, "python.exe")
+        if os.path.basename(exe).lower() == "pythonw.exe" and os.path.exists(console):
+            exe = console                       # pipes are only reliable on the console build
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dj_decoder.py")
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        self._proc = subprocess.Popen([exe, script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, creationflags=flags)
+        reader = threading.Thread(target=self._read, args=(self._proc,), daemon=True)
+        reader.start()
 
-    def cancel(self) -> None:
-        self.decoder.stop()
-
-    @Slot()
-    def _on_buffer(self) -> None:
-        buffer = self.decoder.read()
-        if not buffer.isValid():
-            return
-        fmt = buffer.format()
-        raw = bytes(buffer.constData())
-        kind = fmt.sampleFormat()
-        if kind == QAudioFormat.SampleFormat.Float:
-            data = np.frombuffer(raw, np.float32)
-        elif kind == QAudioFormat.SampleFormat.Int16:
-            data = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
-        elif kind == QAudioFormat.SampleFormat.Int32:
-            data = np.frombuffer(raw, np.int32).astype(np.float32) / 2147483648.0
-        else:
-            data = (np.frombuffer(raw, np.uint8).astype(np.float32) - 128.0) / 128.0
-        channels = max(1, fmt.channelCount())
-        data = data[: len(data) // channels * channels].reshape(-1, channels)
-        data = np.repeat(data, 2, axis=1) if channels == 1 else data[:, :2]
-        self.rate = fmt.sampleRate() or self.sr
-        self.chunks.append((np.clip(data, -1.0, 1.0) * 32767.0).astype(np.int16))
-        duration = self.decoder.duration()
-        if duration > 0:
-            self.progress.emit(min(0.95, self.decoder.position() / duration * 0.8))
-
-    @Slot()
-    def _on_finished(self) -> None:
-        if not self.chunks:
-            self.failed.emit("The file decoded to nothing - is it really audio?")
-            return
-        pcm = np.concatenate(self.chunks)
-        self.chunks = []
-        if self.rate != self.sr:
-            # The backend ignored the requested rate: resample linearly.
-            count = int(len(pcm) * self.sr / self.rate)
-            where = np.linspace(0, len(pcm) - 1, count)
-            pcm = np.stack([np.interp(where, np.arange(len(pcm)), pcm[:, c]) for c in (0, 1)],
-                           axis=1).astype(np.int16)
-        title = os.path.splitext(os.path.basename(self.path))[0]
-        track = Track(self.path, title, self.sr, pcm)
-        self.progress.emit(0.85)
-        self._worker = _Analyser(track, self)
-        self._worker.done.connect(self._on_analysed)
-        self._worker.start()
-
-    @Slot(object)
-    def _on_analysed(self, track: Track) -> None:
-        self.progress.emit(1.0)
-        self.loaded.emit(track)
-
-    @Slot()
-    def _on_error(self, *_args) -> None:
-        self.failed.emit(self.decoder.errorString() or "This file could not be decoded.")
-
-
-class _Analyser(QThread):
-    done = Signal(object)
-
-    def __init__(self, track: Track, parent: Optional[QObject] = None) -> None:
-        super().__init__(parent)
-        self.track = track
-
-    def run(self) -> None:
+    def _read(self, proc: subprocess.Popen) -> None:
         try:
-            analyse(self.track)
-        except Exception:  # analysis is a nicety; a track without it still plays
-            self.track.bpm = None
-        self.done.emit(self.track)
+            for raw in proc.stdout:
+                try:
+                    message = json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    continue
+                self._message.emit(message)
+            if proc is self._proc:
+                self._message.emit({"event": "exited"})
+        except (RuntimeError, OSError, ValueError):
+            pass                              # the app is closing and took us with it
+
+    def _send(self, message: dict) -> None:
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                self._spawn()
+            try:
+                self._proc.stdin.write((json.dumps(message) + "\n").encode("ascii"))
+                self._proc.stdin.flush()
+            except OSError:
+                self._proc = None
+
+    def stop(self) -> None:
+        try:
+            self._send({"cmd": "quit"})
+            self._proc.wait(1.5)
+        except Exception:
+            if self._proc is not None:
+                self._proc.kill()
+        for job in list(self.jobs.values()):
+            if job.track is not None:
+                job.track.release()
+
+    # -- jobs --------------------------------------------------------------- #
+    def load(self, path: str, sr: int) -> LoadJob:
+        job = LoadJob(self._next, path, sr)
+        self._next += 1
+        self.jobs[job.id] = job
+        self._send({"cmd": "load", "id": job.id, "path": path, "sr": sr})
+        return job
+
+    def cancel(self, job: LoadJob) -> None:
+        job.cancelled = True
+        self._send({"cmd": "cancel", "id": job.id})
+
+    def retire(self, track: Optional[Track]) -> None:
+        """A deck let go of `track`: free its memory once nothing can be reading it."""
+        if track is not None and track.handles:
+            self._graveyard.append((time.monotonic(), track))
+
+    def _sweep(self) -> None:
+        now = time.monotonic()
+        keep = []
+        for when, track in self._graveyard:
+            if now - when < 2.0:
+                keep.append((when, track))
+            elif not track.release():
+                gc.collect()                  # a view parked in a reference cycle
+                if not track.release() and now - when < 60.0:
+                    keep.append((when, track))
+        self._graveyard = keep
+
+    def _attach(self, name: str, shape, dtype):
+        handle = shared_memory.SharedMemory(name=name)
+        view = np.ndarray(shape, dtype=dtype, buffer=handle.buf)
+        return handle, view
+
+    @Slot(dict)
+    def _on_message(self, message: dict) -> None:
+        event = message.get("event")
+        if event == "exited":
+            for job in list(self.jobs.values()):
+                if job.track is None or not job.track.complete:
+                    job.failed.emit("The decoder stopped unexpectedly - try loading again.")
+            self.jobs = {j: job for j, job in self.jobs.items() if job.track is not None and job.track.complete}
+            return
+        job = self.jobs.get(message.get("id"))
+        if job is None:
+            return
+        if event in ("open", "grow"):
+            try:
+                pcm_handle, pcm = self._attach(message["pcm"], (message["capacity"], 2), np.int16)
+                lev_handle, levels = self._attach(message["levels"], (message["cols_capacity"], 3), np.float32)
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                job.failed.emit(f"Could not share the decoded audio: {exc}")
+                return
+            self._send({"cmd": "release", "names": [message["pcm"], message["levels"]]})
+            if job.cancelled:
+                pcm_handle.close()
+                lev_handle.close()
+                return
+            if event == "open":
+                track = Track(job.path, job.sr, pcm, levels, message.get("duration", 0.0))
+                track.handles = [pcm_handle, lev_handle]
+                job.track = track
+                self._apply_cached(track)
+                job.opened.emit(track)
+            else:
+                track = job.track
+                old = Track(job.path, job.sr, track.pcm, track.levels)
+                old.handles = track.handles
+                track.pcm, track.levels = pcm, levels          # swap: engine reads the new view next block
+                track.handles = [pcm_handle, lev_handle]
+                self._graveyard.append((time.monotonic(), old))
+        elif event == "progress" and job.track is not None:
+            job.track.ready = int(message["frames"])
+            job.track.cols = int(message["cols"])
+            job.progress.emit(float(message.get("fraction", 0.0)))
+        elif event == "done" and job.track is not None:
+            track = job.track
+            track.ready = int(message["frames"])
+            track.cols = int(message["cols"])
+            track.norm = float(message.get("norm", 1.0))
+            track.refs = tuple(message.get("refs", (1.0, 1.0, 1.0)))
+            if track.bpm is None:                     # not already known from the cache
+                track.bpm = message.get("bpm")
+                track.confidence = float(message.get("confidence", 0.0))
+                track.first_beat = float(message.get("first_beat", 0.0))
+                if self.cache is not None:
+                    self.cache.remember(track)
+            track.complete = True
+            job.progress.emit(1.0)
+            job.done.emit(track)
+            del self.jobs[job.id]
+        elif event == "error":
+            job.failed.emit(message.get("message", "This file could not be decoded."))
+            self.jobs.pop(job.id, None)
+
+    def _apply_cached(self, track: Track) -> None:
+        if self.cache is None:
+            return
+        known = self.cache.lookup(track.path)
+        if known:
+            track.bpm = known.get("bpm")
+            track.first_beat = float(known.get("first_beat", 0.0))
+            track.confidence = float(known.get("confidence", 0.0))
+
+
+class AnalysisCache:
+    """Tempo, beat grid and length per file, remembered between sessions."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.data: Dict[str, dict] = {}
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                self.data = json.load(handle)
+        except (OSError, ValueError):
+            self.data = {}
+
+    @staticmethod
+    def _stamp(path: str):
+        try:
+            info = os.stat(path)
+            return [int(info.st_size), int(info.st_mtime)]
+        except OSError:
+            return None
+
+    def lookup(self, path: str) -> Optional[dict]:
+        entry = self.data.get(os.path.normcase(path))
+        if entry and entry.get("stamp") == self._stamp(path):
+            return entry
+        return None
+
+    def peek(self, path: str) -> Optional[dict]:
+        """Without checking the file on disk - for listing many tracks quickly."""
+        return self.data.get(os.path.normcase(path))
+
+    def remember(self, track: Track) -> None:
+        self.data[os.path.normcase(track.path)] = dict(
+            stamp=self._stamp(track.path), bpm=track.bpm, first_beat=track.first_beat,
+            confidence=track.confidence, duration=track.duration)
+        self.save()
+
+    def save(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w", encoding="utf-8") as handle:
+                json.dump(self.data, handle, ensure_ascii=False)
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -392,7 +626,8 @@ class Echo:
 
     def process(self, x: np.ndarray, delay: float, send: float, feedback: float) -> np.ndarray:
         n, size = len(x), len(self.buf)
-        if send <= 0.0005 and self.quiet:
+        feeding = send > 0.0005 and bool(x.any())
+        if self.quiet and not feeding:
             return np.zeros_like(x)
         delay = int(min(max(delay, n), size - 1))
         read = (self.w - delay + np.arange(n)) % size
@@ -400,7 +635,7 @@ class Echo:
         delayed = self.buf[read]
         self.buf[write] = x * send + delayed * feedback
         self.w = (self.w + n) % size
-        self.quiet = send <= 0.0005 and float(np.abs(delayed).max(initial=0.0)) < 1e-4
+        self.quiet = not feeding and float(np.abs(delayed).max(initial=0.0)) < 1e-4
         return delayed
 
 
@@ -450,6 +685,12 @@ class DeckState:
         self.peak = 0.0
         self.eqp = SpectralEQ(sr)
         self.echo = Echo(sr)
+        self.latency = 0            # frames queued in the sound card, set by the engine
+        self._silent = 0
+
+    def heard_pos(self) -> float:
+        """The position the room is hearing right now, behind what was just rendered."""
+        return max(0.0, self.pos - self.rate_now * self.latency)
 
     def effective_bpm(self) -> Optional[float]:
         if self.track is None or not self.track.bpm:
@@ -467,9 +708,17 @@ class DeckState:
         r0 = self.rate_now
         r1 = r0 + max(-slew, min(slew, target - r0))
         self.rate_now = r1
-        if track is None or (abs(r0) < 1e-6 and abs(r1) < 1e-6):
+        pcm = track.pcm if track is not None else None      # one view for the whole block
+        ready = track.frames if track is not None else 0
+        if track is None or ready < 2 or (abs(r0) < 1e-6 and abs(r1) < 1e-6):
+            # Nothing moving: once the EQ and echo have rung out there is
+            # nothing to compute, which is most of the time a deck sits idle.
+            self._silent += 1
+            if self._silent > 4 and self.echo.quiet:
+                return np.zeros((n, 2), np.float32)
             raw = np.zeros((n, 2), np.float32)
         else:
+            self._silent = 0
             rates = np.linspace(r0, r1, n, endpoint=False)
             steps = np.cumsum(rates)
             p = self.pos + np.concatenate(([0.0], steps[:-1]))
@@ -483,15 +732,17 @@ class DeckState:
             self.pos = end
             idx = np.floor(p).astype(np.int64)
             frac = (p - idx).astype(np.float32)[:, None]
-            valid = (idx >= 0) & (idx < track.frames - 1)
-            safe = np.clip(idx, 0, max(0, track.frames - 2))
-            first = track.pcm[safe].astype(np.float32)
-            second = track.pcm[safe + 1].astype(np.float32)
+            valid = (idx >= 0) & (idx < ready - 1)
+            safe = np.clip(idx, 0, ready - 2)
+            first = pcm[safe].astype(np.float32)
+            second = pcm[safe + 1].astype(np.float32)
             raw = (first + (second - first) * frac) * (track.norm / 32768.0)
             raw[~valid] = 0.0
-            if self.pos >= track.frames - 1 and self.playing and not self.scratching:
-                self.playing = False
-                self.pos = float(track.frames - 1)
+            if self.pos >= ready - 1:
+                if track.complete and self.playing and not self.scratching:
+                    self.playing = False
+                # still decoding: wait at the edge rather than run into silence
+                self.pos = float(ready - 1)
             if self.pos < 0:
                 self.pos = 0.0
         gain = 10 ** (self.trim * 12.0 / 20.0)
@@ -839,6 +1090,9 @@ class Machine:
         return any(step["on"] for step in self.acid)
 
     def render(self, n: int) -> np.ndarray:
+        if not self.playing and not self.voices and self.echo.quiet:
+            self.current_step = -1
+            return np.zeros((n, 2), np.float32)
         spf = self.bpm / 60.0 * 4.0 / self.sr * self.spf_scale
         dry = np.zeros(n, np.float32)
         send = np.zeros(n, np.float32)
@@ -923,6 +1177,11 @@ class Engine(QObject):
         self._sink = self._io = self._cue_sink = self._cue_io = None
         self._timer: Optional[QTimer] = None
         self._retry = 0
+        self._last_tick = 0.0
+        self.max_gap = 0.0
+        self.underruns = 0
+        self.queued = 0
+        self._audible = False
         self.acid_renderer = AcidRenderer(self._acid_ready)
         self.acid_renderer.start()
 
@@ -1014,6 +1273,12 @@ class Engine(QObject):
                 self._open()
             return
         block_bytes = BLOCK * 4
+        now = time.perf_counter()
+        if self._last_tick:
+            self.max_gap = max(self.max_gap, now - self._last_tick)
+        self._last_tick = now
+        if self._audible and self._sink.bytesFree() >= self._sink.bufferSize():
+            self.underruns += 1           # the card ran dry mid-sound before we got back
         guard = 0
         while self._sink.bytesFree() >= block_bytes and guard < 24:
             master, cue = self._render(BLOCK)
@@ -1021,6 +1286,10 @@ class Engine(QObject):
             if self._cue_io is not None and self._cue_sink.bytesFree() >= block_bytes:
                 self._cue_io.write(_pcm16(cue))
             guard += 1
+        queued = max(0, (self._sink.bufferSize() - self._sink.bytesFree()) // 4)
+        self.queued = queued
+        for deck in self.decks:
+            deck.latency = queued
 
     # -- sync --------------------------------------------------------------- #
 
@@ -1088,8 +1357,11 @@ class Engine(QObject):
         ga = fader_gain(self.decks[0].volume) * xa
         gb = fader_gain(self.decks[1].volume) * xb
         gm = fader_gain(self.machine.volume)
-        master = (a * ga + b * gb + m * gm) * (1.25 * self.master_volume ** 2)
-        master = soft_clip(master)
+        mix = a * ga + b * gb + m * gm
+        # judged before the master level, so a turned-down master still counts
+        # as sound that must not stutter (and tests at zero volume still see it)
+        self._audible = bool(mix.any())
+        master = soft_clip(mix * (1.25 * self.master_volume ** 2))
         self.master_peak[0] = max(self.master_peak[0], float(np.abs(master[:, 0]).max()))
         self.master_peak[1] = max(self.master_peak[1], float(np.abs(master[:, 1]).max()))
         self.frames_out += n
