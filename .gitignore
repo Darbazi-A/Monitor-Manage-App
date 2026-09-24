@@ -5,3 +5,4 @@ venv/
 
 # Local show data: absolute paths to media on this machine.
 presets.json
+presets.json.bak

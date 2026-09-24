@@ -247,6 +247,31 @@ Supported image types come from `QImageReader.supportedImageFormats()` at
 startup, so whatever the installed Qt can read — SVG, ICO, JFIF, TGA and the rest
 — is accepted rather than rejected by a hardcoded list.
 
+## Lighting backgrounds
+
+`tools/make_light_backgrounds.py` renders ambient loops that match the hall's
+stage lighting — soft beams swinging from the truss like the moving heads,
+lit haze, drifting bokeh and glints, and flowing light ribbons for the ceiling
+strip. Six moods (Blue, Red, Purple, Gold, Emerald, Party), each as three clips
+cut for their screen:
+
+![Lighting presets live on Main, Sides and Top](docs/lights.png)
+
+| Screen | Size | Play as |
+| --- | --- | --- |
+| Main Stage | 1920×1080 | FIT |
+| Side Screens | 512×1280 (portrait 2:5) | STRETCH |
+| Top strip | 2816×128 | CROP |
+
+```
+python tools/make_light_backgrounds.py "<out folder>" [blue red ...] [--screens=main,top]
+```
+
+Every movement repeats a whole number of times in the 20-second clip, so the loop
+has no visible seam. Frames are drawn with `QPainter` and encoded to H.264 through
+Qt Multimedia (`QVideoFrameInput` → `QMediaRecorder`), so nothing else needs
+installing. A full set of 18 clips takes about four minutes.
+
 ## Starting with Windows
 
 **Screens & Setup → Start with Windows** ticks a per-user `HKCU\…\Run` entry
