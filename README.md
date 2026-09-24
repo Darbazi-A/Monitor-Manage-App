@@ -66,6 +66,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Compact bar** — shrink the dashboard to a strip that floats above
   everything: which screen the arrows drive and what is on it, play/pause,
   preset, the eight cues with what is running, silence and blackout.
+- **DJ desk** — two animated turntables with beat-grid waveforms, sync, loops
+  and hot cues, a kill-EQ/filter/echo mixer with headphone cue and recording,
+  and a synthesised techno machine (drums + acid bass) that can lock to a deck.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -73,7 +76,7 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 ## Install
 
 ```
-pip install PySide6
+pip install PySide6 numpy
 python main.py
 ```
 
@@ -247,6 +250,62 @@ Supported image types come from `QImageReader.supportedImageFormats()` at
 startup, so whatever the installed Qt can read — SVG, ICO, JFIF, TGA and the rest
 — is accepted rather than rejected by a hardcoded list.
 
+## DJ desk
+
+![The DJ tab](docs/dj.png)
+
+A **DJ** tab with two turntables, a three-channel mixer, a techno machine and a
+crate. It runs its own audio engine on a separate thread, so a busy dashboard
+never makes the sound stutter, and it is only started the first time the tab
+opens.
+
+**Decks.** Drop a track on a deck, double-click it in the crate, or use LOAD….
+On loading, every track is decoded, loudness-matched to the others, and
+analysed for tempo and beat grid (a seven-minute MP3 takes about three
+seconds). Each deck shows:
+
+- a turntable whose record turns with the real audio position. Hold the record
+  to scratch; drag the outer ring or use the mouse wheel to nudge the tempo.
+- a scrolling three-band waveform (blue lows, gold mids, white highs) with the
+  beat grid, and the whole track underneath: click to jump.
+- a pitch fader (±8 / ±16 / ±50 %) and **SYNC**, which matches the tempo and
+  locks the beat to the other deck, or to the machine.
+- CUE, PLAY, four hot cues (click to set or jump, right-click to clear),
+  beat loops of 1–16 beats, and 4-beat jumps.
+
+If the detected tempo is off by an octave, right-click the BPM for ×2 / ÷2, or
+set beat 1 at the current position.
+
+**Mixer.** HI / MID / LOW with full kill, a resonant FILTER (left = low-pass,
+right = high-pass), a tempo-synced ECHO send, channel faders with meters, a
+crossfader, and MASTER. The EQ and filter work in the frequency domain (75 %
+overlapped FFT frames), so every knob can move while a track plays without
+clicks or phase smear. **REC** records the master output to
+`Music\DJ Mixes\Mix <date>.wav`.
+
+**Headphones.** Pick a second sound device under HEADPHONES. The CUE buttons
+send a channel there, and CUE/MST blends cued channels with the master, so the
+next track can be lined up without the hall hearing it.
+
+**Techno machine.** A 16-step drum machine (kick, clap, hat, open hat, rim,
+chord stab) with a 303-style acid bass line, all synthesised: nothing is
+sampled. Click steps, right-click for accents (and slides on the acid row),
+wheel on an acid step to change its note, click a row name to mute it. It
+includes:
+
+- a pattern bank: Berlin, Acid, Minimal, Detroit, Hard and Rolling.
+- RANDOM, which writes a new pattern that still grooves.
+- tempo with TAP, SWING, KEY, and a delay send.
+- SYNC, which makes the machine follow the playing deck, so drums and acid
+  lock onto a record.
+
+The acid filter is rendered a bar at a time on a helper thread. Knob moves are
+heard within about a tenth of a second. The pattern and knobs are remembered.
+
+On the DJ tab, Space, the arrows and 1–3 stop driving the stage screens, so a
+key press cannot pause a background mid-mix. BLACKOUT and the F-key sound cues
+still work.
+
 ## Lighting backgrounds
 
 `tools/make_light_backgrounds.py` renders ambient loops that match the hall's
@@ -313,6 +372,14 @@ Everything lives in `main.py`:
 | `EventFolderDialog` | the plan, shown before anything is applied |
 | `MiniBar` | the floating strip the dashboard shrinks to |
 | `ControlPanel` | the dashboard |
+
+The DJ desk is kept apart, because it is the one part that needs numpy and is
+only imported the first time its tab opens:
+
+| Module | Role |
+| --- | --- |
+| `dj_engine.py` | decoding, tempo/beat analysis, decks, spectral EQ, echo, the techno machine, the audio thread |
+| `dj.py` | the DJ tab: `Platter`, `WaveDetail`, `WaveOverview`, `Knob`, `Fader`, `Meter`, `StepGrid`, deck/mixer/machine/crate views |
 
 `presets.json` is deliberately git-ignored: it holds absolute paths to media on
 one particular machine.

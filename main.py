@@ -4870,8 +4870,16 @@ class ControlPanel(QMainWindow):
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
         self.tabs.addTab(self._build_library_tab(), "  Library  ")
         self.tabs.addTab(self._build_text_tab(), "  Text  ")
+        # The DJ desk is built the first time its tab opens: it starts an audio
+        # engine, and a show that never uses it should not pay for one.
+        self.dj_panel = None
+        self.dj_page = QWidget()
+        dj_layout = QVBoxLayout(self.dj_page)
+        dj_layout.setContentsMargins(0, 0, 0, 0)
+        self.tabs.addTab(self.dj_page, "  DJ  ")
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
         self.tabs.addTab(self._build_screens_tab(), "  Screens && Setup  ")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
@@ -5628,10 +5636,40 @@ class ControlPanel(QMainWindow):
             for slot in range(SOUND_SLOTS)
         )
 
+        # Keys that drive the stage screens step aside on the DJ tab, where Space
+        # and the arrows would otherwise pause a background mid-mix.
+        self._stage_shortcuts: List[QShortcut] = []
         for key, handler in bindings:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.setContext(Qt.ApplicationShortcut)
             shortcut.activated.connect(handler)
+            if key in ("1", "2", "3", "Space", "Left", "Right"):
+                self._stage_shortcuts.append(shortcut)
+
+    @Slot(int)
+    def _on_tab_changed(self, index: int) -> None:
+        on_dj = self.tabs.widget(index) is self.dj_page
+        for shortcut in self._stage_shortcuts:
+            shortcut.setEnabled(not on_dj)
+        if on_dj and self.dj_panel is None:
+            self._build_dj_panel()
+
+    def _build_dj_panel(self) -> None:
+        try:
+            import dj
+        except ImportError as exc:
+            note = QLabel(
+                "The DJ desk needs numpy, which is not installed.\n\n"
+                "Install it with:   python -m pip install numpy\n\n"
+                f"({exc})"
+            )
+            note.setAlignment(Qt.AlignCenter)
+            note.setObjectName("cardHint")
+            self.dj_page.layout().addWidget(note)
+            self.dj_panel = False
+            return
+        self.dj_panel = dj.DJPanel(self.settings, self.settings.value("sound/device", "") or None)
+        self.dj_page.layout().addWidget(self.dj_panel)
 
     @Slot()
     def _toggle_active_playback(self) -> None:
@@ -6694,6 +6732,8 @@ class ControlPanel(QMainWindow):
                 return
 
         self.sound.stop_all(0)
+        if self.dj_panel:
+            self.dj_panel.shutdown()
         if self.mini is not None:
             self.settings.setValue("window/mini_pos", self.mini.pos())
             self.mini.close()
