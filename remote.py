@@ -54,10 +54,12 @@ class RemoteServer(QObject):
     clientsChanged = Signal(int)
 
     def __init__(self, state: Callable[[], dict], act: Callable[[str, dict], Tuple[bool, str]],
-                 parent: Optional[QObject] = None) -> None:
+                 parent: Optional[QObject] = None,
+                 image: Optional[Callable[[str, int], Optional[bytes]]] = None) -> None:
         super().__init__(parent)
         self.state = state
         self.act = act
+        self.image = image
         self.pin = new_pin()
         self.port = DEFAULT_PORT
         self.server: Optional[QTcpServer] = None
@@ -153,7 +155,9 @@ class RemoteServer(QObject):
         if len(body) < length:
             return                               # wait for the rest
         ip = socket.peerAddress().toString().replace("::ffff:", "")
-        status, payload, kind = self._handle(method, target.split("?", 1)[0], headers, body[:length], ip)
+        path, _, query = target.partition("?")
+        params = dict(part.partition("=")[::2] for part in query.split("&") if part)
+        status, payload, kind = self._handle(method, path, headers, body[:length], ip, params)
         self._send(socket, status, payload, kind)
 
     def _send(self, socket: QTcpSocket, status: int, payload: bytes, kind: str) -> None:
@@ -168,9 +172,13 @@ class RemoteServer(QObject):
         self._buffers.pop(socket, None)
 
     # -- routes -------------------------------------------------------------- #
-    def _handle(self, method: str, path: str, headers: dict, body: bytes, ip: str):
+    def _handle(self, method: str, path: str, headers: dict, body: bytes, ip: str,
+                params: Optional[dict] = None):
+        params = params or {}
         if path in ("/", "/index.html"):
             return 200, PAGE.encode("utf-8"), "text/html; charset=utf-8"
+        if path == "/slides":
+            return 200, SLIDES_PAGE.encode("utf-8"), "text/html; charset=utf-8"
         if path == "/manifest.json":
             return 200, MANIFEST.encode("utf-8"), "application/manifest+json"
         if not path.startswith("/api/"):
@@ -188,16 +196,25 @@ class RemoteServer(QObject):
 
         if path == "/api/state" and method == "GET":
             return 200, _json(self.state()), "application/json"
+        if path == "/api/slide" and method == "GET" and self.image is not None:
+            try:
+                data = self.image(params.get("deck", ""), int(params.get("i", "-1")))
+            except ValueError:
+                data = None
+            if data is None:
+                return 404, b"no such slide", "text/plain"
+            return 200, data, "image/jpeg"
         if path == "/api/action" and method == "POST":
             try:
                 data = json.loads(body.decode("utf-8") or "{}")
             except ValueError:
                 return 400, _json({"ok": False, "message": "bad JSON"}), "application/json"
             action = str(data.get("action", ""))
-            if action in ("next", "back"):
+            if action in ("next", "back", "slide_next", "slide_back"):
                 # a double tap must not skip a step
                 now = time.monotonic()
-                if now - self._last_step_action < 0.6:
+                gap = 0.35 if action.startswith("slide_") else 0.6   # slides are flicked through faster
+                if now - self._last_step_action < gap:
                     return 200, _json({"ok": True, "message": "ignored double tap"}), "application/json"
                 self._last_step_action = now
             ok, message = self.act(action, data)
@@ -433,7 +450,7 @@ nav button.on { color:var(--gold); border-color:rgba(227,178,60,.35); background
   <div class="card presets"><div class="cap">Presets</div><div id="presets"></div></div>
 </main>
 
-<nav><button class="on" data-v="show">SHOW</button><button data-v="stage">STAGE</button></nav>
+<nav><button class="on" data-v="show">SHOW</button><button data-v="stage">STAGE</button><button data-href="/slides">SLIDES</button></nav>
 
 <div id="login"><div class="cap">Enter the PIN shown on the dashboard</div><div id="pin"></div>
   <div class="pad" id="pad"></div><div id="msg"></div></div>
@@ -528,10 +545,171 @@ $("cues").onclick = e => { const b = e.target.closest("[data-cue]"); if (b) act(
 $("presets").onclick = e => { const b = e.target.closest("[data-preset]");
   if (b && confirm(`Put “${b.dataset.preset}” on the screens?`)) act("preset", { name: b.dataset.preset }); };
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  if (b.dataset.href) { location.href = b.dataset.href; return; }
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll("main").forEach(m => m.classList.toggle("active", m.id === "v-" + b.dataset.v)); });
 setInterval(() => { $("clock").textContent = new Date().toTimeString().slice(0, 5); }, 1000);
 setInterval(() => { if (!document.hidden) refresh(); }, 800);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+refresh();
+</script></body></html>
+"""
+
+
+# The slides-only remote: what a presenter holds when the clicker fails.
+SLIDES_PAGE = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0c1018">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.json">
+<title>Slides remote</title>
+<style>
+:root { --bg:#0c1018; --card:#141a26; --well:#0f141e; --edge:#222b3c; --text:#e9edf5; --dim:#9aa6bb;
+  --muted:#6c7891; --gold:#e3b23c; --ok:#57c98a; --warn:#d9853f; --red:#e0605c; }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+  font:15px/1.3 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif; overscroll-behavior:none; }
+body { display:flex; flex-direction:column; padding:env(safe-area-inset-top) 12px calc(12px + env(safe-area-inset-bottom)); gap:10px; }
+button { font:inherit; color:inherit; border:1px solid var(--edge); background:linear-gradient(#212a3a,#182030);
+  border-radius:16px; touch-action:manipulation; cursor:pointer; }
+button:active { transform:scale(.98); filter:brightness(.85); }
+button:disabled { opacity:.35; }
+header { display:flex; align-items:center; gap:10px; padding-top:10px; }
+header a { color:var(--muted); text-decoration:none; font-size:13px; }
+header h1 { flex:1; font-size:15px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pill { font-size:11px; font-weight:800; letter-spacing:1px; padding:4px 10px; border-radius:20px; border:1px solid var(--edge); color:var(--muted); }
+.pill.live { color:#ff8c88; border-color:rgba(224,96,92,.6); background:rgba(224,96,92,.15); }
+.pill.black { color:var(--warn); border-color:rgba(217,133,63,.6); background:rgba(217,133,63,.15); }
+.info { display:flex; align-items:baseline; gap:10px; }
+.count { font-size:34px; font-weight:800; font-variant-numeric:tabular-nums; }
+.timer { color:var(--dim); font-variant-numeric:tabular-nums; margin-left:auto; }
+.slide { position:relative; background:#000; border:1px solid var(--edge); border-radius:14px; overflow:hidden;
+  aspect-ratio:16/9; display:grid; place-items:center; color:var(--muted); }
+.slide img { width:100%; height:100%; object-fit:contain; display:block; }
+.slide.dim img { opacity:.25; }
+.nextrow { display:flex; gap:12px; align-items:flex-start; }
+.nextrow .nextcol { width:42%; flex:none; }
+.nextrow .cap { margin-bottom:4px; }
+.nextrow .cap { color:var(--muted); font-size:11px; font-weight:700; letter-spacing:1.2px; }
+.notes { color:var(--dim); white-space:pre-wrap; font-size:14px; max-height:4.5em; overflow:auto; }
+.pad { flex:1; display:flex; gap:10px; min-height:150px; }
+.pad button { font-size:30px; font-weight:800; letter-spacing:2px; }
+#back { flex:1; }
+#next { flex:2; color:#12161f; background:linear-gradient(#f2c556,var(--gold)); border-color:#c9992f; }
+.row { display:flex; gap:10px; }
+.row button { flex:1; padding:16px 8px; font-weight:700; }
+#black.on { color:var(--warn); border-color:rgba(217,133,63,.6); }
+#live.on { color:#ff8c88; border-color:rgba(224,96,92,.55); }
+#login { position:fixed; inset:0; background:var(--bg); display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px; z-index:9; }
+#login.show { display:flex; }
+#pin { font-size:40px; letter-spacing:18px; font-weight:800; min-height:52px; }
+.keys { display:grid; grid-template-columns:repeat(3,84px); gap:12px; }
+.keys button { height:72px; font-size:26px; font-weight:700; border-radius:50%; }
+#msg { color:var(--red); min-height:20px; }
+#toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#1a2130; border:1px solid #2c3750;
+  padding:10px 16px; border-radius:12px; opacity:0; transition:opacity .25s; pointer-events:none; }
+#toast.show { opacity:1; }
+.empty { text-align:center; color:var(--muted); padding:40px 10px; }
+</style></head>
+<body>
+<header><a href="/">◀ Show</a><h1 id="name">Slides</h1><span class="pill" id="state">—</span></header>
+<div class="info"><span class="count" id="count">– / –</span><span class="timer" id="timer"></span></div>
+<div class="slide" id="cur">no presentation open</div>
+<div class="nextrow"><div class="nextcol"><div class="cap">NEXT</div><div class="slide" id="nxt"></div></div>
+  <div style="min-width:0"><div class="cap">NOTES</div><div class="notes" id="notes"></div></div></div>
+<div class="pad"><button id="back">◀</button><button id="next">NEXT ▶</button></div>
+<div class="row"><button id="black">Black</button><button id="live">Show on screen</button></div>
+<div id="login"><div style="color:var(--muted);font-size:12px;font-weight:700;letter-spacing:1.2px">ENTER THE PIN SHOWN ON THE DASHBOARD</div>
+  <div id="pin"></div><div class="keys" id="keys"></div><div id="msg"></div></div>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+let pin = localStorage.getItem("stagePin") || "", typed = "", state = null, lastTap = 0;
+const images = {};            // "deck:index" -> object URL, fetched with the PIN header
+function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._h); e._h = setTimeout(() => e.classList.remove("show"), 1500); }
+function buzz() { if (navigator.vibrate) navigator.vibrate(20); }
+function mmss(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+async function api(path, body) {
+  const o = { headers: { "X-Pin": pin } };
+  if (body) { o.method = "POST"; o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(body); }
+  const r = await fetch(path, o);
+  if (r.status === 401) { pin = ""; localStorage.removeItem("stagePin"); askPin("Wrong PIN"); throw new Error("pin"); }
+  if (r.status === 429) { askPin("Too many tries - wait a minute"); throw new Error("locked"); }
+  return r;
+}
+async function act(action, extra) {
+  buzz();
+  try { const r = await api("/api/action", Object.assign({ action }, extra || {})); const j = await r.json(); if (j.message) toast(j.message); } catch (e) {}
+  refresh();
+}
+async function image(deck, i) {
+  const key = deck + ":" + i;
+  if (images[key]) return images[key];
+  const r = await api(`/api/slide?deck=${deck}&i=${i}`);
+  if (!r.ok) return null;
+  images[key] = URL.createObjectURL(await r.blob());
+  return images[key];
+}
+async function put(el, deck, i, dim) {
+  if (i < 0 || !state || i >= state.slides.count) { el.innerHTML = i >= 0 ? "<span>end</span>" : ""; return; }
+  const want = deck + ":" + i;
+  el.classList.toggle("dim", !!dim);
+  if (el.dataset.key === want) return;
+  el.dataset.key = want;
+  const url = await image(deck, i).catch(() => null);
+  if (el.dataset.key !== want) return;
+  el.innerHTML = url ? `<img src="${url}" alt="">` : "<span>preparing…</span>";
+  if (!url) el.dataset.key = "";
+}
+function askPin(m) { $("login").classList.add("show"); $("msg").textContent = m || ""; typed = ""; drawPin(); }
+function drawPin() { $("pin").textContent = [0, 1, 2, 3].map(i => i < typed.length ? "●" : "·").join(""); }
+(function keys() {
+  for (const k of ["1","2","3","4","5","6","7","8","9","","0","⌫"]) {
+    const b = document.createElement("button"); b.textContent = k; if (!k) b.style.visibility = "hidden";
+    b.onclick = () => { buzz(); if (k === "⌫") typed = typed.slice(0, -1); else if (typed.length < 4) typed += k; drawPin();
+      if (typed.length === 4) { pin = typed; localStorage.setItem("stagePin", pin); $("login").classList.remove("show"); refresh(); } };
+    $("keys").appendChild(b); }
+})();
+function render() {
+  const s = state.slides;
+  $("name").textContent = s.loaded ? s.name : "Slides";
+  $("count").textContent = s.loaded ? `${s.index + 1} / ${s.count}` : "– / –";
+  $("timer").textContent = s.live ? "on screen " + mmss(s.elapsed) : "";
+  const pill = $("state");
+  pill.textContent = !s.loaded ? "NOTHING OPEN" : s.black ? "BLACK" : s.live ? "LIVE · " + s.target : "NOT ON SCREEN";
+  pill.className = "pill " + (s.black ? "black" : s.live ? "live" : "");
+  $("notes").textContent = s.notes || "";
+  $("next").disabled = !s.loaded || (s.index + 1 >= s.count && !s.black);
+  $("back").disabled = !s.loaded || (s.index <= 0 && !s.black);
+  $("black").disabled = !s.live;
+  $("black").classList.toggle("on", s.black);
+  $("black").textContent = s.black ? "Lift black" : "Black";
+  $("live").disabled = !s.loaded;
+  $("live").classList.toggle("on", s.live);
+  $("live").textContent = s.live ? "End presentation" : "Show on screen";
+  if (s.loaded) { put($("cur"), s.deck, s.index, s.black); put($("nxt"), s.deck, s.index + 1, false); }
+  else { $("cur").textContent = "no presentation open"; $("cur").dataset.key = ""; $("nxt").innerHTML = ""; $("nxt").dataset.key = ""; }
+}
+async function refresh() {
+  if (!pin) { askPin(); return; }
+  try { const r = await api("/api/state"); state = await r.json(); render(); } catch (e) {}
+}
+function guard() { const t = Date.now(); if (t - lastTap < 450) return false; lastTap = t; return true; }
+$("next").onclick = () => { if (guard()) act("slide_next"); };
+$("back").onclick = () => { if (guard()) act("slide_back"); };
+$("black").onclick = () => act("slide_black");
+$("live").onclick = () => { if (!state) return;
+  if (state.slides.live) { if (confirm("End the presentation and put the background back?")) act("slide_live", { on: false }); }
+  else act("slide_live", { on: true }); };
+document.addEventListener("keydown", e => {           // a Bluetooth clicker paired to the phone works too
+  if (["PageDown","ArrowRight","ArrowDown"," ","Enter"].includes(e.key)) { e.preventDefault(); if (guard()) act("slide_next"); }
+  else if (["PageUp","ArrowLeft","ArrowUp","Backspace"].includes(e.key)) { e.preventDefault(); if (guard()) act("slide_back"); }
+  else if (e.key === "b" || e.key === "B" || e.key === ".") act("slide_black");
+});
+setInterval(() => { if (!document.hidden) refresh(); }, 700);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 refresh();
 </script></body></html>

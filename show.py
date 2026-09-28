@@ -33,6 +33,9 @@ SOUND_MODES = (("keep", "Leave as it is"), ("play", "Play a sound"),
                ("fade", "Fade the music out"), ("silence", "Fade out all sound"))
 TEXT_MODES = (("keep", "Leave as it is"), ("show", "Show text"), ("hide", "Hide the text"))
 MARQUEE_MODES = (("keep", "Leave as it is"), ("start", "Scroll this text"), ("stop", "Stop scrolling"))
+SLIDES_MODES = (("keep", "Leave as it is"), ("start", "Start this presentation"),
+                ("end", "End the presentation"))
+SLIDES_FILTER = "Presentations (*.pdf *.pptx *.ppt *.ppsx *.pps *.pptm *.odp)"
 ADVANCE_MODES = (("manual", "Wait for NEXT"), ("after", "Go on by itself after"),
                  ("video", "Go on when the Main Stage video ends"),
                  ("sound", "Go on when the sound ends"))
@@ -54,6 +57,7 @@ def new_step(title: str = "New step") -> dict:
         "sound": {"mode": "keep", "path": "", "loop": False, "level": 90},
         "text": {"mode": "keep", "title": "", "subtitle": "", "target": "main"},
         "marquee": {"mode": "keep", "text": ""},
+        "slides": {"mode": "keep", "path": "", "target": "main"},
         "advance": {"mode": "manual", "seconds": 10},
     }
 
@@ -68,7 +72,7 @@ def normalise_step(data: dict) -> dict:
             step[key] = data[key]
     for role in ROLES:
         step["screens"][role].update((data.get("screens") or {}).get(role) or {})
-    for part in ("sound", "text", "marquee", "advance"):
+    for part in ("sound", "text", "marquee", "slides", "advance"):
         step[part].update(data.get(part) or {})
     return step
 
@@ -79,12 +83,17 @@ def fold(steps: List[dict], index: int) -> dict:
     last step that did not leave it alone. Going back or jumping uses this, so
     a jump lands in the same state as walking there step by step.
     """
-    state = {"screens": {role: None for role in ROLES}, "sound": None, "text": None, "marquee": None}
+    state = {"screens": {role: None for role in ROLES}, "sound": None, "text": None, "marquee": None,
+             "slides": None}
     for step in steps[: index + 1]:
         for role in ROLES:
             if step["screens"][role]["mode"] != "keep":
                 state["screens"][role] = step["screens"][role]
-        for part in ("sound", "text", "marquee"):
+                slides = state["slides"]
+                if slides is not None and slides["mode"] == "start" and slides.get("target") == role:
+                    state["slides"] = None      # the screen went to something else
+
+        for part in ("sound", "text", "marquee", "slides"):
             if step[part]["mode"] != "keep":
                 state[part] = step[part]
     return state
@@ -116,6 +125,11 @@ def summary(step: dict) -> str:
         parts.append("⇢ " + marquee["text"][:24])
     elif marquee["mode"] == "stop":
         parts.append("⇢ stop")
+    slides = step["slides"]
+    if slides["mode"] == "start":
+        parts.append("▣ " + (os.path.basename(slides["path"]) or "?"))
+    elif slides["mode"] == "end":
+        parts.append("▣ end")
     advance = step["advance"]
     if advance["mode"] == "after":
         parts.append(f"auto {advance['seconds']} s")
@@ -135,6 +149,8 @@ def missing_files(steps: List[dict]) -> List[str]:
                 paths.append(screen["path"])
         if step["sound"]["mode"] == "play" and step["sound"]["path"]:
             paths.append(step["sound"]["path"])
+        if step["slides"]["mode"] == "start" and step["slides"]["path"]:
+            paths.append(step["slides"]["path"])
     return sorted({p for p in paths if not os.path.isfile(p)})
 
 
@@ -631,6 +647,23 @@ class ShowTab(QWidget):
         row.addWidget(self.marquee_text, 1)
         form.addLayout(row)
 
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(_caption("Presentation"))
+        self.slides_mode = _combo(SLIDES_MODES)
+        self.slides_mode.currentIndexChanged.connect(self._on_slides)
+        row.addWidget(self.slides_mode)
+        self.slides_file = FileField(SLIDES_FILTER, self.icons, self.theme, lambda: self._last_dir)
+        self.slides_file.changed.connect(lambda path: self._on_slides_file(path))
+        row.addWidget(self.slides_file, 1)
+        self.slides_target = QComboBox()
+        for role in ROLES:
+            self.slides_target.addItem(ROLE_NAMES[role], role)
+        self.slides_target.setToolTip("Which screen the slides appear on")
+        self.slides_target.currentIndexChanged.connect(self._on_slides)
+        row.addWidget(self.slides_target)
+        form.addLayout(row)
+
         form.addWidget(self._section("Then"))
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -851,6 +884,9 @@ class ShowTab(QWidget):
             _set_combo(self.text_target, text["target"])
             _set_combo(self.marquee_mode, step["marquee"]["mode"])
             self.marquee_text.setText(step["marquee"]["text"])
+            _set_combo(self.slides_mode, step["slides"]["mode"])
+            self.slides_file.set_path(step["slides"]["path"])
+            _set_combo(self.slides_target, step["slides"]["target"])
             _set_combo(self.advance_mode, step["advance"]["mode"])
             self.advance_seconds.blockSignals(True)
             self.advance_seconds.setValue(int(step["advance"]["seconds"]))
@@ -873,6 +909,9 @@ class ShowTab(QWidget):
         for widget in (self.text_title, self.text_sub, self.text_target):
             widget.setEnabled(text)
         self.marquee_text.setEnabled(self.marquee_mode.currentData() == "start")
+        starting = self.slides_mode.currentData() == "start"
+        self.slides_file.setEnabled(starting)
+        self.slides_target.setEnabled(starting)
         self.advance_seconds.setVisible(self.advance_mode.currentData() == "after")
 
     def _edit(self, change: Callable[[dict], None]) -> None:
@@ -925,6 +964,16 @@ class ShowTab(QWidget):
     def _on_marquee(self, *_args) -> None:
         self._edit(lambda s: s["marquee"].update(
             mode=self.marquee_mode.currentData(), text=self.marquee_text.text()))
+
+    def _on_slides(self, *_args) -> None:
+        self._edit(lambda s: s["slides"].update(
+            mode=self.slides_mode.currentData(), path=self.slides_file.path(),
+            target=self.slides_target.currentData()))
+
+    def _on_slides_file(self, path: str) -> None:
+        self._last_dir = os.path.dirname(path)
+        _set_combo(self.slides_mode, "start")
+        self._on_slides()
 
     def _on_advance(self, *_args) -> None:
         self._edit(lambda s: s["advance"].update(

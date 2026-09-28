@@ -71,6 +71,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   and a synthesised techno machine (drums + acid bass) that can lock to a deck.
 - **Running order** — an event as steps (screens, sound, text, marquee, notes,
   auto-advance), run with one NEXT button, `Page Down` or a presenter clicker.
+- **Slides** — PDF and PowerPoint straight from the app, with presenter view
+  (next slide, notes, timer), a clicker that works whichever window is in
+  front, and a phone page for turning slides.
 - **Phone remote** — NEXT, BLACKOUT, sound cues and presets from any phone on
   the Wi-Fi, behind a PIN.
 - **Blackout** — clears every stage screen at once.
@@ -118,7 +121,11 @@ blacks out the hall.
 | `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
-| `Page Down` / `Page Up` | next / previous step of the running order — what a wireless presenter clicker sends |
+| `Page Down` / `Page Up` | next / previous step of the running order — what a wireless presenter clicker sends; while slides are on screen, next / previous slide |
+
+While slides are on screen the clicker's other keys work as in PowerPoint:
+`→` `↓` `Space` `Enter` next, `←` `↑` `Backspace` back, `B` or `.` black, `F5`
+back from black, `Esc` ends the presentation (it never closes a stage screen).
 
 ## Running order (one button: NEXT)
 
@@ -156,6 +163,50 @@ the step that is actually running. Running orders are saved as you edit, in
 `shows.json` next to the app, and can be copied for the next event. Missing
 files are flagged in the toolbar before the show, not during it.
 
+## Slides (presentations)
+
+![Slides tab](docs/slides.png)
+
+The **Slides** tab shows a presentation on any stage screen without leaving the
+app — no PowerPoint window on the stage, no switching programs.
+
+- **Opens** PDF, PowerPoint (`.pptx`, `.ppt`, `.ppsx`, …) and a folder of
+  pictures. PDFs are drawn by the app itself; PowerPoint files are converted by
+  the PowerPoint installed on this PC — hidden slides are skipped and the
+  speaker notes are kept. Without PowerPoint, save the deck as PDF.
+- **Prepared in the background and cached**: a PDF's first slide is ready at
+  once; a PowerPoint deck shows its slides as they convert (PowerPoint's own
+  start-up takes 10–20 s the first time). Opened again, a deck is ready
+  instantly. Slides are rendered at the screen's size, 1920×1080 on the Main
+  Stage.
+- **Presenter view**: the current slide (marked LIVE, BLACK or PREVIEW), the
+  next slide, the speaker notes, a slide counter and how long the slides have
+  been on screen; thumbnails of every slide — tap one to jump.
+- **Show on screen** puts the slides over the screen's background with a quick
+  dissolve; **End** puts the background back exactly as it was. **Black** blacks
+  out just that screen.
+- Slides can be moved before going on screen, so the talk starts on the right
+  slide.
+
+**The clicker.** Page Down / Page Up (what almost every clicker sends), the
+arrows, Space and Enter turn slides; B blacks out; Esc ends. It works:
+
+- when a **stage window** has focus as well as the dashboard;
+- when **another program is in front** — while slides are on screen, the
+  clicker's keys are registered with Windows for the app
+  (*Works even when another program is in front*, on by default, released the
+  moment the talk ends);
+- with **unusual clickers**: *Learn my clicker…* asks you to press its buttons
+  once and remembers whatever keys they send.
+
+The clicker bar shows the last key it received and what it did, so a dead
+battery is obvious before the show. When no slides are on screen, the clicker's
+forward / back walk the running order instead.
+
+**In the running order**, a step can *start this presentation* on a chosen
+screen or *end the presentation*; a later step that puts something else on that
+screen takes it over.
+
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
@@ -167,6 +218,10 @@ four-digit PIN once.
   Back, Start over, and the whole running order — tap a step, then GO.
 - **STAGE**: BLACKOUT, which file each screen shows, the eight sound cues
   (tap to play / pause), Silence, the master volume, and the presets.
+- **SLIDES** (`/slides`, a page of its own for the presenter or whoever is
+  standing in for a flat clicker battery): the current and next slide as
+  pictures, the notes, the slide counter and time, a huge NEXT, Back, Black and
+  Show / End. A Bluetooth clicker paired with the phone drives this page too.
 
 It is off until switched on, and it stays on across restarts once it is. Every
 request needs the PIN; *New PIN* locks out phones that knew the old one; an
@@ -512,7 +567,8 @@ The running order and the remote are separate modules too; the dashboard
 | Module | Role |
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
-| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out), `RemoteDialog`, and the phone page itself |
+| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out), `RemoteDialog`, and the phone pages themselves |
+| `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, the Slides tab and `LearnDialog` |
 
 `presets.json` and `shows.json` are deliberately git-ignored: they hold absolute
 paths to media on one particular machine.

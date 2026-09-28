@@ -50,6 +50,7 @@ Run with:      python main.py
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import sys
@@ -138,6 +139,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
 from show import ShowStore, ShowTab, fold as show_fold, new_step, summary as step_summary  # noqa: E402
 
@@ -2116,8 +2118,17 @@ class BaseOutputWindow(QWidget):
         else:
             event.ignore()
 
+    # Set by the dashboard: gets first look at keys pressed while a stage
+    # window has focus, so a clicker still turns slides (and its Esc does not
+    # close the screen mid-presentation). Returns True when it used the key.
+    key_router: Optional[Callable] = None
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        # Swallow every key, so a stray keyboard on stage cannot disturb output.
+        router = BaseOutputWindow.key_router
+        if router is not None and router(event):
+            event.accept()
+            return
+        # Swallow every other key, so a stray keyboard on stage cannot disturb output.
         if event.key() == Qt.Key_Escape:
             self.force_close()
             self.closedByUser.emit()
@@ -4950,6 +4961,68 @@ class MiniBar(QWidget):
         event.accept()
 
 
+class SlideStage:
+    """
+    What the presenter may do to the stage: put a slide on a screen, black it,
+    and give the screen back to whatever its card holds when the talk ends.
+    The card is never changed, so the background is exactly where it was.
+    """
+
+    def __init__(self, panel: "ControlPanel") -> None:
+        self.panel = panel
+
+    def label(self, role: str) -> str:
+        return ROLE_LABELS.get(role, role)
+
+    def size(self, role: str) -> QSize:
+        window = self.panel._show_output(role)
+        if window is not None and window.width() >= 640 and window.height() >= 360:
+            return QSize(window.width(), window.height())
+        return QSize(1920, 1080)
+
+    def present(self, role: str, path: str, fade_ms: int) -> Optional[str]:
+        panel = self.panel
+        window = panel._show_output(role)
+        if window is None and panel.routing_rows[role].screen_combo.currentData():
+            panel._apply_routing()
+            window = panel._show_output(role)
+        if window is None:
+            return f"{self.label(role)} has no monitor - pick one on Screens & Setup."
+        window.set_scale_mode(ScaleMode.FIT)
+        try:
+            window.present(path, fade_ms, TRANSITION_CROSSFADE)
+        except MediaProblem as problem:
+            return f"{problem.title}: {os.path.basename(path)}"
+        return None
+
+    def clear(self, role: str, fade_ms: int) -> None:
+        window = self.panel._show_output(role)
+        if window is not None:
+            window.fade_clear(fade_ms)
+
+    def restore(self, role: str, fade_ms: int) -> None:
+        panel = self.panel
+        window = panel._show_output(role)
+        if window is None:
+            return
+        card = panel.cards[role]
+        window.set_scale_mode(card.current_scale_mode())
+        path = card.current_path()
+        if path and os.path.isfile(path):
+            try:
+                window.engine.set_loop(card.is_repeating())
+                window.present(path, fade_ms, TRANSITION_CROSSFADE)
+                return
+            except MediaProblem:
+                pass
+        window.fade_clear(fade_ms)
+
+
+# Windows hotkey plumbing, for a clicker that must work whichever window has focus.
+WM_HOTKEY = 0x0312
+VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
+
+
 class ControlPanel(QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
@@ -4993,8 +5066,19 @@ class ControlPanel(QMainWindow):
         self._show_active = 0
         self._show_timer = QTimer(self)
         self._show_timer.timeout.connect(self._show_tick)
-        self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self)
+        self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self,
+                                              image=self._remote_slide_image)
         self._remote_dialog = None
+
+        # Presentations: one presenter, driven by the dashboard, the clicker,
+        # the keyboard, the phone and the running order alike.
+        self.presenter = pres_mod.Presenter(SlideStage(self), self)
+        self.presenter.note.connect(self._on_presenter_note)
+        self.presenter.changed.connect(self._on_presenter_changed)
+        self._hotkeys: Dict[int, tuple] = {}
+        self._slide_shortcuts: List[QShortcut] = []
+        self._learned_shortcuts: List[QShortcut] = []
+        self._was_live = False
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -5007,6 +5091,7 @@ class ControlPanel(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
         self.tabs.addTab(self._build_show_tab(), "  Show  ")
+        self.tabs.addTab(self._build_presentation_tab(), "  Slides  ")
         self.tabs.addTab(self._build_library_tab(), "  Library  ")
         self.tabs.addTab(self._build_text_tab(), "  Text  ")
         # The DJ desk is built the first time its tab opens: it starts an audio
@@ -5404,8 +5489,12 @@ class ControlPanel(QMainWindow):
             return
         target = show_fold(steps, index)
         step = steps[index]
+        # One step forward does just what that step says, so anything the
+        # operator changed by hand stays changed. Back and jumps replay the
+        # earlier steps to land where walking there would have.
+        only_explicit = index == self.show_index + 1
         self._open_outputs_for(target)
-        problems = self._apply_show_state(target, step)
+        problems = self._apply_show_state(target, step, only_explicit)
         self.show_index = index
         self._show_step_id = step["id"]
         self._show_started = time.monotonic()
@@ -5436,9 +5525,16 @@ class ControlPanel(QMainWindow):
         if button.isChecked() != checked:
             button.setChecked(checked)          # emits, so the output follows
 
-    def _apply_show_state(self, target: dict, step: dict) -> List[str]:
+    def _apply_show_state(self, target: dict, step: dict, only_explicit: bool = False) -> List[str]:
         problems: List[str] = []
         fade = self.fade_ms()
+        if only_explicit:
+            target = dict(target)
+            target["screens"] = {role: (target["screens"][role] if step["screens"][role]["mode"] != "keep"
+                                        else None) for role in STAGE_ROLES}
+            for part in ("sound", "text", "marquee", "slides"):
+                if step.get(part, {}).get("mode", "keep") == "keep":
+                    target[part] = None
 
         # -- screens -- #
         for role in STAGE_ROLES:
@@ -5451,6 +5547,8 @@ class ControlPanel(QMainWindow):
             if window is None:
                 problems.append(f"{ROLE_LABELS[role]} is not open")
                 continue
+            if explicit and self.presenter.live and self.presenter.role == role:
+                self.presenter.release()     # this step puts something else on that screen
             if entry["mode"] == "black":
                 if card.current_path() or explicit:
                     window.fade_clear(fade)
@@ -5529,6 +5627,30 @@ class ControlPanel(QMainWindow):
                     self._start_marquee()
             elif entry["mode"] == "stop" and top is not None and top.is_marquee_running():
                 self._stop_marquee()
+
+        # -- presentation -- #
+        entry = target.get("slides")
+        presenter = self.presenter
+        if entry is not None:
+            explicit = step.get("slides", {}).get("mode", "keep") != "keep"
+            if entry["mode"] == "start":
+                path = entry["path"]
+                role = entry.get("target") or ROLE_MAIN
+                if not path or not os.path.exists(path):
+                    problems.append(f"missing presentation {os.path.basename(path) or '(none chosen)'}")
+                else:
+                    same = presenter.deck is not None and \
+                        os.path.normcase(presenter.deck.path) == os.path.normcase(os.path.normpath(path))
+                    error = None if same else presenter.open(path)
+                    if error:
+                        problems.append(error)
+                    else:
+                        if same and explicit:
+                            presenter.goto(0)
+                        if explicit or not presenter.live or presenter.role != role:
+                            presenter.go_live_when_ready(role)
+            elif entry["mode"] == "end" and presenter.live:
+                presenter.end()
         return problems
 
     def _show_play(self, entry: dict) -> Optional[str]:
@@ -5600,6 +5722,8 @@ class ControlPanel(QMainWindow):
             step["sound"] = {"mode": "play", "path": player.path, "loop": player.loop, "level": player.level}
         if self.top_output is not None and self.top_output.is_marquee_running():
             step["marquee"] = {"mode": "start", "text": self.top_card.text_edit.text()}
+        if self.presenter.live and self.presenter.deck is not None:
+            step["slides"] = {"mode": "start", "path": self.presenter.deck.path, "target": self.presenter.role}
         self.show_tab.add_step(step)
         self.statusBar().showMessage("Step added from what is on stage now - give it a name.", 6000)
 
@@ -5682,7 +5806,17 @@ class ControlPanel(QMainWindow):
             "presets": self.presets.names(),
             "preset": self.loaded_preset or "",
             "master": self.sound_master.value(),
+            "slides": self._slides_state(),
         }
+
+    def _slides_state(self) -> dict:
+        presenter = self.presenter
+        deck = presenter.deck
+        return {"loaded": bool(deck and presenter.count()), "name": deck.name if deck else "",
+                "count": presenter.count(), "index": presenter.index, "live": presenter.live,
+                "black": presenter.black, "elapsed": presenter.elapsed(),
+                "deck": deck.token if deck else "", "notes": presenter.notes(),
+                "target": ROLE_LABELS.get(presenter.role, presenter.role)}
 
     def remote_action(self, action: str, data: dict):
         """One tap on the phone. Returns (ok, message for the phone)."""
@@ -5730,6 +5864,8 @@ class ControlPanel(QMainWindow):
             except (TypeError, ValueError):
                 return False, "Bad volume."
             return True, ""
+        if action.startswith("slide_"):
+            return self._remote_slide_action(action, data)
         if action == "preset":
             name = str(data.get("name", ""))
             if name not in self.presets.names():
@@ -6172,30 +6308,35 @@ class ControlPanel(QMainWindow):
         Live-operation keys. During a show the mouse is slow and the operator is
         often looking at the stage, not the screen.
         """
+        def clicker_or(name: str, fallback=None):
+            # While slides are on screen these keys turn slides, the way a
+            # clicker expects; otherwise they keep their stage meaning.
+            return lambda: self._clicker_key(name, fallback)
+
         bindings = (
             ("1", lambda: self.set_active_role(ROLE_MAIN)),
             ("2", lambda: self.set_active_role(ROLE_SIDES)),
             ("3", lambda: self.set_active_role(ROLE_TOP)),
-            ("Space", self._toggle_active_playback),
-            ("Right", lambda: self._active_card().playlist.step(1)),
-            ("Left", lambda: self._active_card().playlist.step(-1)),
-            ("B", self._blackout_all),
+            ("Space", clicker_or("Space", self._toggle_active_playback)),
+            ("Right", clicker_or("Right", lambda: self._active_card().playlist.step(1))),
+            ("Left", clicker_or("Left", lambda: self._active_card().playlist.step(-1))),
+            ("B", clicker_or("B", self._blackout_all)),
             ("Ctrl+O", self._apply_routing),
             ("Ctrl+Space", self._stop_all_sound),
             ("Ctrl+Right", lambda: self.text_slides.step(1)),
             ("Ctrl+Left", lambda: self.text_slides.step(-1)),
             ("Ctrl+H", self._hide_slide),
-            # What a wireless presenter clicker sends: the running order
-            # can be walked from the back of the hall.
-            ("PgDown", self.show_next),
-            ("PgUp", self.show_back),
+            # What a wireless presenter clicker sends: slides when a
+            # presentation is on screen, the running order otherwise.
+            ("PgDown", clicker_or("PgDown")),
+            ("PgUp", clicker_or("PgUp")),
         )
         bindings += tuple(
-            (f"F{slot + 1}", lambda i=slot: self._fire_cue(i))
+            (f"F{slot + 1}", clicker_or(f"F{slot + 1}", lambda i=slot: self._fire_cue(i)))
             for slot in range(SOUND_SLOTS)
         )
         bindings += tuple(
-            (f"Shift+F{slot + 1}", lambda i=slot: self._stop_cue(i))
+            (f"Shift+F{slot + 1}", clicker_or(f"Shift+F{slot + 1}", lambda i=slot: self._stop_cue(i)))
             for slot in range(SOUND_SLOTS)
         )
 
@@ -6208,6 +6349,267 @@ class ControlPanel(QMainWindow):
             shortcut.activated.connect(handler)
             if key in ("1", "2", "3", "Space", "Left", "Right"):
                 self._stage_shortcuts.append(shortcut)
+
+        # Other keys clickers send, live only while slides are on screen.
+        for name in ("Down", "Up", "Return", "Enter", "Backspace", "N", "P", ".", "Esc"):
+            shortcut = QShortcut(QKeySequence(name), self)
+            shortcut.setContext(Qt.ApplicationShortcut)
+            shortcut.activated.connect(lambda n=name: self._clicker_key(n))
+            shortcut.setEnabled(False)
+            self._slide_shortcuts.append(shortcut)
+        self._install_learned_keys()
+        BaseOutputWindow.key_router = self._route_output_key
+
+    # ----------------------------------------------------------- clicker --- #
+
+    def _learned(self) -> Dict[str, dict]:
+        try:
+            data = json.loads(self.settings.value("clicker/learned", "") or "{}")
+            return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("name")}
+        except (ValueError, TypeError, AttributeError):
+            return {}
+
+    def _slide_action_for(self, name: str) -> Optional[str]:
+        for action, info in self._learned().items():
+            if info.get("name") == name:
+                return action
+        if name in pres_mod.NEXT_KEYS:
+            return "next"
+        if name in pres_mod.BACK_KEYS:
+            return "back"
+        if name in pres_mod.BLACK_KEYS:
+            return "black"
+        if name in ("F5", "Shift+F5"):
+            return "start"              # the clicker's "start slideshow" button
+        if name == "Esc":
+            return "end"
+        return None
+
+    def _clicker_key(self, name: str, fallback=None, source: str = "") -> bool:
+        """
+        One key from the keyboard or a clicker. Slides get it while they are on
+        screen; otherwise the clicker's forward / back walk the running order,
+        and every other key does what it always did.
+        """
+        action = self._slide_action_for(name)
+        if self.presenter.live and action:
+            self._do_slide(action, name, source)
+            return True
+        learned = any(info.get("name") == name for info in self._learned().values())
+        if action in ("next", "back") and (name in ("PgDown", "PgUp") or learned):
+            self.presentation_tab.show_key(name, f"running order {action}", source)
+            (self.show_next if action == "next" else self.show_back)()
+            return True
+        if fallback is not None:
+            fallback()
+            return True
+        return False
+
+    def _do_slide(self, action: str, name: str, source: str) -> None:
+        presenter = self.presenter
+        if action == "next":
+            presenter.next()
+        elif action == "back":
+            presenter.back()
+        elif action == "black":
+            presenter.toggle_black()
+        elif action == "start":
+            if presenter.black:
+                presenter.toggle_black()
+        elif action == "end":
+            presenter.end()
+        labels = {"next": "next slide", "back": "previous slide", "black": "black",
+                  "start": "show", "end": "end presentation"}
+        self.presentation_tab.show_key(name, labels.get(action, action), source)
+
+    def _route_output_key(self, event) -> bool:
+        """Keys pressed while a stage window has focus (see BaseOutputWindow.key_router)."""
+        name = QKeySequence(event.key()).toString()
+        if event.modifiers() & Qt.ShiftModifier and name.startswith("F"):
+            name = "Shift+" + name
+        return self._clicker_key(name, None, "stage screen had focus")
+
+    def _install_learned_keys(self) -> None:
+        for shortcut in self._learned_shortcuts:
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+        self._learned_shortcuts = []
+        taken = {QKeySequence(s.key()).toString() for s in self.findChildren(QShortcut)
+                 if s.isEnabled() or s in self._slide_shortcuts}
+        for info in self._learned().values():
+            name = info["name"]
+            if name in taken or not info.get("key"):
+                continue                   # an ordinary key: already routed above
+            shortcut = QShortcut(QKeySequence(int(info["key"])), self)
+            shortcut.setContext(Qt.ApplicationShortcut)
+            shortcut.activated.connect(lambda n=name: self._clicker_key(n))
+            self._learned_shortcuts.append(shortcut)
+
+    def _clicker_global(self) -> bool:
+        return str(self.settings.value("clicker/global", "true")).lower() == "true"
+
+    def _on_clicker_global(self, on: bool) -> None:
+        self.settings.setValue("clicker/global", "true" if on else "false")
+        self._update_hotkeys()
+
+    def _update_hotkeys(self) -> None:
+        want = self.presenter.live and self._clicker_global()
+        if want and not self._hotkeys:
+            self._register_hotkeys()
+        elif not want and self._hotkeys:
+            self._unregister_hotkeys()
+
+    def _register_hotkeys(self) -> None:
+        """
+        While slides are on screen, the clicker's keys reach this app even when
+        another program has focus (Windows RegisterHotKey). Released the moment
+        the presentation ends.
+        """
+        if sys.platform != "win32":
+            return
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        keys = dict(VK_BY_NAME)
+        for info in self._learned().values():
+            if info.get("vk"):
+                keys.setdefault(info["name"], int(info["vk"]))
+        hwnd = int(self.winId())
+        refused = []
+        for number, (name, vk) in enumerate(keys.items()):
+            hotkey_id = 0xB100 + number
+            if user32.RegisterHotKey(hwnd, hotkey_id, 0x4000, vk):      # MOD_NOREPEAT
+                self._hotkeys[hotkey_id] = name
+            else:
+                refused.append(name)
+        if refused:
+            self.presentation_tab.show_status(
+                "Another program already uses " + ", ".join(refused)
+                + " - the clicker works while this window is in front.", CLR_WARN)
+
+    def _unregister_hotkeys(self) -> None:
+        if sys.platform == "win32":
+            user32 = ctypes.WinDLL("user32")
+            hwnd = int(self.winId())
+            for hotkey_id in list(self._hotkeys):
+                user32.UnregisterHotKey(ctypes.c_void_p(hwnd), hotkey_id)
+        self._hotkeys = {}
+
+    def nativeEvent(self, event_type, message):  # noqa: N802
+        if self._hotkeys:
+            try:
+                if bytes(event_type) == b"windows_generic_MSG":
+                    from ctypes import wintypes
+                    msg = wintypes.MSG.from_address(int(message))
+                    name = self._hotkeys.get(int(msg.wParam)) if msg.message == WM_HOTKEY else None
+                    if name:
+                        QTimer.singleShot(0, lambda n=name: self._clicker_key(n, None, "from any program"))
+                        return True, 0
+            except (TypeError, ValueError, OSError):
+                pass
+        return super().nativeEvent(event_type, message)
+
+    @Slot()
+    def _learn_clicker(self) -> None:
+        # The clicker's keys must reach the dialog, not the shortcuts they would trigger.
+        shortcuts = [s for s in self.findChildren(QShortcut) if s.isEnabled()]
+        for shortcut in shortcuts:
+            shortcut.setEnabled(False)
+        had_hotkeys = bool(self._hotkeys)
+        self._unregister_hotkeys()
+        dialog = pres_mod.LearnDialog(THEME, self)
+        accepted = dialog.exec() == QDialog.Accepted
+        for shortcut in shortcuts:
+            shortcut.setEnabled(True)
+        if accepted and dialog.learned:
+            self.settings.setValue("clicker/learned", json.dumps(dialog.learned))
+            self._install_learned_keys()
+            names = ", ".join(f"{k}: {v['name']}" for k, v in dialog.learned.items())
+            self.presentation_tab.show_status(f"Clicker learned - {names}", CLR_OK)
+        if had_hotkeys:
+            self._update_hotkeys()
+
+    # ----------------------------------------------------- presentations --- #
+
+    def _build_presentation_tab(self) -> QWidget:
+        tab = pres_mod.PresentationTab(self.presenter, Icons, THEME,
+                                       {role: ROLE_LABELS[role] for role in STAGE_ROLES},
+                                       touch=self.touch_enabled())
+        self.presentation_tab = tab
+        tab.set_recent(self._recent_decks())
+        tab.openedPath.connect(self._remember_deck)
+        tab.learnRequested.connect(self._learn_clicker)
+        tab.global_check.setChecked(self._clicker_global())
+        tab.globalToggled.connect(self._on_clicker_global)
+        return tab
+
+    def _recent_decks(self) -> List[str]:
+        stored = self.settings.value("slides/recent", [])
+        if isinstance(stored, str):
+            stored = [stored] if stored else []
+        return [p for p in (stored or []) if os.path.exists(p)]
+
+    def _remember_deck(self, path: str) -> None:
+        recent = [path] + [p for p in self._recent_decks() if os.path.normcase(p) != os.path.normcase(path)]
+        self.settings.setValue("slides/recent", recent[:8])
+        self.presentation_tab.set_recent(recent[:8])
+
+    @Slot(str)
+    def _on_presenter_note(self, text: str) -> None:
+        self.statusBar().showMessage(text, 6000)
+        self.presentation_tab.show_status(text, CLR_WARN)
+
+    @Slot()
+    def _on_presenter_changed(self) -> None:
+        live = self.presenter.live
+        for shortcut in self._slide_shortcuts:
+            shortcut.setEnabled(live)
+        self._update_hotkeys()
+        if live != self._was_live:
+            self._was_live = live
+            deck = self.presenter.deck
+            self.statusBar().showMessage(
+                (f"Slides on {ROLE_LABELS.get(self.presenter.role)}: {deck.name}" if live and deck
+                 else "Presentation ended - background back on screen."), 6000)
+
+    def _remote_slide_action(self, action: str, data: dict):
+        presenter = self.presenter
+        count = presenter.count()
+        if not count:
+            return False, "No presentation is open."
+        if action == "slide_next":
+            moved = presenter.next()
+            self.presentation_tab.show_key("phone", "next slide")
+            return (True, f"{presenter.index + 1} / {count}") if moved else (False, "Last slide.")
+        if action == "slide_back":
+            moved = presenter.back()
+            self.presentation_tab.show_key("phone", "previous slide")
+            return (True, f"{presenter.index + 1} / {count}") if moved else (False, "First slide.")
+        if action == "slide_goto":
+            try:
+                presenter.goto(int(data.get("index", 0)))
+            except (TypeError, ValueError):
+                return False, "No such slide."
+            return True, f"{presenter.index + 1} / {count}"
+        if action == "slide_black":
+            if not presenter.live:
+                return False, "The slides are not on screen."
+            presenter.toggle_black()
+            return True, "Black." if presenter.black else "Back on screen."
+        if action == "slide_live":
+            if data.get("on", True):
+                presenter.go_live()
+                return True, f"Slides on {ROLE_LABELS.get(presenter.role)}."
+            presenter.end()
+            return True, "Presentation ended."
+        return False, "Unknown action."
+
+    def _remote_slide_image(self, token: str, index: int) -> Optional[bytes]:
+        deck = self.presenter.deck
+        if deck is None or deck.token != token:
+            return None
+        return deck.jpeg(index)
 
     @Slot(int)
     def _on_tab_changed(self, index: int) -> None:
@@ -7365,6 +7767,9 @@ class ControlPanel(QMainWindow):
         self.sound.stop_all(0)
         for player in self._show_players:
             player.stop(0)
+        self._unregister_hotkeys()
+        if self.presenter.deck is not None:
+            self.presenter.deck.stop()
         self.remote.stop()
         self.show_store.save()
         if self.dj_panel:
