@@ -183,10 +183,24 @@ app — no PowerPoint window on the stage, no switching programs.
   next slide, the speaker notes, a slide counter and how long the slides have
   been on screen; thumbnails of every slide — tap one to jump.
 - **Show on screen** puts the slides over the screen's background with a quick
-  dissolve; **End** puts the background back exactly as it was. **Black** blacks
-  out just that screen.
+  dissolve (drawn inside the stage window, so nothing flashes between slides);
+  **End** puts the background back exactly as it was. **Black** blacks out just
+  that screen.
 - Slides can be moved before going on screen, so the talk starts on the right
   slide.
+
+**PowerPoint animations.** With *PowerPoint animations* ticked (the default),
+a PowerPoint file goes on screen as a real PowerPoint slide show, placed exactly
+on the chosen stage screen — so click animations, videos and slide transitions
+play as the author made them. The app still drives it: NEXT, the clicker and the
+phone play the next animation or the next slide; Back, Black, jumping to a
+thumbnail and End work as before, and the presenter view follows PowerPoint
+(also when someone presses keys in PowerPoint itself, or presses Esc there).
+NEXT stops on the last slide instead of showing PowerPoint's "End of slide show"
+screen. The dashboard keeps the focus, and a stage window kept on top steps
+aside for the show and comes back after it. If PowerPoint cannot start the show,
+the slides appear as pictures instead. Untick it for the picture mode; PDFs and
+folders of pictures are always pictures.
 
 **The clicker.** Page Down / Page Up (what almost every clicker sends), the
 arrows, Space and Enter turn slides; B blacks out; Esc ends. It works:
@@ -197,7 +211,8 @@ arrows, Space and Enter turn slides; B blacks out; Esc ends. It works:
   (*Works even when another program is in front*, on by default, released the
   moment the talk ends);
 - with **unusual clickers**: *Learn my clicker…* asks you to press its buttons
-  once and remembers whatever keys they send.
+  once and remembers whatever keys they send;
+- from a **guest's phone**: *Guest phone clicker…* (see below).
 
 The clicker bar shows the last key it received and what it did, so a dead
 battery is obvious before the show. When no slides are on screen, the clicker's
@@ -210,9 +225,12 @@ screen takes it over.
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
-same Wi-Fi — nothing to install: switch it on, open the address it shows (for
-example `http://192.168.1.23:8765`) in the phone's browser, and type the
-four-digit PIN once.
+same Wi-Fi — nothing to install: switch it on, then scan its **QR code** with the
+phone camera (or open the address it shows, for example
+`http://192.168.1.23:8765`) and type the four-digit PIN once. *The QR code logs
+in by itself* puts the PIN into the code as well (in the part of the link that
+never leaves the phone), for the crew's own phones — anyone with a photo of that
+code can run the show until *New PIN*, so it is off by default.
 
 - **SHOW**: NOW with the step's notes and running time, a thumb-sized **NEXT**,
   Back, Start over, and the whole running order — tap a step, then GO.
@@ -222,6 +240,15 @@ four-digit PIN once.
   standing in for a flat clicker battery): the current and next slide as
   pictures, the notes, the slide counter and time, a huge NEXT, Back, Black and
   Show / End. A Bluetooth clicker paired with the phone drives this page too.
+
+**Guest phone clicker.** For a visiting speaker: *Guest phone clicker…* on the
+Slides tab (or in the Phone remote window) shows a separate QR code. Scanned, it
+opens just the slides — current and next slide, notes, NEXT and Back — with no
+PIN and nothing else: no Black, no Show / End, no screens, sound, presets or
+running order; the server refuses anything but turning slides from that link.
+*New link* retires the old code at once (its page then says the link has
+expired), and the guest link can be switched off. It switches the phone remote
+on if it was off.
 
 It is off until switched on, and it stays on across restarts once it is. Every
 request needs the PIN; *New PIN* locks out phones that knew the old one; an
@@ -567,8 +594,9 @@ The running order and the remote are separate modules too; the dashboard
 | Module | Role |
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
-| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out), `RemoteDialog`, and the phone pages themselves |
-| `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, the Slides tab and `LearnDialog` |
+| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link), `RemoteDialog`, `GuestDialog`, and the phone pages themselves |
+| `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |
+| `qr.py` | a small QR code encoder (no extra packages) for the phone links |
 
 `presets.json` and `shows.json` are deliberately git-ignored: they hold absolute
 paths to media on one particular machine.

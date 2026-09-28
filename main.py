@@ -786,6 +786,13 @@ class Icons:
         p.drawLine(QPointF(8.5, 19.5), QPointF(15.5, 19.5))
 
     @staticmethod
+    def _phone(p: QPainter) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(7, 2.5, 10, 19), 2.2, 2.2)
+        p.drawPath(path)
+        p.drawLine(QPointF(10.5, 18), QPointF(13.5, 18))
+
+    @staticmethod
     def _target(p: QPainter) -> None:
         p.drawEllipse(QPointF(12, 12), 8.0, 8.0)
         path = QPainterPath()
@@ -1817,6 +1824,41 @@ class SoundDeck(QObject):
 # Output windows
 # --------------------------------------------------------------------------- #
 
+def no_window_animation(widget: QWidget) -> None:
+    """
+    Switch off Windows' own show / hide animation for a stage window. Windows
+    fades new windows in; on a stage that reads as a flash of whatever is
+    underneath.
+    """
+    hwnd = int(widget.winId())
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        disabled = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 3,   # DWMWA_TRANSITIONS_FORCEDISABLED
+                                                   ctypes.byref(disabled), ctypes.sizeof(disabled))
+    except (AttributeError, OSError):
+        pass
+
+
+def set_topmost(widget: QWidget, on_top: bool) -> None:
+    """
+    Lift a window above others, or let it sit among them, without Qt's
+    setWindowFlags (which rebuilds the window and flashes the stage).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        after = ctypes.c_void_p(-1 if on_top else -2)            # HWND_TOPMOST / HWND_NOTOPMOST
+        user32.SetWindowPos(ctypes.c_void_p(int(widget.winId())), after, 0, 0, 0, 0,
+                            0x0001 | 0x0002 | 0x0010)             # no size, no move, no activate
+    except (AttributeError, OSError):
+        pass
+
+
 class FadeOverlay(QWidget):
     """
     A black pane held directly above one output window, used to dip to black.
@@ -1885,7 +1927,7 @@ class FadeOverlay(QWidget):
             self.setWindowOpacity(opacity)
 
         self.setGeometry(geometry)
-        self.winId()  # force the native handle so a transient parent can be set
+        no_window_animation(self)  # force the native handle, and no DWM fade when it shows
         handle, target_handle = self.windowHandle(), self._target.windowHandle()
         if handle is not None and target_handle is not None:
             handle.setTransientParent(target_handle)
@@ -2026,6 +2068,7 @@ class BaseOutputWindow(QWidget):
             self.showNormal()
         self.setGeometry(target)
         if not self.isVisible():
+            no_window_animation(self)
             self.show()
 
         handle = self.windowHandle()
@@ -2237,6 +2280,20 @@ class SceneOutputWindow(BaseOutputWindow):
         self._slide_subtitle.setZValue(20)
         self._slide_subtitle.setVisible(False)
         self._scene.addItem(self._slide_subtitle)
+
+        # --- dissolve layer: a still of the outgoing picture, faded away ------- #
+        # Drawn inside this window's own scene. The old way laid a second,
+        # transparent window over the screen, and Windows animates every new
+        # window in - for a moment the new picture showed through, flicked
+        # back to the old one, then dissolved: a visible "refresh".
+        self._still_item = QGraphicsPixmapItem()
+        self._still_item.setZValue(50)
+        self._still_item.setVisible(False)
+        self._scene.addItem(self._still_item)
+        self._still_anim = QVariantAnimation(self)
+        self._still_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._still_anim.valueChanged.connect(lambda value: self._still_item.setOpacity(float(value)))
+        self._still_anim.finished.connect(self._after_dissolve)
 
         self._slide_style = {
             "family": "", "title_px": 84, "subtitle_px": 44,
@@ -2568,6 +2625,30 @@ class SceneOutputWindow(BaseOutputWindow):
                                          min(rect.height(), block + pad * 2)))
 
     # -- transitions -------------------------------------------------------- #
+
+    def transition(self, action: Callable[[], None], fade_ms: int, style: str) -> None:
+        """Crossfades happen inside the scene; dips still use the black overlay window."""
+        if fade_ms > 0 and style == TRANSITION_CROSSFADE:
+            still = self.snapshot()       # includes a dissolve already in progress
+            if not still.isNull():
+                self._still_anim.stop()
+                self._still_item.setPixmap(still)
+                self._still_item.setPos(0, 0)
+                self._still_item.setOpacity(1.0)
+                self._still_item.setVisible(True)
+                action()                  # the new picture is built underneath, unseen
+                # a video's first frame needs a moment to land; a picture is there at once
+                hold = 90 if self._video_item.isVisible() else 0
+                self._still_anim.setDuration(max(60, fade_ms))
+                self._still_anim.setStartValue(1.0)
+                self._still_anim.setEndValue(0.0)
+                QTimer.singleShot(hold, self._still_anim.start)
+                return
+        super().transition(action, fade_ms, style)
+
+    def _after_dissolve(self) -> None:
+        self._still_item.setVisible(False)
+        self._still_item.setPixmap(QPixmap())
 
     def snapshot(self) -> QPixmap:
         """
@@ -5000,6 +5081,48 @@ class SlideStage:
         if window is not None:
             window.fade_clear(fade_ms)
 
+    # -- PowerPoint's own slide show on a stage screen ------------------------ #
+    def _rect(self, role: str) -> Optional[QRect]:
+        window = self.panel._show_output(role)
+        if window is not None and window.isVisible():
+            return window.geometry()
+        name = self.panel.routing_rows[role].screen_combo.currentData()
+        screen = next((s for s in QGuiApplication.screens() if s.name() == name), None)
+        return screen.geometry() if screen is not None else None
+
+    def points(self, role: str) -> Optional[QRectF]:
+        """Where PowerPoint should put its slide show, in points (logical pixels x 0.75)."""
+        rect = self._rect(role)
+        if rect is None:
+            return None
+        return QRectF(rect.x() * 0.75, rect.y() * 0.75, rect.width() * 0.75, rect.height() * 0.75)
+
+    def make_room(self, role: str) -> None:
+        """Stage windows kept on top would hide PowerPoint: let them sit under it for now."""
+        rect = self._rect(role)
+        self._lowered = []
+        if rect is None or sys.platform != "win32":
+            return
+        for other in STAGE_ROLES:
+            window = self.panel._show_output(other)
+            if (window is not None and window.isVisible() and window.geometry().intersects(rect)
+                    and window.windowFlags() & Qt.WindowStaysOnTopHint):
+                set_topmost(window, False)
+                self._lowered.append(window)
+
+    def give_back_room(self, role: str) -> None:
+        for window in getattr(self, "_lowered", []):
+            try:
+                if window.isVisible() and window.windowFlags() & Qt.WindowStaysOnTopHint:
+                    set_topmost(window, True)
+            except RuntimeError:
+                pass              # the window was rebuilt meanwhile
+        self._lowered = []
+
+    def refocus(self) -> None:
+        """PowerPoint takes the focus when its show starts; the desk keeps it."""
+        QTimer.singleShot(250, self.panel.activateWindow)
+
     def restore(self, role: str, fade_ms: int) -> None:
         panel = self.panel
         window = panel._show_output(role)
@@ -5069,10 +5192,12 @@ class ControlPanel(QMainWindow):
         self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self,
                                               image=self._remote_slide_image)
         self._remote_dialog = None
+        self._guest_dialog = None
 
         # Presentations: one presenter, driven by the dashboard, the clicker,
         # the keyboard, the phone and the running order alike.
         self.presenter = pres_mod.Presenter(SlideStage(self), self)
+        self.presenter.in_powerpoint = str(self.settings.value("slides/powerpoint", "true")).lower() == "true"
         self.presenter.note.connect(self._on_presenter_note)
         self.presenter.changed.connect(self._on_presenter_changed)
         self._hotkeys: Dict[int, tuple] = {}
@@ -5735,6 +5860,7 @@ class ControlPanel(QMainWindow):
             pin = remote_mod.new_pin()
             self.settings.setValue("remote/pin", pin)
         self.remote.pin = pin
+        self.remote.guest = str(self.settings.value("remote/guest", "") or "")
         try:
             self.remote.port = int(self.settings.value("remote/port", remote_mod.DEFAULT_PORT))
         except (TypeError, ValueError):
@@ -5756,10 +5882,14 @@ class ControlPanel(QMainWindow):
     @Slot()
     def _open_remote_dialog(self) -> None:
         if self._remote_dialog is None:
-            dialog = remote_mod.RemoteDialog(self.remote, THEME, self)
+            qr_pin = str(self.settings.value("remote/qr_pin", "false")).lower() == "true"
+            dialog = remote_mod.RemoteDialog(self.remote, THEME, self, qr_with_pin=qr_pin)
             dialog.toggled.connect(self._toggle_remote)
             dialog.portChanged.connect(lambda port: setattr(self.remote, "port", port))
             dialog.pinRenewed.connect(self._renew_remote_pin)
+            dialog.qrPinToggled.connect(
+                lambda on: self.settings.setValue("remote/qr_pin", "true" if on else "false"))
+            dialog.guestRequested.connect(self._open_guest_dialog)
             self._remote_dialog = dialog
         self._remote_dialog.refresh()
         self._remote_dialog.show()
@@ -5775,7 +5905,35 @@ class ControlPanel(QMainWindow):
         self.settings.setValue("remote/enabled", "true" if self.remote.running else "false")
         if self._remote_dialog is not None:
             self._remote_dialog.refresh(error)
+        if self._guest_dialog is not None:
+            self._guest_dialog.refresh(error)
         self._describe_remote()
+        return error
+
+    @Slot()
+    def _open_guest_dialog(self) -> None:
+        """The guest slide clicker: its own QR code, slides only. Switches the remote on if needed."""
+        if not self.remote.guest:
+            self._set_guest_link(True)
+        error = "" if self.remote.running else self._toggle_remote(True)
+        if self._guest_dialog is None:
+            dialog = remote_mod.GuestDialog(self.remote, THEME, self)
+            dialog.enabledToggled.connect(self._set_guest_link)
+            dialog.renewRequested.connect(lambda: self._set_guest_link(True, renew=True))
+            self._guest_dialog = dialog
+        self._guest_dialog.refresh(error)
+        self._guest_dialog.show()
+        self._guest_dialog.raise_()
+        self._guest_dialog.activateWindow()
+
+    def _set_guest_link(self, on: bool, renew: bool = False) -> None:
+        if on and (renew or not self.remote.guest):
+            self.remote.guest = remote_mod.new_guest_token()
+        elif not on:
+            self.remote.guest = ""
+        self.settings.setValue("remote/guest", self.remote.guest)
+        if self._guest_dialog is not None:
+            self._guest_dialog.refresh()
 
     def _renew_remote_pin(self) -> None:
         self.remote.pin = remote_mod.new_pin()
@@ -5816,7 +5974,8 @@ class ControlPanel(QMainWindow):
                 "count": presenter.count(), "index": presenter.index, "live": presenter.live,
                 "black": presenter.black, "elapsed": presenter.elapsed(),
                 "deck": deck.token if deck else "", "notes": presenter.notes(),
-                "target": ROLE_LABELS.get(presenter.role, presenter.role)}
+                "target": ROLE_LABELS.get(presenter.role, presenter.role),
+                "powerpoint": presenter.playing_in_powerpoint()}
 
     def remote_action(self, action: str, data: dict):
         """One tap on the phone. Returns (ok, message for the phone)."""
@@ -6540,8 +6699,11 @@ class ControlPanel(QMainWindow):
         tab.set_recent(self._recent_decks())
         tab.openedPath.connect(self._remember_deck)
         tab.learnRequested.connect(self._learn_clicker)
+        tab.guestRequested.connect(self._open_guest_dialog)
         tab.global_check.setChecked(self._clicker_global())
         tab.globalToggled.connect(self._on_clicker_global)
+        tab.powerpointToggled.connect(
+            lambda on: self.settings.setValue("slides/powerpoint", "true" if on else "false"))
         return tab
 
     def _recent_decks(self) -> List[str]:
@@ -6578,6 +6740,11 @@ class ControlPanel(QMainWindow):
         count = presenter.count()
         if not count:
             return False, "No presentation is open."
+        if action in ("slide_next", "slide_back") and presenter.playing_in_powerpoint():
+            # PowerPoint plays the next animation or slide; the phone sees the result on its next poll
+            (presenter.next if action == "slide_next" else presenter.back)()
+            self.presentation_tab.show_key("phone", "next" if action == "slide_next" else "back")
+            return True, "Next." if action == "slide_next" else "Back."
         if action == "slide_next":
             moved = presenter.next()
             self.presentation_tab.show_key("phone", "next slide")
@@ -7768,6 +7935,7 @@ class ControlPanel(QMainWindow):
         for player in self._show_players:
             player.stop(0)
         self._unregister_hotkeys()
+        self.presenter.release()             # a PowerPoint slide show closes with the app
         if self.presenter.deck is not None:
             self.presenter.deck.stop()
         self.remote.stop()

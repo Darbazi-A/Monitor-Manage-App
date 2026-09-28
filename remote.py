@@ -8,24 +8,42 @@ action runs exactly like a click on the dashboard.
 
 Off until switched on. Every request but the page itself needs the PIN, and an
 address that gets it wrong five times is locked out for a minute.
+
+A guest link (/p/<token>, handed out as a QR code) opens the slides page with
+nothing but NEXT / BACK: no PIN, no screens, no sound, no running order. A new
+guest link retires the old one.
 """
 from __future__ import annotations
 
 import json
 import random
+import secrets
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtNetwork import QAbstractSocket, QHostAddress, QNetworkInterface, QTcpServer, QTcpSocket
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QPushButton, QSpinBox,
+                               QVBoxLayout)
+
+from qr import qr_image
 
 DEFAULT_PORT = 8765
 MAX_REQUEST = 64 * 1024
+GUEST_ACTIONS = ("slide_next", "slide_back", "slide_goto")
 
 
 def new_pin() -> str:
     return f"{random.SystemRandom().randint(0, 9999):04d}"
+
+
+def new_guest_token() -> str:
+    return secrets.token_urlsafe(9)           # 72 random bits: not guessable
+
+
+def qr_pixmap(text: str, pixels: int) -> QPixmap:
+    return QPixmap.fromImage(qr_image(text, pixels))
 
 
 def local_addresses() -> List[str]:
@@ -61,6 +79,7 @@ class RemoteServer(QObject):
         self.act = act
         self.image = image
         self.pin = new_pin()
+        self.guest = ""                   # the guest link's token; "" = no guest link
         self.port = DEFAULT_PORT
         self.server: Optional[QTcpServer] = None
         self._buffers: Dict[QTcpSocket, bytes] = {}
@@ -102,6 +121,11 @@ class RemoteServer(QObject):
 
     def addresses(self) -> List[str]:
         return [f"http://{ip}:{self.port}" for ip in local_addresses()]
+
+    def guest_url(self) -> str:
+        addresses = self.addresses()
+        base = addresses[0] if addresses else f"http://<this computer>:{self.port}"
+        return f"{base}/p/{self.guest}" if self.guest else ""
 
     def clients(self) -> int:
         return self._clients
@@ -161,7 +185,7 @@ class RemoteServer(QObject):
         self._send(socket, status, payload, kind)
 
     def _send(self, socket: QTcpSocket, status: int, payload: bytes, kind: str) -> None:
-        reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found",
+        reason = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
                   413: "Payload Too Large", 429: "Too Many Requests"}.get(status, "OK")
         head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\n"
                 f"Content-Length: {len(payload)}\r\nCache-Control: no-store\r\n"
@@ -181,20 +205,29 @@ class RemoteServer(QObject):
             return 200, SLIDES_PAGE.encode("utf-8"), "text/html; charset=utf-8"
         if path == "/manifest.json":
             return 200, MANIFEST.encode("utf-8"), "application/manifest+json"
+        if path.startswith("/p/"):
+            # the page itself holds nothing; an old link says so instead of asking for a PIN
+            page = SLIDES_PAGE if self.guest and path[3:] == self.guest else EXPIRED_PAGE
+            return 200, page.encode("utf-8"), "text/html; charset=utf-8"
         if not path.startswith("/api/"):
             return 404, b"not found", "text/plain"
 
         count, until = self._failures.get(ip, (0, 0.0))
         if until > time.monotonic():
             return 429, _json({"ok": False, "message": "Too many wrong PINs - wait a minute."}), "application/json"
-        if headers.get("x-pin", "") != self.pin:
+        offered = headers.get("x-guest", "")
+        guest = bool(offered) and bool(self.guest) and secrets.compare_digest(offered, self.guest)
+        if not guest and not secrets.compare_digest(headers.get("x-pin", ""), self.pin):
             count += 1
             self._failures[ip] = (0, time.monotonic() + 60) if count >= 5 else (count, 0.0)
-            return 401, _json({"ok": False, "message": "Wrong PIN"}), "application/json"
+            message = "This guest link has expired." if offered else "Wrong PIN"
+            return 401, _json({"ok": False, "message": message}), "application/json"
         self._failures.pop(ip, None)
         self._seen[ip] = time.monotonic()
 
         if path == "/api/state" and method == "GET":
+            if guest:
+                return 200, _json({"slides": self.state().get("slides", {}), "guest": True}), "application/json"
             return 200, _json(self.state()), "application/json"
         if path == "/api/slide" and method == "GET" and self.image is not None:
             try:
@@ -210,6 +243,8 @@ class RemoteServer(QObject):
             except ValueError:
                 return 400, _json({"ok": False, "message": "bad JSON"}), "application/json"
             action = str(data.get("action", ""))
+            if guest and action not in GUEST_ACTIONS:
+                return 403, _json({"ok": False, "message": "A guest link only turns slides."}), "application/json"
             if action in ("next", "back", "slide_next", "slide_back"):
                 # a double tap must not skip a step
                 now = time.monotonic()
@@ -236,11 +271,14 @@ class RemoteDialog(QDialog):
     toggled = Signal(bool)
     portChanged = Signal(int)
     pinRenewed = Signal()
+    qrPinToggled = Signal(bool)
+    guestRequested = Signal()
 
-    def __init__(self, server: RemoteServer, theme: dict, parent=None) -> None:
+    def __init__(self, server: RemoteServer, theme: dict, parent=None, qr_with_pin: bool = False) -> None:
         super().__init__(parent)
         self.server = server
         self.theme = theme
+        self.qr_with_pin = qr_with_pin
         self.setWindowTitle("Phone remote")
         self.setMinimumWidth(520)
         box = QVBoxLayout(self)
@@ -267,13 +305,17 @@ class RemoteDialog(QDialog):
         row.addWidget(self.port)
         box.addLayout(row)
 
-        caption = QLabel("ON THE PHONE, OPEN")
+        middle = QHBoxLayout()
+        middle.setSpacing(18)
+        left = QVBoxLayout()
+        left.setSpacing(10)
+        caption = QLabel("ON THE PHONE, OPEN  ·  OR SCAN")
         caption.setObjectName("sectionTitle")
-        box.addWidget(caption)
+        left.addWidget(caption)
         self.address = QLabel()
         self.address.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.address.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {theme['accent']};")
-        box.addWidget(self.address)
+        left.addWidget(self.address)
 
         pin_row = QHBoxLayout()
         caption = QLabel("PIN")
@@ -287,7 +329,25 @@ class RemoteDialog(QDialog):
         renew.setToolTip("Phones that know the old PIN will be asked again")
         renew.clicked.connect(self.pinRenewed.emit)
         pin_row.addWidget(renew)
-        box.addLayout(pin_row)
+        left.addLayout(pin_row)
+        self.qr_pin_check = QCheckBox("The QR code logs in by itself (no PIN to type)")
+        self.qr_pin_check.setToolTip("Handy for the crew. Anyone with a photo of this QR code can run the show\n"
+                                     "until you press New PIN - keep it off for codes that leave the desk.")
+        self.qr_pin_check.setChecked(qr_with_pin)
+        self.qr_pin_check.toggled.connect(self._on_qr_pin)
+        left.addWidget(self.qr_pin_check)
+        guest = QPushButton("  Guest slide clicker (QR, slides only)…")
+        guest.setToolTip("A separate QR code for a visiting speaker: next / back slide, nothing else")
+        guest.clicked.connect(self.guestRequested.emit)
+        left.addWidget(guest, 0, Qt.AlignLeft)
+        left.addStretch(1)
+        middle.addLayout(left, 1)
+        self.qr = QLabel()
+        self.qr.setFixedSize(212, 212)
+        self.qr.setAlignment(Qt.AlignCenter)
+        self.qr.setObjectName("cardHint")
+        middle.addWidget(self.qr, 0, Qt.AlignTop)
+        box.addLayout(middle)
 
         self.status = QLabel()
         self.status.setObjectName("cardHint")
@@ -306,6 +366,18 @@ class RemoteDialog(QDialog):
         server.clientsChanged.connect(lambda _n: self.refresh())
         self.refresh()
 
+    def _on_qr_pin(self, on: bool) -> None:
+        self.qr_with_pin = on
+        self.qrPinToggled.emit(on)
+        self.refresh()
+
+    def qr_text(self) -> str:
+        """What the QR code holds. The PIN rides in the #fragment, which never leaves the phone."""
+        addresses = self.server.addresses()
+        if not (self.server.running and addresses):
+            return ""
+        return addresses[0] + "/" + (f"#pin={self.server.pin}" if self.qr_with_pin else "")
+
     def refresh(self, error: str = "") -> None:
         on = self.server.running
         self.switch.setChecked(on)
@@ -322,6 +394,13 @@ class RemoteDialog(QDialog):
         else:
             self.address.setText("—")
         self.pin.setText(self.server.pin if on else "····")
+        text = self.qr_text()
+        if text:
+            self.qr.setPixmap(qr_pixmap(text, 200))
+            self.qr.setToolTip(text)
+        else:
+            self.qr.setPixmap(QPixmap())
+            self.qr.setText("QR code\nwhen the\nremote is on")
         if error:
             self.status.setText(f"Could not start: {error}")
             self.status.setStyleSheet(f"color: {self.theme['danger']};")
@@ -332,6 +411,98 @@ class RemoteDialog(QDialog):
         else:
             self.status.setText("Off. Nobody can reach the app from the network.")
             self.status.setStyleSheet("")
+
+
+class GuestDialog(QDialog):
+    """A QR code for a visiting speaker's phone: next / back slide, nothing else."""
+
+    enabledToggled = Signal(bool)
+    renewRequested = Signal()
+
+    def __init__(self, server: RemoteServer, theme: dict, parent=None) -> None:
+        super().__init__(parent)
+        self.server = server
+        self.theme = theme
+        self.setWindowTitle("Guest slide clicker")
+        self.setMinimumWidth(460)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(22, 20, 22, 20)
+        box.setSpacing(12)
+
+        intro = QLabel("For a guest speaker: they scan this with the phone camera and get NEXT and BACK for "
+                       "the slides - no PIN, and nothing else: no screens, no sound, no running order. "
+                       "The phone must be on the same Wi-Fi as this computer.")
+        intro.setWordWrap(True)
+        intro.setObjectName("cardHint")
+        box.addWidget(intro)
+
+        self.qr = QLabel()
+        self.qr.setFixedSize(340, 340)
+        self.qr.setAlignment(Qt.AlignCenter)
+        self.qr.setObjectName("cardHint")
+        box.addWidget(self.qr, 0, Qt.AlignHCenter)
+        self.url = QLabel()
+        self.url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.url.setAlignment(Qt.AlignCenter)
+        self.url.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {theme['accent']};")
+        box.addWidget(self.url)
+        self.status = QLabel()
+        self.status.setObjectName("cardHint")
+        self.status.setWordWrap(True)
+        self.status.setAlignment(Qt.AlignCenter)
+        box.addWidget(self.status)
+
+        row = QHBoxLayout()
+        self.switch = QPushButton()
+        self.switch.setCheckable(True)
+        self.switch.setMinimumHeight(40)
+        self.switch.clicked.connect(lambda on: self.enabledToggled.emit(on))
+        row.addWidget(self.switch, 1)
+        self.renew = QPushButton("  New link")
+        self.renew.setMinimumHeight(40)
+        self.renew.setToolTip("A fresh QR code; phones holding the old one are shut out at once")
+        self.renew.clicked.connect(self.renewRequested.emit)
+        row.addWidget(self.renew)
+        box.addLayout(row)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        box.addWidget(close, 0, Qt.AlignRight)
+        server.clientsChanged.connect(lambda _n: self.refresh())
+        self.refresh()
+
+    def refresh(self, error: str = "") -> None:
+        server = self.server
+        on = bool(server.guest)
+        self.switch.setChecked(on)
+        self.switch.setText("●  Guest link is ON  —  tap to switch off" if on else "Make a guest link")
+        self.switch.setObjectName("" if on else "primary")
+        self.switch.style().unpolish(self.switch)
+        self.switch.style().polish(self.switch)
+        self.renew.setEnabled(on)
+        url = server.guest_url() if on and server.running else ""
+        if url and server.addresses():
+            self.qr.setPixmap(qr_pixmap(url, 330))
+            self.url.setText(url)
+        else:
+            self.qr.setPixmap(QPixmap())
+            self.qr.setText("—")
+            self.url.setText("")
+        if error:
+            self.status.setText(f"Could not start the phone remote: {error}")
+            self.status.setStyleSheet(f"color: {self.theme['danger']};")
+        elif not on:
+            self.status.setText("No guest link: nobody can turn the slides from a phone without the PIN.")
+            self.status.setStyleSheet("")
+        elif not server.running:
+            self.status.setText("The phone remote is off, so the link does not work yet.")
+            self.status.setStyleSheet(f"color: {self.theme['warn']};")
+        elif not server.addresses():
+            self.status.setText("This computer is not on a network the phone can reach.")
+            self.status.setStyleSheet(f"color: {self.theme['warn']};")
+        else:
+            self.status.setText("Slides only. Switch it off or make a new link after the talk.")
+            self.status.setStyleSheet(f"color: {self.theme['ok']};")
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +631,9 @@ nav button.on { color:var(--gold); border-color:rgba(227,178,60,.35); background
 const $ = id => document.getElementById(id);
 let pin = localStorage.getItem("stagePin") || "";
 let typed = "", state = null, selected = -1, lastGo = 0, failures = 0;
+if (/^#pin=\d{4}$/.test(location.hash)) {       // scanned from the dashboard's QR code
+  pin = location.hash.slice(5); localStorage.setItem("stagePin", pin); }
+if (location.hash) history.replaceState(null, "", location.pathname);
 
 function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1800); }
@@ -579,6 +753,8 @@ button:active { transform:scale(.98); filter:brightness(.85); }
 button:disabled { opacity:.35; }
 header { display:flex; align-items:center; gap:10px; padding-top:10px; }
 header a { color:var(--muted); text-decoration:none; font-size:13px; }
+.guest header a, .guest .row { display:none; }
+.guest .pad { min-height:220px; }
 header h1 { flex:1; font-size:15px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pill { font-size:11px; font-weight:800; letter-spacing:1px; padding:4px 10px; border-radius:20px; border:1px solid var(--edge); color:var(--muted); }
 .pill.live { color:#ff8c88; border-color:rgba(224,96,92,.6); background:rgba(224,96,92,.15); }
@@ -627,15 +803,22 @@ header h1 { flex:1; font-size:15px; margin:0; white-space:nowrap; overflow:hidde
 <div id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
-let pin = localStorage.getItem("stagePin") || "", typed = "", state = null, lastTap = 0;
+let pin = localStorage.getItem("stagePin") || "", typed = "", state = null, lastTap = 0, dead = false;
+// a guest link (/p/<token>): slides only, no PIN
+const GUEST = location.pathname.startsWith("/p/") ? location.pathname.slice(3) : "";
+if (GUEST) { document.body.classList.add("guest"); document.title = "Slide clicker";
+  const m = document.querySelector('link[rel="manifest"]'); if (m) m.remove(); }
+if (/^#pin=\d{4}$/.test(location.hash)) { pin = location.hash.slice(5); localStorage.setItem("stagePin", pin); }
+if (location.hash) history.replaceState(null, "", location.pathname);
 const images = {};            // "deck:index" -> object URL, fetched with the PIN header
 function toast(t) { const e = $("toast"); e.textContent = t; e.classList.add("show"); clearTimeout(e._h); e._h = setTimeout(() => e.classList.remove("show"), 1500); }
 function buzz() { if (navigator.vibrate) navigator.vibrate(20); }
 function mmss(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 async function api(path, body) {
-  const o = { headers: { "X-Pin": pin } };
+  const o = { headers: GUEST ? { "X-Guest": GUEST } : { "X-Pin": pin } };
   if (body) { o.method = "POST"; o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(body); }
   const r = await fetch(path, o);
+  if (r.status === 401 && GUEST) { expired(); throw new Error("pin"); }
   if (r.status === 401) { pin = ""; localStorage.removeItem("stagePin"); askPin("Wrong PIN"); throw new Error("pin"); }
   if (r.status === 429) { askPin("Too many tries - wait a minute"); throw new Error("locked"); }
   return r;
@@ -665,6 +848,10 @@ async function put(el, deck, i, dim) {
   if (!url) el.dataset.key = "";
 }
 function askPin(m) { $("login").classList.add("show"); $("msg").textContent = m || ""; typed = ""; drawPin(); }
+function expired() {                                   // the desk made a new guest link
+  dead = true; $("login").classList.add("show"); $("keys").style.display = "none"; $("pin").textContent = "";
+  $("login").firstElementChild.textContent = "THIS CLICKER LINK HAS EXPIRED";
+  $("msg").textContent = "Ask the stage desk for the new QR code."; }
 function drawPin() { $("pin").textContent = [0, 1, 2, 3].map(i => i < typed.length ? "●" : "·").join(""); }
 (function keys() {
   for (const k of ["1","2","3","4","5","6","7","8","9","","0","⌫"]) {
@@ -682,7 +869,8 @@ function render() {
   pill.textContent = !s.loaded ? "NOTHING OPEN" : s.black ? "BLACK" : s.live ? "LIVE · " + s.target : "NOT ON SCREEN";
   pill.className = "pill " + (s.black ? "black" : s.live ? "live" : "");
   $("notes").textContent = s.notes || "";
-  $("next").disabled = !s.loaded || (s.index + 1 >= s.count && !s.black);
+  // in PowerPoint the last slide may still have animations to play
+  $("next").disabled = !s.loaded || (s.index + 1 >= s.count && !s.black && !s.powerpoint);
   $("back").disabled = !s.loaded || (s.index <= 0 && !s.black);
   $("black").disabled = !s.live;
   $("black").classList.toggle("on", s.black);
@@ -694,7 +882,8 @@ function render() {
   else { $("cur").textContent = "no presentation open"; $("cur").dataset.key = ""; $("nxt").innerHTML = ""; $("nxt").dataset.key = ""; }
 }
 async function refresh() {
-  if (!pin) { askPin(); return; }
+  if (dead) return;
+  if (!pin && !GUEST) { askPin(); return; }
   try { const r = await api("/api/state"); state = await r.json(); render(); } catch (e) {}
 }
 function guard() { const t = Date.now(); if (t - lastTap < 450) return false; lastTap = t; return true; }
@@ -707,10 +896,25 @@ $("live").onclick = () => { if (!state) return;
 document.addEventListener("keydown", e => {           // a Bluetooth clicker paired to the phone works too
   if (["PageDown","ArrowRight","ArrowDown"," ","Enter"].includes(e.key)) { e.preventDefault(); if (guard()) act("slide_next"); }
   else if (["PageUp","ArrowLeft","ArrowUp","Backspace"].includes(e.key)) { e.preventDefault(); if (guard()) act("slide_back"); }
-  else if (e.key === "b" || e.key === "B" || e.key === ".") act("slide_black");
+  else if (!GUEST && (e.key === "b" || e.key === "B" || e.key === ".")) act("slide_black");
 });
 setInterval(() => { if (!document.hidden) refresh(); }, 700);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 refresh();
 </script></body></html>
+"""
+
+
+# What an old guest link shows: no PIN pad, no way in.
+EXPIRED_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c1018"><title>Link expired</title>
+<style>
+html,body { margin:0; height:100%; background:#0c1018; color:#e9edf5; font:16px/1.4 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:24px; text-align:center; }
+b { color:#e3b23c; font-size:12px; letter-spacing:1.4px; }
+p { color:#9aa6bb; margin:0; max-width:320px; }
+</style></head>
+<body><b>THIS CLICKER LINK HAS EXPIRED</b><p>Ask the stage desk for the new QR code.</p></body></html>
 """

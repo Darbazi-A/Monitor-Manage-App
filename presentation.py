@@ -19,6 +19,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import threading
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -70,8 +72,12 @@ POWERSHELL_EXPORT = r"""
 $ErrorActionPreference = 'Stop'
 $src = $env:SDC_SRC; $dir = $env:SDC_DIR; $W = [int]$env:SDC_W; $H = [int]$env:SDC_H
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
+# a private copy: PowerPoint hands out the same open presentation to everyone who
+# opens a file, and closing it here must not end a slide show of the original
+$copy = Join-Path $dir ("source" + [IO.Path]::GetExtension($src))
+Copy-Item -LiteralPath $src -Destination $copy -Force
 $app = New-Object -ComObject PowerPoint.Application
-$pres = $app.Presentations.Open($src, -1, 0, 0)
+$pres = $app.Presentations.Open($copy, -1, 0, 0)
 try {
   $sw = $pres.PageSetup.SlideWidth; $sh = $pres.PageSetup.SlideHeight
   $scale = [Math]::Min($W / $sw, $H / $sh)
@@ -79,6 +85,7 @@ try {
   $visible = @($pres.Slides | Where-Object { -not $_.SlideShowTransition.Hidden })
   "COUNT " + $visible.Count
   $notes = New-Object System.Collections.ArrayList
+  $indexes = New-Object System.Collections.ArrayList
   $i = 0
   foreach ($slide in $visible) {
     $i++
@@ -86,12 +93,75 @@ try {
     $text = ""
     try { $text = [string]$slide.NotesPage.Shapes.Placeholders.Item(2).TextFrame.TextRange.Text } catch { }
     [void]$notes.Add($text)
+    [void]$indexes.Add([int]$slide.SlideIndex)
     "PAGE " + $i
   }
   ConvertTo-Json -InputObject @($notes) | Out-File -Encoding utf8 (Join-Path $dir 'notes.json')
+  ConvertTo-Json -InputObject @($indexes) | Out-File -Encoding utf8 (Join-Path $dir 'indexes.json')
   "DONE"
 } finally {
   $pres.Close()
+  if ($app.Presentations.Count -eq 0) { $app.Quit() }
+  Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+}
+"""
+
+
+# A real PowerPoint slideshow, driven line by line over stdin, so animations and
+# transitions play exactly as they do in PowerPoint. Answers every command with
+# "STATE <slide index> <view state> <show position>", or "ENDED".
+POWERSHELL_SHOW = r"""
+$ErrorActionPreference = 'Stop'
+function Say($text) { [Console]::Out.WriteLine($text); [Console]::Out.Flush() }
+$app = New-Object -ComObject PowerPoint.Application
+$pres = $app.Presentations.Open($env:SDC_SRC, -1, 0, 0)
+$show = $null
+function State {
+  try { $v = $show.View; Say ("STATE " + $v.Slide.SlideIndex + " " + $v.State + " " + $v.CurrentShowPosition) }
+  catch { Say "ENDED" }
+}
+try {
+  $settings = $pres.SlideShowSettings
+  $settings.ShowType = 1
+  $settings.ShowPresenterView = 0
+  $settings.LoopUntilStopped = 0
+  $show = $settings.Run()
+  if ($env:SDC_PW) {
+    # onto the stage screen the operator chose (points = logical pixels x 0.75)
+    $show.Left = [double]$env:SDC_PX; $show.Top = [double]$env:SDC_PY
+    $show.Width = [double]$env:SDC_PW; $show.Height = [double]$env:SDC_PH
+  }
+  # the last slide the audience sees; NEXT stops there instead of PowerPoint's
+  # "End of slide show" screen
+  $last = 1
+  foreach ($slide in $pres.Slides) { if (-not $slide.SlideShowTransition.Hidden) { $last = $slide.SlideIndex } }
+  Say "READY"
+  $start = [int]$env:SDC_START
+  if ($start -gt 1) { $show.View.GotoSlide($start) }
+  State
+  $done = $false
+  while (-not $done) {
+    $line = [Console]::In.ReadLine()
+    if ($line -eq $null) { break }
+    $cmd = $line.Trim()
+    try {
+      if ($cmd -eq 'next') {
+        $v = $show.View
+        $finished = $false
+        try { $finished = $v.GetClickIndex() -ge $v.GetClickCount() } catch { }
+        if ($v.State -eq 5 -or ($v.Slide.SlideIndex -ge $last -and $finished)) { Say "EDGE" } else { $v.Next() }
+      }
+      elseif ($cmd -eq 'prev') { $show.View.Previous() }
+      elseif ($cmd -match '^goto (\d+)$') { $show.View.GotoSlide([int]$matches[1]) }
+      elseif ($cmd -eq 'black') { $show.View.State = 3 }
+      elseif ($cmd -eq 'unblack') { $show.View.State = 1 }
+      elseif ($cmd -eq 'end') { $show.View.Exit(); $done = $true }
+    } catch { }
+    if ($done) { Say "ENDED" } else { State }
+  }
+} finally {
+  try { if ($show -ne $null) { $show.View.Exit() } } catch { }
+  try { $pres.Close() } catch { }
   if ($app.Presentations.Count -eq 0) { $app.Quit() }
 }
 """
@@ -135,7 +205,8 @@ class Deck(QObject):
             stamp = f"{info.st_mtime_ns}|{info.st_size}"
         except OSError:
             stamp = "missing"
-        key = f"{os.path.normcase(self.path)}|{stamp}|{size.width()}x{size.height()}|v1"
+        self.indexes: List[int] = []     # PowerPoint's own slide numbers of the visible slides
+        key = f"{os.path.normcase(self.path)}|{stamp}|{size.width()}x{size.height()}|v2"
         self.token = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
         self.dir = os.path.join(cache_root(), self.token)
 
@@ -191,6 +262,7 @@ class Deck(QObject):
             self.pages, self.count = pages, len(pages)
             notes = list(data.get("notes") or [])
             self.notes = (notes + [""] * self.count)[: self.count]
+            self.indexes = [int(i) for i in (data.get("indexes") or [])]
             self.done = True
             QTimer.singleShot(0, self.progress.emit)
             return True
@@ -201,8 +273,8 @@ class Deck(QObject):
         self.done = True
         try:
             with open(os.path.join(self.dir, "complete.json"), "w", encoding="utf-8") as handle:
-                json.dump({"count": self.count, "notes": self.notes, "source": self.path}, handle,
-                          ensure_ascii=False)
+                json.dump({"count": self.count, "notes": self.notes, "indexes": self.indexes,
+                           "source": self.path}, handle, ensure_ascii=False)
         except OSError:
             pass
         self.progress.emit()
@@ -284,7 +356,23 @@ class Deck(QObject):
             self.notes += [""] * (self.count - len(self.notes))
         except (OSError, ValueError):
             pass
+        try:
+            with open(os.path.join(self.dir, "indexes.json"), encoding="utf-8-sig") as handle:
+                indexes = json.load(handle)
+            self.indexes = [int(i) for i in ([indexes] if isinstance(indexes, int) else indexes)]
+        except (OSError, ValueError, TypeError):
+            self.indexes = []
         self._finish()
+
+    def position_of(self, slide_index: int) -> Optional[int]:
+        """Our slide number (0-based) for PowerPoint's slide number, if it is a visible one."""
+        if slide_index in self.indexes:
+            return self.indexes.index(slide_index)
+        return None if self.indexes else slide_index - 1
+
+    def slide_index(self, position: int) -> int:
+        """PowerPoint's slide number for our position."""
+        return self.indexes[position] if 0 <= position < len(self.indexes) else position + 1
 
     def stop(self) -> None:
         self._timer.stop()
@@ -342,13 +430,171 @@ class Deck(QObject):
         return self._jpegs[key]
 
 
+class PowerPointShow(QObject):
+    """
+    A real PowerPoint slideshow on a stage screen, driven over a PowerShell
+    pipe: next / prev / goto / black go to PowerPoint itself, so animations and
+    transitions play exactly as the author made them. PowerPoint's own state is
+    read back several times a second, so keys pressed in PowerPoint (or slide
+    timings) are followed too.
+
+    A plain OS pipe (subprocess), not QProcess: PowerShell's [Console]::In never
+    sees what QProcess writes on Windows.
+    """
+
+    started = Signal()
+    state = Signal(int, int)      # PowerPoint's slide number, view state (3 = black, 5 = finished)
+    ended = Signal()
+    edge = Signal()               # NEXT on the last slide, all its animations played
+    failed = Signal(str)
+    _line = Signal(str)           # from the reader thread
+    _eof = Signal(str)
+
+    def __init__(self, path: str, points: Optional[QRectF], start_slide: int,
+                 parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.running = False
+        self._over = False
+        self._queued: List[str] = []      # presses made while PowerPoint was still starting
+        env = dict(os.environ, SDC_SRC=path, SDC_START=str(max(1, start_slide)))
+        if points is not None:
+            env.update(SDC_PX=f"{points.x():.2f}", SDC_PY=f"{points.y():.2f}",
+                       SDC_PW=f"{points.width():.2f}", SDC_PH=f"{points.height():.2f}")
+        self._line.connect(self._on_line)
+        self._eof.connect(self._on_eof)
+        self._poll = QTimer(self)
+        self._poll.timeout.connect(lambda: self.send("state"))
+        self._deadline = QTimer(self)
+        self._deadline.setSingleShot(True)
+        self._deadline.timeout.connect(self._too_slow)
+        encoded = base64.b64encode(POWERSHELL_SHOW.encode("utf-16-le")).decode("ascii")
+        try:
+            self.process: Optional[subprocess.Popen] = subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as error:
+            self.process = None
+            QTimer.singleShot(0, lambda: self._fail(f"PowerShell could not start: {error}"))
+            return
+        threading.Thread(target=self._read, daemon=True).start()
+        self._deadline.start(45000)
+
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def send(self, command: str) -> None:
+        if not self.running:
+            if not self._over and command != "state":
+                self._queued = (self._queued + [command])[-20:]
+            return
+        if self.alive():
+            try:
+                self.process.stdin.write((command + "\n").encode("ascii"))
+                self.process.stdin.flush()
+            except (OSError, ValueError):
+                pass
+
+    def stop(self) -> None:
+        """End the slide show (quietly: no ended / failed from here on)."""
+        self._over = True
+        self._poll.stop()
+        self._deadline.stop()
+        if not self.alive():
+            return
+        if self.running:
+            self.send("end")
+            self._close_input()                   # the script tidies up and quits PowerPoint
+            QTimer.singleShot(5000, self._kill)
+        else:
+            self._kill()                          # still opening: nothing to tidy
+        self.running = False
+
+    def _close_input(self) -> None:
+        try:
+            self.process.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+    def _kill(self) -> None:
+        if self.alive():
+            self.process.kill()
+
+    def _read(self) -> None:
+        """Reader thread: every line to the GUI thread, then whatever went wrong."""
+        process = self.process
+        for raw in process.stdout:
+            self._line.emit(raw.decode("utf-8", "replace").strip())
+        try:
+            error = process.stderr.read().decode("utf-8", "replace")
+        except (OSError, ValueError):
+            error = ""
+        self._eof.emit(error)
+
+    def _on_line(self, line: str) -> None:
+        if line == "READY":
+            self.running = not self._over
+            self._deadline.stop()
+            if self.running:
+                self._poll.start(400)
+                self.started.emit()
+                queued, self._queued = self._queued, []
+                for command in queued:
+                    self.send(command)
+        elif line.startswith("STATE "):
+            parts = line.split()
+            try:
+                self.state.emit(int(parts[1]), int(parts[2]))
+            except (IndexError, ValueError):
+                pass
+        elif line == "EDGE":
+            self.edge.emit()
+        elif line == "ENDED":
+            self._end()
+
+    def _on_eof(self, error: str) -> None:
+        if not self.running and not self._over:
+            lines = re.findall(r'<S S="Error">(.*?)</S>', error) or \
+                [l for l in error.splitlines() if l.strip() and not l.startswith("#< CLIXML")]
+            message = re.sub(r"\s+", " ", " ".join(lines).replace("_x000D__x000A_", " ")).strip()
+            self._fail("PowerPoint could not start the slide show." +
+                       (f" {message.split(' At line:')[0][:200]}" if message else ""))
+            return
+        self._end()
+
+    def _fail(self, message: str) -> None:
+        if not self._over:
+            self._over = True
+            self.failed.emit(message)
+
+    def _too_slow(self) -> None:
+        if not self.running:
+            self._kill()
+            self._fail("PowerPoint did not start the slide show in time.")
+
+    def _end(self) -> None:
+        self._poll.stop()
+        was_running, self.running = self.running, False
+        if self.alive():
+            self._close_input()                   # the show is over: let the script close the file
+            QTimer.singleShot(5000, self._kill)
+        if not self._over:
+            self._over = True
+            if was_running:
+                self.ended.emit()
+
+
 class Presenter(QObject):
     """
     Which slide, whether it is on stage, and whether the stage is blacked out.
 
     `stage` is the dashboard's side: present(role, path, fade_ms) -> error or
     None, clear(role, fade_ms), restore(role, fade_ms), label(role),
-    size(role) -> QSize.
+    size(role) -> QSize, points(role) -> QRectF of the screen in PowerPoint
+    points, make_room(role) / give_back_room(role) for windows kept on top.
+
+    PowerPoint files play in PowerPoint itself when `in_powerpoint` is set, so
+    their animations survive; PDFs and pictures are shown as pictures.
     """
 
     changed = Signal()
@@ -364,6 +610,10 @@ class Presenter(QObject):
         self.role = "main"
         self.fade_ms = 250
         self.started = 0.0
+        self.in_powerpoint = True
+        self.show: Optional[PowerPointShow] = None
+        self.at_end = False
+        self._seen = None
         self._waiting = False
         self._live_when_ready: Optional[str] = None
 
@@ -376,13 +626,16 @@ class Presenter(QObject):
         if error:
             deck.deleteLater()
             return error
+        was_live, role = self.live, self.role
+        if self.live:
+            self.end()
         if self.deck is not None:
             self.deck.stop()
             self.deck.deleteLater()
         self.deck = deck
         self.index = 0
-        if self.live:
-            self._show()
+        if was_live:
+            self.go_live_when_ready(role)
         self.changed.emit()
         return None
 
@@ -395,8 +648,18 @@ class Presenter(QObject):
             return self.deck.notes[index]
         return ""
 
+    def playing_in_powerpoint(self) -> bool:
+        return self.show is not None
+
+    def can_go_live(self) -> bool:
+        return bool(self.count()) or self._wants_powerpoint()
+
+    def _wants_powerpoint(self) -> bool:
+        return bool(self.in_powerpoint and self.deck is not None and self.deck.kind == "powerpoint"
+                    and powerpoint_available())
+
     def _on_progress(self) -> None:
-        if self._live_when_ready and self.count():
+        if self._live_when_ready and (self.count() or self._wants_powerpoint()):
             role, self._live_when_ready = self._live_when_ready, None
             self.go_live(role)
             return
@@ -406,7 +669,7 @@ class Presenter(QObject):
 
     def go_live_when_ready(self, role: str) -> None:
         """Go on screen now, or as soon as a converting deck knows its slides."""
-        if self.count():
+        if self.count() or self._wants_powerpoint():
             self.go_live(role)
         else:
             self._live_when_ready = role
@@ -414,6 +677,7 @@ class Presenter(QObject):
     def release(self) -> None:
         """Something else took over the screen: no longer live, and nothing to restore."""
         if self.live:
+            self._stop_show()
             self.live = False
             self.black = False
             self._waiting = False
@@ -428,12 +692,19 @@ class Presenter(QObject):
         if not self.count():
             return
         self.index = max(0, min(index, self.count() - 1))
-        if self.live:
+        if self.show is not None:
+            self.black = False
+            self.show.send(f"goto {self.deck.slide_index(self.index)}")
+        elif self.live:
             self.black = False
             self._show()
         self.changed.emit()
 
     def next(self) -> bool:
+        if self.show is not None:
+            # PowerPoint decides: the next animation, or the next slide
+            self.show.send("unblack" if self.black else "next")
+            return True
         if self.live and self.black:          # like PowerPoint: first press lifts the black
             self.black = False
             self._show()
@@ -446,6 +717,9 @@ class Presenter(QObject):
         return True
 
     def back(self) -> bool:
+        if self.show is not None:
+            self.show.send("unblack" if self.black else "prev")
+            return True
         if self.live and self.black:
             self.black = False
             self._show()
@@ -460,35 +734,46 @@ class Presenter(QObject):
         if not self.live:
             return
         self.black = not self.black
-        if self.black:
+        if self.show is not None:
+            self.show.send("black" if self.black else "unblack")
+        elif self.black:
             self.stage.clear(self.role, 200)
         else:
             self._show()
         self.changed.emit()
 
     # -- on stage ------------------------------------------------------------ #
-    def go_live(self, role: Optional[str] = None) -> None:
-        if not self.count():
+    def go_live(self, role: Optional[str] = None, restart: bool = False) -> None:
+        if not self.can_go_live():
             self.note.emit("Open a presentation first.")
             return
-        if self.live and role and role != self.role:
-            self.stage.restore(self.role, self.fade_ms)
+        if self.live and ((role and role != self.role) or restart):
+            self.end()
         if role:
             self.role = role
         if not self.live:
             self.started = time.monotonic()
         self.live = True
         self.black = False
-        self._show()
+        if self._wants_powerpoint():
+            if self.show is None:
+                self._start_show()
+        else:
+            self._show()
         self.changed.emit()
 
     def end(self) -> None:
         if not self.live:
             return
+        in_powerpoint = self.show is not None
+        self._stop_show()
         self.live = False
         self.black = False
         self._waiting = False
-        self.stage.restore(self.role, self.fade_ms)
+        if in_powerpoint:
+            self.stage.give_back_room(self.role)     # the background never left its screen
+        else:
+            self.stage.restore(self.role, self.fade_ms)
         self.changed.emit()
 
     def _show(self) -> None:
@@ -501,6 +786,62 @@ class Presenter(QObject):
         error = self.stage.present(self.role, path, self.fade_ms)
         if error:
             self.note.emit(error)
+
+    # -- PowerPoint itself --------------------------------------------------- #
+    def _start_show(self) -> None:
+        self.stage.make_room(self.role)
+        show = PowerPointShow(self.deck.path, self.stage.points(self.role),
+                              self.deck.slide_index(self.index), self)
+        show.state.connect(self._on_show_state)
+        show.ended.connect(self._on_show_ended)
+        show.edge.connect(lambda: self.note.emit("Last slide."))
+        show.failed.connect(self._on_show_failed)
+        show.started.connect(lambda: self.note.emit("Playing in PowerPoint - animations included."))
+        show.started.connect(self.stage.refocus)
+        self.show = show
+        self.at_end = False
+        self._seen = None
+        self.note.emit("Starting PowerPoint…")
+
+    def _stop_show(self) -> None:
+        show, self.show = self.show, None
+        if show is not None:
+            show.stop()                           # quiet from here on: no ended / failed
+            QTimer.singleShot(6000, show.deleteLater)
+
+    def _on_show_state(self, slide_index: int, view_state: int) -> None:
+        if self.deck is not None:
+            position = self.deck.position_of(slide_index)
+            if position is not None and position >= 0 and (not self.count() or position < self.count()):
+                self.index = position
+        self.at_end = view_state == 5             # past the last slide: PowerPoint's black end screen
+        self.black = view_state == 3
+        seen = (self.index, self.black, view_state)
+        if seen != self._seen:
+            self._seen = seen
+            self.changed.emit()
+
+    def _on_show_ended(self) -> None:
+        """Someone pressed Esc in PowerPoint, or it was closed."""
+        if self.show is not None:
+            self.show = None
+            if self.live:
+                self.live = False
+                self.black = False
+                self.stage.give_back_room(self.role)
+                self.note.emit("PowerPoint's slide show was closed.")
+                self.changed.emit()
+
+    def _on_show_failed(self, message: str) -> None:
+        self.show = None
+        self.stage.give_back_room(self.role)
+        if self.live and self.count():
+            self.note.emit(message + " Showing the slides as pictures instead (no animations).")
+            self._show()
+        else:
+            self.live = False
+            self.note.emit(message)
+        self.changed.emit()
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started if self.live else 0.0
@@ -635,7 +976,9 @@ class PresentationTab(QWidget):
     """Current and next slide, notes, timer, thumbnails, and the clicker."""
 
     learnRequested = Signal()
+    guestRequested = Signal()
     globalToggled = Signal(bool)
+    powerpointToggled = Signal(bool)
 
     def __init__(self, presenter: Presenter, icons, theme: dict, role_labels: Dict[str, str],
                  touch: bool = False) -> None:
@@ -784,6 +1127,15 @@ class PresentationTab(QWidget):
         self.transition.currentIndexChanged.connect(
             lambda: setattr(self.presenter, "fade_ms", int(self.transition.currentData())))
         row.addWidget(self.transition)
+        self.powerpoint_check = QCheckBox("PowerPoint animations")
+        self.powerpoint_check.setToolTip(
+            "On: PowerPoint files play in PowerPoint itself on the stage screen, so animations,\n"
+            "videos and slide transitions work. NEXT, the clicker and the phone drive it.\n"
+            "Off: they are shown as still pictures (PDFs always are).")
+        self.powerpoint_check.setChecked(self.presenter.in_powerpoint)
+        self.powerpoint_check.setEnabled(powerpoint_available())
+        self.powerpoint_check.toggled.connect(self._on_powerpoint)
+        row.addWidget(self.powerpoint_check)
         row.addStretch(1)
         self.status = QLabel("")
         self.status.setObjectName("cardHint")
@@ -811,6 +1163,11 @@ class PresentationTab(QWidget):
         learn.setToolTip("For a clicker that sends unusual keys: press its buttons once")
         learn.clicked.connect(self.learnRequested.emit)
         row.addWidget(learn)
+        guest = QPushButton("  Guest phone clicker…")
+        guest.setIcon(self.icons.get("phone", self.theme["text"], 15))
+        guest.setToolTip("A QR code for a guest speaker's phone: next / back slide, nothing else")
+        guest.clicked.connect(self.guestRequested.emit)
+        row.addWidget(guest)
         self.global_check = QCheckBox("Works even when another program is in front")
         self.global_check.setToolTip(
             "While slides are on screen, the clicker's Page Down / Page Up (and any learned keys)\n"
@@ -863,6 +1220,13 @@ class PresentationTab(QWidget):
             self.presenter.role = role
         self.refresh()
 
+    def _on_powerpoint(self, on: bool) -> None:
+        self.presenter.in_powerpoint = on
+        self.powerpointToggled.emit(on)
+        if self.presenter.live and self.presenter.deck is not None and self.presenter.deck.kind == "powerpoint":
+            self.presenter.go_live(self.presenter.role, restart=True)
+        self.refresh()
+
     def _toggle_live(self) -> None:
         if self.presenter.live:
             self.presenter.end()
@@ -895,10 +1259,11 @@ class PresentationTab(QWidget):
         else:
             self.counter.setText(f"{presenter.index + 1} / {count}" if count else "…")
             pixmap = deck.thumb(presenter.index, 1280) if count else None
+            where = f"in PowerPoint  ·  {role_label}" if presenter.playing_in_powerpoint() else role_label
             if presenter.live and presenter.black:
-                badge, colour = f"BLACK  ·  {role_label}", self.theme["warn"]
+                badge, colour = f"BLACK  ·  {where}", self.theme["warn"]
             elif presenter.live:
-                badge, colour = f"LIVE  ·  {role_label}", self.theme["danger"]
+                badge, colour = f"LIVE  ·  {where}", self.theme["danger"]
             else:
                 badge, colour = "PREVIEW  ·  not on screen", self.theme["muted"]
             self.current.show_slide(pixmap, badge, colour, dimmed=presenter.live and presenter.black)
@@ -914,6 +1279,10 @@ class PresentationTab(QWidget):
                 self.show_status(deck.error.splitlines()[0], self.theme["danger"])
             elif not deck.done:
                 self.show_status(f"Preparing slides  {deck.ready_count()} / {count or '…'}")
+            elif presenter.playing_in_powerpoint():
+                state = "starting…" if not presenter.show.running else (
+                    "end of the show - NEXT does nothing more" if presenter.at_end else "animations on")
+                self.show_status(f"{deck.name}  ·  {count} slides  ·  PowerPoint {state}", self.theme["accent"])
             else:
                 self.show_status(f"{deck.name}  ·  {count} slides", "")
         if presenter.live:
@@ -926,10 +1295,12 @@ class PresentationTab(QWidget):
             self.live_btn.setObjectName("primary")
         self.live_btn.style().unpolish(self.live_btn)
         self.live_btn.style().polish(self.live_btn)
-        self.live_btn.setEnabled(bool(count))
+        self.live_btn.setEnabled(presenter.can_go_live())
         self.black_btn.setEnabled(presenter.live)
         self.black_btn.setChecked(presenter.live and presenter.black)
-        self.next_btn.setEnabled(bool(count) and (presenter.index + 1 < count or presenter.black))
+        # in PowerPoint the last slide may still have animations to play
+        self.next_btn.setEnabled(bool(count) and (presenter.index + 1 < count or presenter.black
+                                                   or presenter.playing_in_powerpoint()))
         self._tick()
 
     def _sync_thumbs(self) -> None:

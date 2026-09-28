@@ -504,7 +504,7 @@ class ShowTab(QWidget):
         saved.setObjectName("keyHint")
         row.addWidget(saved)
         self.remote_btn = QPushButton("  Phone remote")
-        self.remote_btn.setIcon(self.icons.get("monitor", self.theme["text"], 15))
+        self.remote_btn.setIcon(self.icons.get("phone", self.theme["text"], 15))
         self.remote_btn.setToolTip("Run the show from a phone or tablet on the same Wi-Fi")
         self.remote_btn.clicked.connect(self.remoteRequested.emit)
         row.addWidget(self.remote_btn)
