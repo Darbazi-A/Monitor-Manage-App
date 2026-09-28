@@ -53,6 +53,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
@@ -137,13 +138,16 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
+from show import ShowStore, ShowTab, fold as show_fold, new_step, summary as step_summary  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR =os.path.dirname(os.path.abspath(__file__))
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
+SHOW_FILE = os.path.join(APP_DIR, "shows.json")
 ICON_FILE = os.path.join(APP_DIR, "stage_icon.ico")
 
 # Per-user "run at login" entry. HKCU needs no administrator rights, and it
@@ -280,6 +284,13 @@ CLR_INK = "#12161f"
 CLR_OK = "#57c98a"
 CLR_WARN = "#d9853f"
 CLR_DANGER = "#e0605c"
+
+# The palette as handed to the modules that cannot import this one.
+THEME = {
+    "accent": CLR_ACCENT, "text": CLR_TEXT, "dim": CLR_DIM, "muted": CLR_MUTED,
+    "ok": CLR_OK, "warn": CLR_WARN, "danger": CLR_DANGER, "card": CLR_CARD,
+    "raised": CLR_RAISED, "well": CLR_WELL, "edge": CLR_EDGE, "ink": CLR_INK,
+}
 
 
 class ScaleMode(Enum):
@@ -1316,6 +1327,9 @@ QCheckBox::indicator {{
     border: 1px solid {CLR_EDGE_HI}; background: {CLR_WELL};
 }}
 QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: #c9992f; }}
+QCheckBox:disabled {{ color: #485266; }}
+QCheckBox::indicator:disabled {{ background: #0e131c; border-color: {CLR_EDGE_SOFT}; }}
+QCheckBox::indicator:checked:disabled {{ background: #3a3f4a; border-color: {CLR_EDGE}; }}
 
 QFrame#cuePad {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -4734,6 +4748,8 @@ class MiniBar(QWidget):
     playPauseRequested = Signal()
     cueRequested = Signal(int)
     screenChosen = Signal(str)
+    showNextRequested = Signal()
+    showBackRequested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(None, Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
@@ -4836,7 +4852,44 @@ class MiniBar(QWidget):
         bottom.addWidget(expand)
         body.addLayout(bottom)
 
+        # --- row 3: the running order, when there is one -------------------- #
+        self.show_row = QWidget()
+        show = QHBoxLayout(self.show_row)
+        show.setContentsMargins(0, 0, 0, 0)
+        show.setSpacing(6)
+        back = icon_button("prev", "Back one step (Page Up)", CLR_TEXT, 15)
+        back.clicked.connect(self.showBackRequested.emit)
+        show.addWidget(back)
+        self.show_label = QLabel()
+        self.show_label.setObjectName("miniNow")
+        show.addWidget(self.show_label, 1)
+        self.show_next = QPushButton("  NEXT")
+        self.show_next.setObjectName("primary")
+        self.show_next.setIcon(Icons.get("next", "#0b0e13", 15))
+        self.show_next.setToolTip("Run the next step of the running order (Page Down)")
+        self.show_next.clicked.connect(self.showNextRequested.emit)
+        show.addWidget(self.show_next)
+        body.addWidget(self.show_row)
+        self.show_row.hide()
+
     # -- state --------------------------------------------------------------- #
+
+    def show_running(self, text: str, can_next: bool, visible: bool) -> None:
+        self.show_row.setVisible(visible)
+        if not visible:
+            return
+        metrics = self.show_label.fontMetrics()
+        self.show_label.setText(metrics.elidedText(text, Qt.ElideRight, max(160, self.show_label.width())))
+        self.show_label.setToolTip(text)
+        self.show_next.setEnabled(can_next)
+
+    @staticmethod
+    def _restyle_if(button: QPushButton, name: str, value: str) -> None:
+        """Re-polish only when the property really changes: it re-resolves the stylesheet."""
+        if button.property(name) != value:
+            button.setProperty(name, value)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     def set_presets(self, names: List[str], current: Optional[str]) -> None:
         self.preset_combo.blockSignals(True)
@@ -4856,9 +4909,7 @@ class MiniBar(QWidget):
     def show_screen(self, role: str, name: str, live: bool, playing: bool) -> None:
         for key, button in self.screen_buttons.items():
             button.setChecked(key == role)
-            button.setProperty("live", "true" if live and key == role else "false")
-            button.style().unpolish(button)
-            button.style().polish(button)
+            self._restyle_if(button, "live", "true" if live and key == role else "false")
         metrics = self.now_label.fontMetrics()
         self.now_label.setText(
             metrics.elidedText(name or "nothing on this screen", Qt.ElideMiddle,
@@ -4871,11 +4922,9 @@ class MiniBar(QWidget):
         for button, cue in zip(self.cue_buttons, cues):
             filled = bool(cue.path)
             button.setEnabled(filled)
-            button.setProperty("playing", "true" if cue.is_playing() else "false")
-            button.setProperty("paused", "true" if cue.is_paused() else "false")
+            self._restyle_if(button, "playing", "true" if cue.is_playing() else "false")
+            self._restyle_if(button, "paused", "true" if cue.is_paused() else "false")
             button.setToolTip(cue.label() if filled else f"F{cue.index + 1} is empty")
-            button.style().unpolish(button)
-            button.style().polish(button)
             if cue.is_playing():
                 running.append(f"{cue.label()}  {format_time(cue.position())}")
         metrics = self.sound_label.fontMetrics()
@@ -4933,6 +4982,20 @@ class ControlPanel(QMainWindow):
         self.loaded_preset: Optional[str] = None
         self._preset_dirty = False
 
+        # Running order: where we are, and its own pair of players so one
+        # step's music can fade out while the next one's fades in.
+        self.show_index = -1
+        self._show_started = 0.0
+        self._show_auto: Optional[float] = None
+        self._show_sound_started = False
+        self._show_text_shown: Optional[tuple] = None
+        self._show_players = [SoundCue(-1, self), SoundCue(-2, self)]
+        self._show_active = 0
+        self._show_timer = QTimer(self)
+        self._show_timer.timeout.connect(self._show_tick)
+        self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self)
+        self._remote_dialog = None
+
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(14, 12, 14, 8)
@@ -4943,6 +5006,7 @@ class ControlPanel(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
+        self.tabs.addTab(self._build_show_tab(), "  Show  ")
         self.tabs.addTab(self._build_library_tab(), "  Library  ")
         self.tabs.addTab(self._build_text_tab(), "  Text  ")
         # The DJ desk is built the first time its tab opens: it starts an audio
@@ -4975,10 +5039,11 @@ class ControlPanel(QMainWindow):
         self.set_active_role(ROLE_MAIN)
         self._apply_touch_mode()
         self._restore_window_geometry()
+        self._restore_remote()
 
         hint = QLabel(
             "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
-            "F1–F8 play/pause sound · Shift+F… stop · B blackout"
+            "F1–F8 play/pause sound · Shift+F… stop · B blackout · PgDn / PgUp running order"
         )
         hint.setObjectName("keyHint")
         self.statusBar().addPermanentWidget(hint)
@@ -5203,6 +5268,8 @@ class ControlPanel(QMainWindow):
             self.mini.cueRequested.connect(self._fire_cue)
             self.mini.playPauseRequested.connect(self._toggle_active_playback)
             self.mini.screenChosen.connect(self.set_active_role)
+            self.mini.showNextRequested.connect(self.show_next)
+            self.mini.showBackRequested.connect(self.show_back)
 
         self.mini.set_presets(self.presets.names(), self.loaded_preset)
         self._refresh_mini_now()
@@ -5250,6 +5317,15 @@ class ControlPanel(QMainWindow):
         name = os.path.basename(card.current_path()) if card.current_path() else ""
         self.mini.show_screen(role, name, window is not None, playing)
         self.mini.show_cues(self.sound.cues)
+        steps = self.show_tab.steps()
+        now = steps[self.show_index] if 0 <= self.show_index < len(steps) else None
+        upcoming = steps[self.show_index + 1] if self.show_index + 1 < len(steps) else None
+        if now is None:
+            text = f"Running order ready · next: {upcoming['title']}" if upcoming else ""
+        else:
+            text = f"{self.show_index + 1}/{len(steps)}  {now['title']}" + (
+                f"   →   {upcoming['title']}" if upcoming else "   ·   last step")
+        self.mini.show_running(text, upcoming is not None, bool(steps))
 
     @Slot(str)
     def _mini_load_preset(self, name: str) -> None:
@@ -5261,6 +5337,407 @@ class ControlPanel(QMainWindow):
         self._preset_dirty = False
         self._describe_preset_state()
         self._refresh_preset_combo(name)
+
+    # ---------------------------------------------------- running order ---- #
+
+    def _build_show_tab(self) -> QWidget:
+        self.show_store = ShowStore(SHOW_FILE)
+        self.show_tab = ShowTab(self.show_store, Icons, THEME, touch=self.touch_enabled())
+        self.show_tab.nextRequested.connect(self.show_next)
+        self.show_tab.backRequested.connect(self.show_back)
+        self.show_tab.restartRequested.connect(self.show_restart)
+        self.show_tab.goRequested.connect(self.show_go)
+        self.show_tab.captureRequested.connect(self._capture_show_step)
+        self.show_tab.remoteRequested.connect(self._open_remote_dialog)
+        self.show_tab.showSwitched.connect(self.show_restart)
+        self.show_tab.edited.connect(self._on_show_edited)
+        self.show_tab.set_running(-1)
+        return self.show_tab
+
+    def _show_output(self, role: str):
+        return getattr(self, self.OUTPUT_ATTRS[role], None)
+
+    def _on_show_edited(self) -> None:
+        """Steps added, moved or deleted mid-show: NOW stays on the step that is running."""
+        ids = [s["id"] for s in self.show_tab.steps()]
+        running = getattr(self, "_show_step_id", None)
+        if self.show_index >= 0:
+            self.show_index = ids.index(running) if running in ids else -1
+            if self.show_index < 0:
+                self.show_restart()
+                return
+        self.show_tab.set_running(self.show_index)
+        self._refresh_mini()
+
+    @Slot()
+    def show_next(self) -> None:
+        steps = self.show_tab.steps()
+        if self.show_index + 1 < len(steps):
+            self.show_go(self.show_index + 1)
+        elif steps:
+            self.statusBar().showMessage("That was the last step of the running order.", 5000)
+
+    @Slot()
+    def show_back(self) -> None:
+        if self.show_index > 0:
+            self.show_go(self.show_index - 1)
+
+    @Slot()
+    def show_restart(self) -> None:
+        """Back to before step 1. The stage is left as it is until NEXT."""
+        self.show_index = -1
+        self._show_auto = None
+        self._show_timer.stop()
+        self.show_tab.set_running(-1)
+        self.show_tab.set_clock(None, None)
+        self._refresh_mini()
+
+    @Slot(int)
+    def show_go(self, index: int) -> None:
+        """
+        Put step `index` on stage. Everything the step sets is done; everything
+        it leaves alone is brought to where the earlier steps put it, so a jump
+        or a step back lands exactly where walking there would have.
+        """
+        steps = self.show_tab.steps()
+        if not 0 <= index < len(steps):
+            return
+        target = show_fold(steps, index)
+        step = steps[index]
+        self._open_outputs_for(target)
+        problems = self._apply_show_state(target, step)
+        self.show_index = index
+        self._show_step_id = step["id"]
+        self._show_started = time.monotonic()
+        self._show_sound_started = step["sound"]["mode"] == "play" and not problems
+        self.show_tab.set_running(index)
+        self._show_tick()
+        self._show_timer.start(250)
+        self._refresh_mini()
+        message = f"Step {index + 1} of {len(steps)}: {step['title']}"
+        if problems:
+            message += "   —   " + "; ".join(problems)
+        self.statusBar().showMessage(message, 12000)
+
+    def _open_outputs_for(self, target: dict) -> None:
+        """A step that needs a screen that is closed opens the outputs, like OPEN OUTPUTS."""
+        needed = [role for role in STAGE_ROLES if target["screens"][role] is not None]
+        if target["text"] is not None and target["text"]["mode"] == "show":
+            needed.append(target["text"].get("target") or ROLE_MAIN)
+        if target["marquee"] is not None and target["marquee"]["mode"] == "start":
+            needed.append(ROLE_TOP)
+        closed = [role for role in needed if self._show_output(role) is None
+                  and self.routing_rows[role].screen_combo.currentData()]
+        if closed:
+            self._apply_routing()
+
+    @staticmethod
+    def _set_checked(button: QPushButton, checked: bool) -> None:
+        if button.isChecked() != checked:
+            button.setChecked(checked)          # emits, so the output follows
+
+    def _apply_show_state(self, target: dict, step: dict) -> List[str]:
+        problems: List[str] = []
+        fade = self.fade_ms()
+
+        # -- screens -- #
+        for role in STAGE_ROLES:
+            entry = target["screens"][role]
+            if entry is None:
+                continue
+            explicit = step["screens"][role]["mode"] != "keep"
+            card = self.cards[role]
+            window = self._show_output(role)
+            if window is None:
+                problems.append(f"{ROLE_LABELS[role]} is not open")
+                continue
+            if entry["mode"] == "black":
+                if card.current_path() or explicit:
+                    window.fade_clear(fade)
+                    card.reset_file()
+                continue
+            path = entry["path"]
+            if not path or not os.path.isfile(path):
+                problems.append(f"missing file {os.path.basename(path) or '(none chosen)'}")
+                continue
+            current = card.current_path()
+            same = bool(current) and os.path.normcase(os.path.abspath(current)) == \
+                os.path.normcase(os.path.abspath(path))
+            self._set_checked(card.repeat_btn, bool(entry["loop"]))
+            self._set_checked(card.mute_btn, not entry["audio"])
+            if same and (entry["loop"] or not explicit):
+                continue                    # already there: do not restart it
+            card.show_loaded(path)
+            card.loadRequested.emit(path)
+
+        # -- sound -- #
+        entry = target["sound"]
+        if entry is not None:
+            explicit = step["sound"]["mode"] != "keep"
+            active = self._show_players[self._show_active]
+            if entry["mode"] == "play":
+                playing_same = active.is_playing() and os.path.normcase(active.path) == \
+                    os.path.normcase(entry["path"] or "")
+                # a one-off fanfare from an earlier step is not replayed on a jump
+                wanted = (explicit and not (playing_same and entry["loop"])) or \
+                         (not explicit and entry["loop"] and not playing_same)
+                if wanted:
+                    problem = self._show_play(entry)
+                    if problem:
+                        problems.append(problem)
+            elif entry["mode"] in ("fade", "silence"):
+                for player in self._show_players:
+                    player.stop(1500)
+                if entry["mode"] == "silence":
+                    self.sound.stop_all(1500)
+
+        # -- words on screen -- #
+        entry = target["text"]
+        if entry is not None:
+            explicit = step["text"]["mode"] != "keep"
+            if entry["mode"] == "show":
+                role = entry.get("target") or ROLE_MAIN
+                key = (role, entry["title"], entry["subtitle"])
+                for other in STAGE_ROLES:
+                    window = self._show_output(other)
+                    if other != role and window is not None and window.slide_visible():
+                        window.hide_slide(max(120, fade // 2))
+                window = self._show_output(role)
+                if window is None:
+                    problems.append(f"{ROLE_LABELS[role]} is not open for the text")
+                elif explicit or self._show_text_shown != key or not window.slide_visible():
+                    window.set_slide_style(self.text_slides.style_dict())
+                    window.show_slide(entry["title"], entry["subtitle"], max(120, fade // 2))
+                    self._show_text_shown = key
+            else:
+                for window in self._outputs():
+                    if window.slide_visible():
+                        window.hide_slide(max(120, fade // 2))
+                self._show_text_shown = None
+
+        # -- ceiling marquee -- #
+        entry = target["marquee"]
+        if entry is not None:
+            explicit = step["marquee"]["mode"] != "keep"
+            top = self.top_output
+            if entry["mode"] == "start" and entry["text"].strip():
+                if self.top_card.text_edit.text() != entry["text"]:
+                    self.top_card.text_edit.setText(entry["text"])
+                if top is None:
+                    problems.append("Top Screen is not open for the marquee")
+                elif explicit or not top.is_marquee_running():
+                    self._start_marquee()
+            elif entry["mode"] == "stop" and top is not None and top.is_marquee_running():
+                self._stop_marquee()
+        return problems
+
+    def _show_play(self, entry: dict) -> Optional[str]:
+        """Fade the running order's music over to `entry`, on the other player."""
+        path = entry["path"]
+        if not path or not os.path.isfile(path):
+            return f"missing sound {os.path.basename(path) or '(none chosen)'}"
+        old = self._show_players[self._show_active]
+        new = self._show_players[1 - self._show_active]
+        try:
+            new.assign(path)
+        except MediaProblem as problem:
+            return f"{os.path.basename(path)}: {problem.title}"
+        new.set_master(self.sound_master.value())
+        new.set_level(int(entry.get("level", 90)))
+        new.set_loop(bool(entry["loop"]))
+        if old.is_playing() or old.is_paused():
+            old.stop(1200)
+        new.play()
+        self._show_active = 1 - self._show_active
+        return None
+
+    def _show_tick(self) -> None:
+        steps = self.show_tab.steps()
+        if not 0 <= self.show_index < len(steps):
+            self._show_timer.stop()
+            self.show_tab.set_clock(None, None)
+            self._show_auto = None
+            return
+        step = steps[self.show_index]
+        elapsed = time.monotonic() - self._show_started
+        has_next = self.show_index + 1 < len(steps)
+        advance = step["advance"]
+        remaining, note, go_on = None, "", False
+        if has_next and advance["mode"] == "after":
+            remaining = max(0.0, float(advance["seconds"]) - elapsed)
+            go_on = remaining <= 0
+        elif has_next and advance["mode"] == "video":
+            note = "goes on when the video ends"
+            window = self.main_output
+            status = getattr(QMediaPlayer, "MediaStatus", None)
+            end = getattr(status, "EndOfMedia", None)
+            go_on = window is not None and elapsed > 1.0 and \
+                window.engine.player.mediaStatus() == end
+        elif has_next and advance["mode"] == "sound":
+            note = "goes on when the sound ends"
+            player = self._show_players[self._show_active]
+            go_on = self._show_sound_started and elapsed > 1.0 and \
+                not player.is_playing() and not player.is_paused()
+        self._show_auto = remaining
+        self.show_tab.set_clock(elapsed, remaining, note)
+        if go_on:
+            self.show_next()
+
+    @Slot()
+    def _capture_show_step(self) -> None:
+        """A new step that recreates what is on stage right now."""
+        step = new_step(f"Step {len(self.show_tab.steps()) + 1}")
+        for role in STAGE_ROLES:
+            card = self.cards[role]
+            path = card.current_path()
+            if path:
+                step["screens"][role] = {"mode": "file", "path": path, "loop": card.is_repeating(),
+                                         "audio": not card.mute_btn.isChecked()}
+            elif self._show_output(role) is not None:
+                step["screens"][role]["mode"] = "black"
+        player = self._show_players[self._show_active]
+        if player.is_playing() and player.path:
+            step["sound"] = {"mode": "play", "path": player.path, "loop": player.loop, "level": player.level}
+        if self.top_output is not None and self.top_output.is_marquee_running():
+            step["marquee"] = {"mode": "start", "text": self.top_card.text_edit.text()}
+        self.show_tab.add_step(step)
+        self.statusBar().showMessage("Step added from what is on stage now - give it a name.", 6000)
+
+    # ------------------------------------------------------ phone remote --- #
+
+    def _restore_remote(self) -> None:
+        pin = str(self.settings.value("remote/pin", "") or "")
+        if len(pin) != 4 or not pin.isdigit():
+            pin = remote_mod.new_pin()
+            self.settings.setValue("remote/pin", pin)
+        self.remote.pin = pin
+        try:
+            self.remote.port = int(self.settings.value("remote/port", remote_mod.DEFAULT_PORT))
+        except (TypeError, ValueError):
+            self.remote.port = remote_mod.DEFAULT_PORT
+        self.remote.clientsChanged.connect(lambda _n: self._describe_remote())
+        if str(self.settings.value("remote/enabled", "false")).lower() == "true":
+            self.remote.start(self.remote.port)
+        self._describe_remote()
+
+    def _describe_remote(self) -> None:
+        if self.remote.running:
+            count = self.remote.clients()
+            self.show_tab.remote_btn.setText(f"  Phone remote · ON" + (f" ({count})" if count else ""))
+            self.show_tab.remote_btn.setStyleSheet(f"color: {CLR_OK}; font-weight: 600;")
+        else:
+            self.show_tab.remote_btn.setText("  Phone remote")
+            self.show_tab.remote_btn.setStyleSheet("")
+
+    @Slot()
+    def _open_remote_dialog(self) -> None:
+        if self._remote_dialog is None:
+            dialog = remote_mod.RemoteDialog(self.remote, THEME, self)
+            dialog.toggled.connect(self._toggle_remote)
+            dialog.portChanged.connect(lambda port: setattr(self.remote, "port", port))
+            dialog.pinRenewed.connect(self._renew_remote_pin)
+            self._remote_dialog = dialog
+        self._remote_dialog.refresh()
+        self._remote_dialog.show()
+        self._remote_dialog.raise_()
+
+    def _toggle_remote(self, on: bool) -> None:
+        error = ""
+        if on:
+            error = self.remote.start(self.remote.port) or ""
+            self.settings.setValue("remote/port", self.remote.port)
+        else:
+            self.remote.stop()
+        self.settings.setValue("remote/enabled", "true" if self.remote.running else "false")
+        if self._remote_dialog is not None:
+            self._remote_dialog.refresh(error)
+        self._describe_remote()
+
+    def _renew_remote_pin(self) -> None:
+        self.remote.pin = remote_mod.new_pin()
+        self.settings.setValue("remote/pin", self.remote.pin)
+        if self._remote_dialog is not None:
+            self._remote_dialog.refresh()
+
+    def remote_state(self) -> dict:
+        """Everything the phone page draws, in one small JSON object."""
+        steps = self.show_tab.steps()
+        index = self.show_index if self.show_index < len(steps) else -1
+        screens = []
+        for role in STAGE_ROLES:
+            path = self.cards[role].current_path()
+            screens.append({"role": role, "label": ROLE_LABELS[role],
+                            "open": self._show_output(role) is not None,
+                            "file": os.path.basename(path) if path else ""})
+        cues = [{"index": cue.index, "label": cue.label(), "filled": bool(cue.path),
+                 "playing": cue.is_playing(), "paused": cue.is_paused()} for cue in self.sound.cues]
+        return {
+            "show": {"name": self.show_store.current, "index": index,
+                     "steps": [{"title": s["title"] or "Untitled", "notes": s["notes"],
+                                "summary": step_summary(s)} for s in steps],
+                     "elapsed": time.monotonic() - self._show_started if index >= 0 else 0,
+                     "auto": self._show_auto if index >= 0 else None},
+            "screens": screens,
+            "cues": cues,
+            "presets": self.presets.names(),
+            "preset": self.loaded_preset or "",
+            "master": self.sound_master.value(),
+        }
+
+    def remote_action(self, action: str, data: dict):
+        """One tap on the phone. Returns (ok, message for the phone)."""
+        steps = self.show_tab.steps()
+        if action == "next":
+            if self.show_index + 1 >= len(steps):
+                return False, "That was the last step."
+            self.show_next()
+            return True, f"{self.show_index + 1}. {steps[self.show_index]['title']}"
+        if action == "back":
+            if self.show_index <= 0:
+                return False, "Already at the first step."
+            self.show_back()
+            return True, f"{self.show_index + 1}. {steps[self.show_index]['title']}"
+        if action == "goto":
+            try:
+                index = int(data.get("index", -1))
+            except (TypeError, ValueError):
+                index = -1
+            if not 0 <= index < len(steps):
+                return False, "No such step."
+            self.show_go(index)
+            return True, f"{index + 1}. {steps[index]['title']}"
+        if action == "restart":
+            self.show_restart()
+            return True, "Ready - NEXT starts step 1."
+        if action == "blackout":
+            self._blackout_all()
+            return True, "Blackout."
+        if action == "cue":
+            try:
+                index = int(data.get("index", -1))
+            except (TypeError, ValueError):
+                index = -1
+            if not 0 <= index < len(self.sound.cues) or not self.sound.cues[index].path:
+                return False, "That sound pad is empty."
+            self._fire_cue(index)
+            return True, ""
+        if action == "silence":
+            self._stop_all_sound()
+            return True, "Fading out all sound."
+        if action == "master":
+            try:
+                self.sound_master.setValue(max(0, min(100, int(data.get("value", 90)))))
+            except (TypeError, ValueError):
+                return False, "Bad volume."
+            return True, ""
+        if action == "preset":
+            name = str(data.get("name", ""))
+            if name not in self.presets.names():
+                return False, "No such preset."
+            # later, so a dialog about a missing file cannot hold the phone's answer
+            QTimer.singleShot(0, lambda: self._mini_load_preset(name))
+            return True, f"Loading {name}."
+        return False, "Unknown action."
 
     # ------------------------------------------------------ text slides ---- #
 
@@ -5553,6 +6030,8 @@ class ControlPanel(QMainWindow):
         if device is None:
             device = QMediaDevices.defaultAudioOutput()
         self.sound.set_device(device)
+        for player in self._show_players:
+            player.set_device(device)
         for window in self._outputs():
             window.engine.set_device(device)
 
@@ -5566,6 +6045,8 @@ class ControlPanel(QMainWindow):
     @Slot(int)
     def _on_master_volume(self, value: int) -> None:
         self.sound.set_master(value)
+        for player in self._show_players:
+            player.set_master(value)
         self.settings.setValue("sound/master", value)
 
     def _refresh_cue_pads(self) -> None:
@@ -5617,6 +6098,8 @@ class ControlPanel(QMainWindow):
     @Slot()
     def _stop_all_sound(self) -> None:
         self.sound.stop_all()
+        for player in self._show_players:
+            player.stop()
         self.statusBar().showMessage("All sound cues fading out.", 4000)
 
     def _on_cue_failed(self, index: int, message: str) -> None:
@@ -5702,6 +6185,10 @@ class ControlPanel(QMainWindow):
             ("Ctrl+Right", lambda: self.text_slides.step(1)),
             ("Ctrl+Left", lambda: self.text_slides.step(-1)),
             ("Ctrl+H", self._hide_slide),
+            # What a wireless presenter clicker sends: the running order
+            # can be walked from the back of the hall.
+            ("PgDown", self.show_next),
+            ("PgUp", self.show_back),
         )
         bindings += tuple(
             (f"F{slot + 1}", lambda i=slot: self._fire_cue(i))
@@ -6876,6 +7363,10 @@ class ControlPanel(QMainWindow):
                 return
 
         self.sound.stop_all(0)
+        for player in self._show_players:
+            player.stop(0)
+        self.remote.stop()
+        self.show_store.save()
         if self.dj_panel:
             self.dj_panel.shutdown()
         if self.mini is not None:

@@ -69,6 +69,10 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **DJ desk** — two animated turntables with beat-grid waveforms, sync, loops
   and hot cues, a kill-EQ/filter/echo mixer with headphone cue and recording,
   and a synthesised techno machine (drums + acid bass) that can lock to a deck.
+- **Running order** — an event as steps (screens, sound, text, marquee, notes,
+  auto-advance), run with one NEXT button, `Page Down` or a presenter clicker.
+- **Phone remote** — NEXT, BLACKOUT, sound cues and presets from any phone on
+  the Wi-Fi, behind a PIN.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -114,6 +118,62 @@ blacks out the hall.
 | `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
+| `Page Down` / `Page Up` | next / previous step of the running order — what a wireless presenter clicker sends |
+
+## Running order (one button: NEXT)
+
+![Show tab](docs/show.png)
+
+The **Show** tab turns an event into a list of steps — *Doors open, Welcome,
+Anthem, Director's speech, Awards, Closing* — and runs it with one button. Each
+step says what happens, and everything it does not mention is left alone:
+
+- **each screen** (Main, Sides, Top): show a file (repeat or play once, with or
+  without the video's own sound), go black, or leave it.
+- **sound**: play a file (it fades over from whatever the previous step was
+  playing), fade the music out, fade out *all* sound, or leave it.
+- **words on screen**: show a name (and a second line) on any screen, styled as
+  on the Text tab, or hide it.
+- **the ceiling marquee**: scroll a text, or stop.
+- **then**: wait for NEXT, go on by itself after so many seconds, or when the
+  Main Stage video or the step's sound ends.
+- **notes** for whoever runs the show — who speaks, what to wait for — shown
+  large under NOW.
+
+During the event: **NEXT** (the big button, `Page Down`, a presenter clicker,
+the compact bar, or the phone) runs the next step; **Back** goes one step back;
+double-click any step (or *Go to this step*) jumps to it. Back and jumps land
+exactly where walking there would have: the app replays what the earlier steps
+set up, and leaves anything already right untouched — a background that is
+already playing is not restarted, and a one-off fanfare from an earlier step is
+not replayed. NOW and NEXT are shown at the top with a countdown when a step
+goes on by itself; closed outputs open by themselves when a step needs them.
+
+**From stage** adds a step that recreates whatever is on the screens right now
+— set the look up on the Live tab, capture it, name it. Steps can be reordered
+(▲ ▼ or drag), duplicated and deleted, also while the show runs: NOW stays on
+the step that is actually running. Running orders are saved as you edit, in
+`shows.json` next to the app, and can be copied for the next event. Missing
+files are flagged in the toolbar before the show, not during it.
+
+## Phone remote
+
+**Show → Phone remote** puts the running order on any phone or tablet on the
+same Wi-Fi — nothing to install: switch it on, open the address it shows (for
+example `http://192.168.1.23:8765`) in the phone's browser, and type the
+four-digit PIN once.
+
+- **SHOW**: NOW with the step's notes and running time, a thumb-sized **NEXT**,
+  Back, Start over, and the whole running order — tap a step, then GO.
+- **STAGE**: BLACKOUT, which file each screen shows, the eight sound cues
+  (tap to play / pause), Silence, the master volume, and the presets.
+
+It is off until switched on, and it stays on across restarts once it is. Every
+request needs the PIN; *New PIN* locks out phones that knew the old one; an
+address that gets the PIN wrong five times is locked out for a minute. A double
+tap on NEXT cannot skip a step. The first time it is switched on, Windows asks
+whether Python may use the network — allow it on private networks. The page can
+be added to the phone's home screen as a shortcut.
 
 ## Building a show from a folder
 
@@ -446,5 +506,13 @@ only imported the first time its tab opens:
 | `dj_decoder.py` | the decoder process: QAudioDecoder into shared memory, waveform levels as it goes, tempo at the end |
 | `dj.py` | the DJ tab: `Platter`, `WaveDetail`, `BeatBar`, `WaveOverview`, `Knob`, `Fader`, `Meter`, `StepGrid`, deck/mixer/machine/crate views, and `TouchInput`, which gives every control touch, long-press and double-tap |
 
-`presets.json` is deliberately git-ignored: it holds absolute paths to media on
-one particular machine.
+The running order and the remote are separate modules too; the dashboard
+(`ControlPanel`) runs the steps and answers the phone:
+
+| Module | Role |
+| --- | --- |
+| `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
+| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out), `RemoteDialog`, and the phone page itself |
+
+`presets.json` and `shows.json` are deliberately git-ignored: they hold absolute
+paths to media on one particular machine.
