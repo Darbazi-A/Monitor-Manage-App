@@ -165,7 +165,7 @@ files are flagged in the toolbar before the show, not during it.
 
 ## Slides (presentations)
 
-![Slides tab](docs/slides.png)
+![Slides tab](docs/presentation.png)
 
 The **Slides** tab shows a presentation on any stage screen without leaving the
 app — no PowerPoint window on the stage, no switching programs.
