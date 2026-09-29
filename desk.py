@@ -19,7 +19,7 @@ from typing import Callable, Dict, List, Optional
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QToolTip, QVBoxLayout, QWidget)
 
 STATE_CLOSED = "closed"        # no window on that screen
 STATE_BLACK = "black"          # window open, nothing on it
@@ -785,3 +785,85 @@ class ShortcutsDialog(QDialog):
         close.clicked.connect(self.accept)
         box.addSpacing(10)
         box.addWidget(close, 0, Qt.AlignRight)
+
+
+# --------------------------------------------------------------------------- #
+# Hold to confirm
+# --------------------------------------------------------------------------- #
+
+class HoldButton(QPushButton):
+    """
+    For what cannot be taken back: it acts only when held for a moment, a bar
+    filling while it is held, so a stray tap - or a sleeve on the touch screen
+    - does nothing. With `set_hold(False)` it is an ordinary button again.
+    """
+
+    HOLD_MS = 800
+
+    def __init__(self, text: str, theme: dict, parent=None) -> None:
+        super().__init__(text, parent)
+        self.theme = theme
+        self.hold = True
+        self._progress = 0.0
+        self._started = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
+
+    def set_hold(self, on: bool) -> None:
+        self.hold = on
+        self._reset()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if not self.hold or event.button() != Qt.LeftButton or not self.isEnabled():
+            super().mousePressEvent(event)
+            return
+        self._started = time.monotonic()
+        self._progress = 0.0
+        self._timer.start()
+        self.setDown(True)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if not self.hold:
+            super().mouseReleaseEvent(event)
+            return
+        early = self._timer.isActive()
+        self._reset()
+        if early:
+            QToolTip.showText(self.mapToGlobal(QPointF(0, self.height()).toPoint()),
+                              "Hold it down for a moment to confirm", self)
+        event.accept()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self.hold and event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            event.ignore()               # no confirming by keyboard by accident
+            return
+        super().keyPressEvent(event)
+
+    def _tick(self) -> None:
+        self._progress = min(1.0, (time.monotonic() - self._started) * 1000.0 / self.HOLD_MS)
+        self.update()
+        if self._progress >= 1.0:
+            self._reset()
+            self.clicked.emit()
+
+    def _reset(self) -> None:
+        self._timer.stop()
+        self._progress = 0.0
+        self.setDown(False)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._progress <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 9, 9)
+        p.setClipPath(clip)
+        colour = QColor(self.theme["danger"])
+        colour.setAlpha(110)
+        p.fillRect(QRectF(0, 0, self.width() * self._progress, self.height()), colour)
+        p.end()

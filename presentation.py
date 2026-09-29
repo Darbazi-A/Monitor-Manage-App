@@ -27,6 +27,7 @@ from typing import Callable, Dict, List, Optional
 from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QProcess, QProcessEnvironment,
                             QRectF, QSize, QSizeF, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QImageReader, QPainter, QPen, QPixmap
+from desk import HoldButton
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFrame, QHBoxLayout, QLabel, QListView, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
@@ -611,6 +612,7 @@ class Presenter(QObject):
         self.fade_ms = 250
         self.started = 0.0
         self.in_powerpoint = True
+        self.rehearsing = False             # rehearsal: pictures, PowerPoint would open on the stage first
         self.show: Optional[PowerPointShow] = None
         self.at_end = False
         self._seen = None
@@ -655,8 +657,8 @@ class Presenter(QObject):
         return bool(self.count()) or self._wants_powerpoint()
 
     def _wants_powerpoint(self) -> bool:
-        return bool(self.in_powerpoint and self.deck is not None and self.deck.kind == "powerpoint"
-                    and powerpoint_available())
+        return bool(self.in_powerpoint and not self.rehearsing and self.deck is not None
+                    and self.deck.kind == "powerpoint" and powerpoint_available())
 
     def _on_progress(self) -> None:
         if self._live_when_ready and (self.count() or self._wants_powerpoint()):
@@ -1057,7 +1059,7 @@ class PresentationTab(QWidget):
         column.addLayout(nav)
         stage_row = QHBoxLayout()
         stage_row.setSpacing(8)
-        self.live_btn = QPushButton()
+        self.live_btn = HoldButton("", theme)       # ending a talk by accident: hold to end
         self.live_btn.setMinimumHeight(46)
         self.live_btn.clicked.connect(self._toggle_live)
         stage_row.addWidget(self.live_btn, 3)
@@ -1285,8 +1287,9 @@ class PresentationTab(QWidget):
                 self.show_status(f"{deck.name}  ·  {count} slides  ·  PowerPoint {state}", self.theme["accent"])
             else:
                 self.show_status(f"{deck.name}  ·  {count} slides", "")
+        self.live_btn.set_hold(presenter.live)
         if presenter.live:
-            self.live_btn.setText(f"  End  ·  back to the {role_label} background")
+            self.live_btn.setText(f"  End  ·  back to the {role_label} background   (hold)")
             self.live_btn.setIcon(self.icons.get("stop", self.theme["danger"], 16))
             self.live_btn.setObjectName("danger")
         else:

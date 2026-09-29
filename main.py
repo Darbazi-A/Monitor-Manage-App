@@ -1570,7 +1570,13 @@ class MediaEngine(QObject):
         self._audio.setVolume(max(0, min(100, percent)) / 100.0)
 
     def set_muted(self, muted: bool) -> None:
-        self._audio.setMuted(muted)
+        self._wanted_muted = muted
+        self._audio.setMuted(muted or getattr(self, "_silenced", False))
+
+    def set_silenced(self, silenced: bool) -> None:
+        """Rehearsal: no sound, whatever the card's mute button says."""
+        self._silenced = silenced
+        self._audio.setMuted(silenced or getattr(self, "_wanted_muted", False))
 
     def set_loop(self, enabled: bool) -> None:
         self._loop = enabled
@@ -1706,10 +1712,32 @@ class SoundCue(QObject):
     def target_volume(self) -> float:
         return (self.level / 100.0) * (self._master / 100.0)
 
+    # Rehearsal: a sound started now is kept away from the hall - silent, or on
+    # the device given here - and stopped when the rehearsal ends. Sounds that
+    # were already playing for the hall are left alone.
+    rehearsal = None            # None | "silent" | a QAudioDevice
+    started_in_rehearsal = False
+
+    def end_rehearsal(self, device) -> None:
+        if self.started_in_rehearsal:
+            self.stop(0)
+        self.started_in_rehearsal = False
+        self.rehearsal = None
+        self._audio.setMuted(False)
+        if device is not None:
+            self._audio.setDevice(device)
+
     def play(self) -> None:
         """Start, or pick up where a pause left off."""
         if not self.path:
             return
+        if self.rehearsal is not None and not self.is_playing() and not self.is_paused():
+            self.started_in_rehearsal = True
+            if self.rehearsal == "silent":
+                self._audio.setMuted(True)
+            else:
+                self._audio.setDevice(self.rehearsal)
+                self._audio.setMuted(False)
         self._fade.stop()
         self._fade_mode = None
         self._apply_loop()
@@ -2350,6 +2378,10 @@ class SceneOutputWindow(BaseOutputWindow):
         self._still_anim.valueChanged.connect(lambda value: self._still_item.setOpacity(float(value)))
         self._still_anim.finished.connect(self._after_dissolve)
 
+        # Rehearsal windows lay the scene out at the real stage size and scale
+        # the view down, so text and marquee sizes look exactly as on stage.
+        self._virtual: Optional[QSize] = None
+
         self._slide_style = {
             "family": "", "title_px": 84, "subtitle_px": 44,
             "colour": "#ffffff", "subtitle_colour": "#cfd8e6",
@@ -2506,8 +2538,19 @@ class SceneOutputWindow(BaseOutputWindow):
         super().resizeEvent(event)
         self._relayout()
 
+    def set_virtual_size(self, size: QSize) -> None:
+        self._virtual = QSize(size)
+        self._view.setAlignment(Qt.AlignCenter)
+        self._relayout()
+
     def _relayout(self) -> None:
         size = self._view.viewport().size()
+        if self._virtual is not None and not self._virtual.isEmpty():
+            if size.width() > 0 and size.height() > 0:
+                scale = min(size.width() / self._virtual.width(), size.height() / self._virtual.height())
+                self._view.resetTransform()
+                self._view.scale(scale, scale)
+            size = self._virtual
         rect = QRectF(0, 0, size.width(), size.height())
         self._scene.setSceneRect(rect)
         self._bg_item.setRect(rect)
@@ -2712,10 +2755,21 @@ class SceneOutputWindow(BaseOutputWindow):
         This is the piece a crossfade is built on, and the reason every output
         goes through a graphics scene rather than a QVideoWidget.
         """
+        if self._virtual is not None:
+            # scene coordinates are the stage's; a grab of the small view would not fit them
+            self._still_item.setVisible(False)
+            still = self.preview(self._virtual)
+            return still
         try:
             return self.grab()
         except Exception:
             return QPixmap()
+
+    def slide_state(self) -> Optional[tuple]:
+        """The name on screen (title, subtitle), or None."""
+        if not self._slide_wanted:
+            return None
+        return (self._slide_title.text(), self._slide_subtitle.text())
 
     def preview(self, size: QSize) -> QPixmap:
         """
@@ -2751,6 +2805,111 @@ class TopOutputWindow(SceneOutputWindow):
     Identical machinery to any other output; this is where the marquee is
     actually used, composited over whatever background is running.
     """
+
+
+# --------------------------------------------------------------------------- #
+# Rehearsal
+# --------------------------------------------------------------------------- #
+
+class AspectHolder(QWidget):
+    """Keeps one child at a fixed shape, centred, however the space around it changes."""
+
+    def __init__(self, child: QWidget, aspect: float) -> None:
+        super().__init__()
+        self.child = child
+        self.aspect = aspect
+        child.setParent(self)
+        self.setMinimumSize(120, 20)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        width, height = self.width(), self.height()
+        child_w = min(width, height * self.aspect)
+        child_h = child_w / self.aspect
+        # centred across, but right under its caption
+        self.child.setGeometry(int((width - child_w) / 2), 0, max(1, int(child_w)), max(1, int(child_h)))
+
+
+class RehearsalMonitor(QWidget):
+    """
+    Rehearsal: the three stage screens in one window on the desk.
+
+    While it is open the dashboard drives these instead of the stage - presets,
+    the running order, names, slides - at the stage's real sizes, scaled down.
+    The hall keeps whatever it had, and new sounds stay silent (or go to a
+    device of the operator's choosing, headphones say).
+    """
+
+    endRequested = Signal()
+    soundChosen = Signal(str)          # "" = silent, else a device description
+
+    def __init__(self, sizes: Dict[str, QSize]) -> None:
+        super().__init__(None, Qt.Window)
+        self.setWindowTitle("Rehearsal - nothing reaches the stage")
+        if os.path.exists(ICON_FILE):
+            self.setWindowIcon(QIcon(ICON_FILE))
+        self.resize(1200, 760)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        tag = QLabel("REHEARSAL")
+        tag.setStyleSheet(f"color: {THEME['rehearse']}; font-weight: 800; letter-spacing: 1px;"
+                          f"border: 1px solid {THEME['rehearse']}; border-radius: 9px; padding: 3px 10px;")
+        head.addWidget(tag)
+        note = QLabel("The dashboard drives these screens now; the hall keeps what it had. "
+                      "Slides show as pictures here.")
+        note.setObjectName("cardHint")
+        head.addWidget(note, 1)
+        head.addWidget(QLabel("Sound"))
+        self.sound_combo = QComboBox()
+        self.sound_combo.addItem("Silent", "")
+        from PySide6.QtMultimedia import QMediaDevices
+        for device in QMediaDevices.audioOutputs():
+            self.sound_combo.addItem(device.description(), device.description())
+        self.sound_combo.setToolTip("New sounds started while rehearsing: silent, or on a device of your choice\n"
+                                    "(headphones) - never the hall unless you pick it.")
+        self.sound_combo.currentIndexChanged.connect(
+            lambda _i: self.soundChosen.emit(self.sound_combo.currentData() or ""))
+        head.addWidget(self.sound_combo)
+        end = QPushButton("  End rehearsal")
+        end.setIcon(Icons.get("close", CLR_TEXT, 15))
+        end.clicked.connect(self.endRequested.emit)
+        head.addWidget(end)
+        root.addLayout(head)
+
+        self.outputs: Dict[str, SceneOutputWindow] = {}
+        screens = QHBoxLayout()
+        screens.setSpacing(12)
+        strip = QVBoxLayout()
+        for role, cls in ((ROLE_MAIN, StandardOutputWindow), (ROLE_SIDES, StandardOutputWindow),
+                          (ROLE_TOP, TopOutputWindow)):
+            window = cls(f"{ROLE_LABELS[role]} (rehearsal)")
+            window.setWindowFlags(Qt.Widget)
+            window.setCursor(Qt.ArrowCursor)
+            window.setFocusPolicy(Qt.NoFocus)
+            window._view.setFocusPolicy(Qt.NoFocus)
+            size = sizes[role]
+            window.set_virtual_size(size)
+            self.outputs[role] = window
+            box = QVBoxLayout()
+            box.setSpacing(4)
+            caption = QLabel(f"{ROLE_LABELS[role].upper()}   {size.width()}×{size.height()}")
+            caption.setObjectName("sectionTitle")
+            box.addWidget(caption)
+            box.addWidget(AspectHolder(window, size.width() / max(1, size.height())), 1)
+            if role == ROLE_TOP:
+                strip.addLayout(box)
+            else:
+                screens.addLayout(box, 1)
+        root.addLayout(screens, 5)
+        root.addLayout(strip, 1)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        event.ignore()                     # closing the window ends the rehearsal properly
+        self.endRequested.emit()
 
 
 # --------------------------------------------------------------------------- #
@@ -4315,8 +4474,8 @@ class OutputCard(QFrame):
 
     @Slot()
     def _on_clear(self) -> None:
+        self.clearRequested.emit()      # first: an undo can still see what was there
         self.reset_file()
-        self.clearRequested.emit()
 
     @Slot(bool)
     def _on_repeat_toggled(self, enabled: bool) -> None:
@@ -5159,7 +5318,7 @@ class SlideStage:
     def _rect(self, role: str) -> Optional[QRect]:
         window = self.panel._show_output(role)
         if window is not None and window.isVisible():
-            return window.geometry()
+            return QRect(window.mapToGlobal(QPoint(0, 0)), window.size())
         name = self.panel.routing_rows[role].screen_combo.currentData()
         screen = next((s for s in QGuiApplication.screens() if s.name() == name), None)
         return screen.geometry() if screen is not None else None
@@ -5285,6 +5444,8 @@ class ControlPanel(QMainWindow):
         self._pending_change: Optional[dict] = None
         self._direct_depth = 0          # >0 while a TAKE, a step or an undo is changing the stage
         self._ready_dialog = None
+        self._undo_snapshot: Optional[dict] = None
+        self._rehearsal: Optional[RehearsalMonitor] = None
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -5294,6 +5455,7 @@ class ControlPanel(QMainWindow):
         self.take_bar = desk_mod.TakeBar(Icons, THEME)
         self.take_bar.takeRequested.connect(self._take)
         self.take_bar.cancelRequested.connect(self._cancel_take)
+        self.take_bar.undoRequested.connect(self._undo)
         root.addWidget(self.take_bar)
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
@@ -5431,6 +5593,13 @@ class ControlPanel(QMainWindow):
         self.preview_btn.setChecked(self.preview_first)
         self.preview_btn.toggled.connect(self._set_preview_first)
         top_row.addWidget(self.preview_btn)
+        self.rehearse_btn = QPushButton("  Rehearse")
+        self.rehearse_btn.setCheckable(True)
+        self.rehearse_btn.setIcon(Icons.get("play", CLR_TEXT, 15))
+        self.rehearse_btn.setToolTip("Try the show out in a window on this desk: presets, running order, names and\n"
+                                     "slides go there instead of the stage, and the hall keeps what it has.")
+        self.rehearse_btn.clicked.connect(self._toggle_rehearsal)
+        top_row.addWidget(self.rehearse_btn)
         ready = QPushButton("  Ready check")
         ready.setIcon(Icons.get("list", CLR_TEXT, 15))
         ready.setToolTip("Screens, sound, clicker, files - everything worth knowing before the doors open")
@@ -5538,6 +5707,8 @@ class ControlPanel(QMainWindow):
         renamed or rebuilt by a stray tap.
         """
         mode = "show" if mode == "show" else "setup"
+        if mode == "show" and self._rehearsal is not None:
+            self.end_rehearsal()
         self.ui_mode = mode
         self.settings.setValue("ui/mode", mode)
         show = mode == "show"
@@ -5550,6 +5721,7 @@ class ControlPanel(QMainWindow):
             if index >= 0:
                 self.tabs.setTabVisible(index, not show)
         self.open_btn.setVisible(not show)
+        self.rehearse_btn.setVisible(not show)
         for widget in getattr(self, "_preset_edit_widgets", []):
             widget.setVisible(not show)
         self.show_tab.set_locked(show)
@@ -5589,16 +5761,244 @@ class ControlPanel(QMainWindow):
         Every change made by hand comes through here: straight on stage, or -
         with PREVIEW -> TAKE on - into the bar under the header until TAKE.
         """
-        if self.preview_first and self._direct_depth == 0 and self.isVisible():
+        if self._direct_depth > 0:
+            apply()                     # part of a TAKE, a step or an undo already under way
+            return
+        if self.preview_first and self.isVisible():
             self._pending_change = {"title": title, "apply": apply, "thumb": thumb}
             self.take_bar.show_pending(title, detail, thumb)
             self._sync_take_keys()
             return
-        self._run_change(title, apply, thumb)
+        self._record_change(title, apply, thumb)
 
-    def _run_change(self, title: str, apply: Callable[[], None], thumb: Optional[QPixmap]) -> None:
+    def _record_change(self, title: str, apply: Callable[[], None], thumb: Optional[QPixmap] = None) -> None:
+        """Change the stage, keeping what was there so Undo can put it back for a few seconds."""
+        if self._direct_depth > 0:
+            apply()
+            return
+        before = self._stage_snapshot()
         with self._direct():
             apply()
+        self._undo_snapshot = before
+        self.take_bar.show_done(title, thumb)
+
+    def _stage_snapshot(self) -> dict:
+        screens = {}
+        for role in STAGE_ROLES:
+            card = self.cards[role]
+            window = self._show_output(role)
+            screens[role] = {
+                "path": card.current_path(), "loop": card.is_repeating(), "muted": card.mute_btn.isChecked(),
+                "scale": card.current_scale_mode(),
+                "slide": window.slide_state() if window is not None else None,
+                "colour": window._bg_color.name() if window is not None else None,
+            }
+        top = self.top_output
+        return {"screens": screens,
+                "marquee": {"running": bool(top and top.is_marquee_running()),
+                            "text": self.top_card.text_edit.text()},
+                "preset": (self.loaded_preset, self._preset_dirty)}
+
+    @Slot()
+    def _undo(self) -> None:
+        """Put the stage back to how it was before the last change made by hand."""
+        snapshot = self._undo_snapshot
+        if snapshot is None or not self.take_bar.undo_available():
+            self.statusBar().showMessage("Nothing to undo.", 3000)
+            return
+        self._undo_snapshot = None
+        self.take_bar.forget_undo()
+        fade = self.fade_ms()
+        with self._direct():
+            for role, want in snapshot["screens"].items():
+                card = self.cards[role]
+                window = self._show_output(role)
+                if window is None:
+                    continue
+                if want["colour"] and want["colour"] != window._bg_color.name():
+                    window.set_background_color(QColor(want["colour"]))
+                if want["path"] != card.current_path():
+                    card.set_scale_mode(want["scale"])
+                    self._set_checked(card.repeat_btn, want["loop"])
+                    self._set_checked(card.mute_btn, want["muted"])
+                    if want["path"] and os.path.isfile(want["path"]):
+                        card.loadRequested.emit(want["path"])
+                    else:
+                        window.fade_clear(fade)
+                        card.reset_file()
+                if want["slide"] != window.slide_state():
+                    if want["slide"]:
+                        window.set_slide_style(self.text_slides.style_dict())
+                        window.show_slide(want["slide"][0], want["slide"][1], max(120, fade // 2))
+                    else:
+                        window.hide_slide(max(120, fade // 2))
+            marquee = snapshot["marquee"]
+            top = self.top_output
+            if top is not None and marquee["running"] != top.is_marquee_running():
+                if marquee["running"]:
+                    self.top_card.text_edit.setText(marquee["text"])
+                    self._start_marquee()
+                else:
+                    self._stop_marquee()
+        self.loaded_preset, self._preset_dirty = snapshot["preset"]
+        self._describe_preset_state()
+        self.statusBar().showMessage("Undone - the stage is back to how it was.", 5000)
+
+    # -- rehearsal --------------------------------------------------------------- #
+
+    def _stage_size(self, role: str) -> QSize:
+        config = self.routing_rows[role].config()
+        if config.custom and config.width > 0 and config.height > 0:
+            return QSize(config.width, config.height)
+        screen = self._screen_by_name(config.screen_name)
+        if screen is not None:
+            return screen.geometry().size()
+        return QSize(DEFAULT_TOP_WIDTH, DEFAULT_TOP_HEIGHT) if role == ROLE_TOP else QSize(1920, 1080)
+
+    @Slot()
+    def _toggle_rehearsal(self) -> None:
+        if self._rehearsal is None:
+            self.start_rehearsal()
+        else:
+            self.end_rehearsal()
+
+    def start_rehearsal(self) -> None:
+        """
+        Swap the stage windows for three in a desk window. Everything that drives
+        a screen goes through the same attributes, so the whole dashboard follows
+        without knowing; the real windows keep playing what they had.
+        """
+        if self._rehearsal is not None:
+            return
+        if self.presenter.live:
+            self.rehearse_btn.setChecked(False)
+            QMessageBox.information(self, "Rehearsal", "A presentation is on the stage. End it first, "
+                                    "then rehearse - the rehearsal must not take it off the screen.")
+            return
+        if self._pending_change is not None:
+            self._cancel_take()
+        self._rehearsal_before = {
+            "snapshot": self._stage_snapshot(),
+            "outputs": {role: self._show_output(role) for role in STAGE_ROLES},
+            "show": (self.show_index, getattr(self, "_show_step_id", None), self._show_started),
+            "players": (self._show_players, self._show_active),
+        }
+        monitor = RehearsalMonitor({role: self._stage_size(role) for role in STAGE_ROLES})
+        monitor.endRequested.connect(self.end_rehearsal)
+        monitor.soundChosen.connect(self._set_rehearsal_sound)
+        for role, window in monitor.outputs.items():
+            card = self.cards[role]
+            player = window.engine.player
+            player.positionChanged.connect(card.set_position)
+            player.durationChanged.connect(card.set_duration)
+            card.seekRequested.connect(player.setPosition)
+            window.engine.errorOccurred.connect(lambda message, bound=role: self._on_engine_error(bound, message))
+            window.engine.set_loop(card.is_repeating())
+            window.engine.set_volume(card.volume_slider.value())
+            window.engine.set_muted(card.mute_btn.isChecked())
+            window.set_scale_mode(card.current_scale_mode())
+            setattr(self, self.OUTPUT_ATTRS[role], window)
+        self._rehearsal = monitor
+        # the running order gets its own music players, so the hall's keep playing
+        self._show_players = [SoundCue(-3, self), SoundCue(-4, self)]
+        self._show_active = 0
+        for player in self._show_players:
+            player.set_master(self.sound_master.value())
+        self.presenter.rehearsing = True
+        self._set_rehearsal_sound("")
+        self._push_top_settings()
+        self._freshly_opened = set(STAGE_ROLES)
+        self._restore_media_to_outputs()        # start from what the stage shows now
+        self._freshly_opened = set()
+        monitor.show()
+        self.rehearse_btn.setChecked(True)
+        self.rehearse_btn.setText("  End rehearsal")
+        self._update_output_status()
+        self.statusBar().showMessage("REHEARSAL - everything goes to the rehearsal window; the stage is untouched.",
+                                     10000)
+
+    def _set_rehearsal_sound(self, device_name: str) -> None:
+        from PySide6.QtMultimedia import QMediaDevices
+
+        device = next((d for d in QMediaDevices.audioOutputs() if d.description() == device_name), None) \
+            if device_name else None
+        mode = device if device is not None else "silent"
+        for cue in list(self.sound.cues) + list(self._show_players):
+            cue.rehearsal = mode
+        for role in STAGE_ROLES:
+            window = self._show_output(role)
+            if window is None:
+                continue
+            window.engine.set_silenced(device is None)
+            if device is not None:
+                window.engine.set_device(device)
+
+    def end_rehearsal(self) -> None:
+        """Give the dashboard back the stage windows - which never stopped showing what they had."""
+        monitor = self._rehearsal
+        if monitor is None:
+            return
+        before = self._rehearsal_before
+        if self.presenter.live:
+            self.presenter.end()
+        from PySide6.QtMultimedia import QMediaDevices
+
+        wanted = self.audio_device_combo.currentData()
+        device = next((d for d in QMediaDevices.audioOutputs() if d.description() == wanted), None) \
+            if wanted else QMediaDevices.defaultAudioOutput()
+        for cue in self.sound.cues:
+            cue.end_rehearsal(device)
+        for player in self._show_players:
+            player.stop(0)
+            player.deleteLater()
+        self._show_players, self._show_active = before["players"]
+        for role in STAGE_ROLES:
+            window = self._show_output(role)
+            if window is not None:
+                window.engine.clear()
+            setattr(self, self.OUTPUT_ATTRS[role], before["outputs"][role])
+        self._rehearsal = None
+        self.presenter.rehearsing = False
+        monitor.hide()
+        monitor.deleteLater()
+
+        # the cards go back to describing the stage - without touching it
+        snapshot = before["snapshot"]
+        for role, want in snapshot["screens"].items():
+            card = self.cards[role]
+            card.blockSignals(True)
+            card.set_scale_mode(want["scale"])
+            card.blockSignals(False)
+            for button, value in ((card.repeat_btn, want["loop"]), (card.mute_btn, want["muted"])):
+                button.blockSignals(True)
+                button.setChecked(value)
+                button.blockSignals(False)
+            if want["path"]:
+                card.show_loaded(want["path"])
+            else:
+                card.reset_file()
+            window = self._show_output(role)
+            if window is not None:
+                card.set_duration(window.engine.player.duration())
+        self.top_card.text_edit.blockSignals(True)
+        self.top_card.text_edit.setText(snapshot["marquee"]["text"])
+        self.top_card.text_edit.blockSignals(False)
+        self.loaded_preset, self._preset_dirty = snapshot["preset"]
+        self._describe_preset_state()
+        index, step_id, started = before["show"]
+        self.show_index, self._show_step_id, self._show_started = index, step_id, started
+        self._show_auto = None
+        self.show_tab.set_running(index)
+        if index < 0:
+            self._show_timer.stop()
+            self.show_tab.set_clock(None, None)
+        self._undo_snapshot = None
+        self.take_bar.forget_undo()
+        self.rehearse_btn.setChecked(False)
+        self.rehearse_btn.setText("  Rehearse")
+        self._update_output_status()
+        self._refresh_mini()
+        self.statusBar().showMessage("Rehearsal over - the dashboard drives the stage again, as it was.", 8000)
 
     @Slot()
     def _take(self) -> None:
@@ -5606,7 +6006,7 @@ class ControlPanel(QMainWindow):
         self.take_bar.clear_pending()
         self._sync_take_keys()
         if change is not None:
-            self._run_change(change["title"], change["apply"], change["thumb"])
+            self._record_change(change["title"], change["apply"], change["thumb"])
 
     @Slot()
     def _cancel_take(self) -> None:
@@ -5883,13 +6283,13 @@ class ControlPanel(QMainWindow):
         save_btn.setIcon(Icons.get("save", CLR_TEXT, 15))
         save_btn.setToolTip("Overwrite the chosen preset with what is set up now")
         save_btn.clicked.connect(self._save_preset)
-        new_preset_btn = QPushButton("  Blank")
+        new_preset_btn = desk_mod.HoldButton("  Blank", THEME)
         new_preset_btn.setIcon(Icons.get("refresh", CLR_TEXT, 15))
-        new_preset_btn.setToolTip("Clear everything and start a fresh show from blank")
+        new_preset_btn.setToolTip("Clear everything and start a fresh show from blank - hold to confirm")
         new_preset_btn.clicked.connect(self._new_preset)
-        delete_btn = QPushButton("  Delete")
+        delete_btn = desk_mod.HoldButton("  Delete", THEME)
         delete_btn.setIcon(Icons.get("trash", CLR_TEXT, 15))
-        delete_btn.setToolTip("Remove the chosen preset")
+        delete_btn.setToolTip("Remove the chosen preset - hold to confirm")
         delete_btn.clicked.connect(self._delete_preset)
         edit.addWidget(new_btn, 0, 0)
         edit.addWidget(save_btn, 0, 1)
@@ -7115,6 +7515,9 @@ class ControlPanel(QMainWindow):
         self._cancel_shortcut.activated.connect(self._cancel_take)
         self._take_shortcut.setEnabled(False)
         self._cancel_shortcut.setEnabled(False)
+        undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        undo.setContext(Qt.ApplicationShortcut)
+        undo.activated.connect(self._undo)
 
     # ----------------------------------------------------------- clicker --- #
 
@@ -7483,9 +7886,9 @@ class ControlPanel(QMainWindow):
         use_reported.clicked.connect(self._copy_reported_sizes)
         buttons.addWidget(use_reported)
 
-        close_outputs = QPushButton("  Close outputs")
+        close_outputs = desk_mod.HoldButton("  Close outputs", THEME)
         close_outputs.setIcon(Icons.get("close", CLR_TEXT, 16))
-        close_outputs.setToolTip("Close every stage output window (the app keeps running)")
+        close_outputs.setToolTip("Close every stage output window (the app keeps running) - hold to confirm")
         close_outputs.clicked.connect(self._close_all_outputs)
         buttons.addWidget(close_outputs)
 
@@ -7818,7 +8221,8 @@ class ControlPanel(QMainWindow):
         card.playRequested.connect(lambda: output() and output().engine.play())
         card.pauseRequested.connect(lambda: output() and output().engine.pause())
         card.stopRequested.connect(lambda: output() and output().engine.stop())
-        card.clearRequested.connect(lambda: output() and output().fade_clear(self.fade_ms()))
+        card.clearRequested.connect(lambda: self._record_change(
+            f"{ROLE_LABELS[role]}  →  black", lambda: output() and output().fade_clear(self.fade_ms())))
         card.volumeChanged.connect(lambda value: output() and output().engine.set_volume(value))
         card.muteChanged.connect(lambda muted: output() and output().engine.set_muted(muted))
         card.repeatChanged.connect(lambda on: output() and output().engine.set_loop(on))
@@ -7987,6 +8391,12 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _apply_routing(self) -> None:
+        if self._rehearsal is not None:
+            # the rehearsal screens follow; the stage windows are not touched
+            self._push_top_settings()
+            self._restore_media_to_outputs()
+            self._update_output_status()
+            return
         assignments = {
             role: self._screen_by_name(row.screen_combo.currentData())
             for role, row in self.routing_rows.items()
@@ -8142,6 +8552,9 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _close_all_outputs(self) -> None:
+        if self._rehearsal is not None:
+            self.statusBar().showMessage("End the rehearsal first.", 5000)
+            return
         for window in self._outputs():
             window.clear_output()
             window.force_close()
@@ -8152,14 +8565,16 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _blackout_all(self) -> None:
-        fade = self.fade_ms()
-        for window in self._outputs():
-            window.fade_clear(fade)
-        if self.top_output is not None:
-            self.top_output.stop_marquee()
-        for card in self.cards.values():
-            card.reset_file()
-        self.statusBar().showMessage("BLACKOUT — every stage screen cleared.", 6000)
+        def black() -> None:
+            fade = self.fade_ms()
+            for window in self._outputs():
+                window.fade_clear(fade)
+            if self.top_output is not None:
+                self.top_output.stop_marquee()
+            for card in self.cards.values():
+                card.reset_file()
+        self._record_change("BLACKOUT  -  every screen to black", black)
+        self.statusBar().showMessage("BLACKOUT — every stage screen cleared.  (Ctrl+Z puts it back)", 6000)
 
     def _outputs(self):
         return [w for w in (self.main_output, self.sides_output, self.top_output) if w is not None]
@@ -8478,9 +8893,11 @@ class ControlPanel(QMainWindow):
         name = self.preset_combo.currentText()
         if not self.preset_combo.isEnabled() or not name:
             return
-        answer = QMessageBox.question(self, "Delete preset", f"Delete “{name}”?")
-        if answer != QMessageBox.Yes:
-            return
+        if self.sender() is not None and not isinstance(self.sender(), desk_mod.HoldButton):
+            # from the right-click menu: no hold there, so ask
+            answer = QMessageBox.question(self, "Delete preset", f"Delete “{name}”?")
+            if answer != QMessageBox.Yes:
+                return
         self.presets.remove(name)
         self._write_presets()
 
