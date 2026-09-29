@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from contextlib import contextmanager
 import json
 import os
 import sys
@@ -139,9 +140,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import desk as desk_mod  # noqa: E402 - multiview, SETUP / SHOW, TAKE, ready check
 import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
-from show import ShowStore, ShowTab, fold as show_fold, new_step, summary as step_summary  # noqa: E402
+from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
+                  new_step, summary as step_summary)
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -292,6 +295,7 @@ THEME = {
     "accent": CLR_ACCENT, "text": CLR_TEXT, "dim": CLR_DIM, "muted": CLR_MUTED,
     "ok": CLR_OK, "warn": CLR_WARN, "danger": CLR_DANGER, "card": CLR_CARD,
     "raised": CLR_RAISED, "well": CLR_WELL, "edge": CLR_EDGE, "ink": CLR_INK,
+    "rehearse": "#7c9cf0",
 }
 
 
@@ -1115,6 +1119,32 @@ def thumbnailer() -> VideoThumbnailer:
     return _THUMBNAILER
 
 
+def small_picture(path: str, size: QSize) -> Optional[QPixmap]:
+    """
+    A thumbnail of an image or a video, without blocking: a video's frame is
+    only returned once the thumbnailer has it (it is asked for meanwhile).
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    extension = os.path.splitext(path)[1].lower()
+    if extension in IMAGE_EXTENSIONS:
+        from PySide6.QtGui import QImageReader
+
+        reader = QImageReader(path)
+        reader.setDecideFormatFromContent(True)
+        found = reader.size()
+        if found.isValid():
+            reader.setScaledSize(found.scaled(size, Qt.KeepAspectRatio))
+        image = reader.read()
+        return None if image.isNull() else QPixmap.fromImage(image)
+    if extension in VIDEO_EXTENSIONS:
+        poster = thumbnailer().cached(path)
+        if poster is not None:
+            return poster.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        thumbnailer().request(path)
+    return None
+
+
 def icon_button(name: str, tooltip: str, colour: str = CLR_TEXT, size: int = 18) -> QPushButton:
     button = QPushButton()
     button.setIcon(Icons.get(name, colour, size))
@@ -1397,6 +1427,25 @@ QPushButton#miniCue[playing="true"] {{
 QPushButton#miniCue[paused="true"] {{
     background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT};
     border-color: rgba(227, 178, 60, 0.45);
+}}
+
+/* SETUP / SHOW: one control, two halves. */
+QFrame#modeSwitch {{
+    background: {CLR_WELL}; border: 1px solid {CLR_EDGE}; border-radius: 12px;
+}}
+QPushButton#modeButton {{
+    background: transparent; border: 1px solid transparent; border-radius: 9px;
+    padding: 7px 18px; color: {CLR_MUTED}; font-weight: 700; letter-spacing: 1px;
+}}
+QPushButton#modeButton:hover {{ color: {CLR_DIM}; background: transparent; }}
+QPushButton#modeButton:checked {{
+    background: {CLR_RAISED}; color: {CLR_TEXT}; border: 1px solid {CLR_EDGE_HI};
+}}
+/* A change waiting for TAKE, or one that can still be undone. */
+QFrame#takeBar {{
+    background: rgba(227, 178, 60, 0.07);
+    border: 1px solid rgba(227, 178, 60, 0.35);
+    border-radius: 12px;
 }}
 
 QStatusBar {{ background: transparent; color: {CLR_MUTED}; border: none; }}
@@ -2661,6 +2710,28 @@ class SceneOutputWindow(BaseOutputWindow):
             return self.grab()
         except Exception:
             return QPixmap()
+
+    def preview(self, size: QSize) -> QPixmap:
+        """
+        A small picture of this screen for the dashboard's multiview, drawn
+        straight from the scene - about 9 ms for a 1080p video, so a few a
+        second cost nothing noticeable.
+        """
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.black)
+        rect = self._scene.sceneRect()
+        if rect.isEmpty():
+            return pixmap
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        self._scene.render(painter, QRectF(0, 0, size.width(), size.height()), rect, Qt.IgnoreAspectRatio)
+        painter.end()
+        return pixmap
+
+    def has_picture(self) -> bool:
+        """Whether anything but black is on this screen."""
+        return (self._pixmap_item.isVisible() or self._video_item.isVisible() or self.slide_visible()
+                or self.is_marquee_running() or self._bg_color.value() > 45)
 
 
 class StandardOutputWindow(SceneOutputWindow):
@@ -5205,11 +5276,22 @@ class ControlPanel(QMainWindow):
         self._learned_shortcuts: List[QShortcut] = []
         self._was_live = False
 
+        # The desk: SETUP / SHOW, and preview-then-TAKE with the change waiting.
+        self.ui_mode = "setup"
+        self.preview_first = str(self.settings.value("ui/preview_first", "false")).lower() == "true"
+        self._pending_change: Optional[dict] = None
+        self._direct_depth = 0          # >0 while a TAKE, a step or an undo is changing the stage
+        self._ready_dialog = None
+
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(14, 12, 14, 8)
         root.setSpacing(9)
         root.addWidget(self._build_header())
+        self.take_bar = desk_mod.TakeBar(Icons, THEME)
+        self.take_bar.takeRequested.connect(self._take)
+        self.take_bar.cancelRequested.connect(self._cancel_take)
+        root.addWidget(self.take_bar)
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
 
@@ -5227,9 +5309,16 @@ class ControlPanel(QMainWindow):
         dj_layout.setContentsMargins(0, 0, 0, 0)
         self.tabs.addTab(self.dj_page, "  DJ  ")
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
-        self.tabs.addTab(self._build_screens_tab(), "  Screens && Setup  ")
+        self.screens_page = self._build_screens_tab()
+        self.tabs.addTab(self.screens_page, "  Screens && Setup  ")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
+        # NOW / NEXT follows the operator onto every tab.
+        self.show_strip = desk_mod.ShowStrip(Icons, THEME)
+        self.show_strip.nextRequested.connect(self.show_next)
+        self.show_strip.backRequested.connect(self.show_back)
+        self.show_strip.openRequested.connect(lambda: self.tabs.setCurrentWidget(self.show_tab))
+        root.addWidget(self.show_strip)
         self.setCentralWidget(central)
 
         app = QGuiApplication.instance()
@@ -5250,6 +5339,11 @@ class ControlPanel(QMainWindow):
         self._apply_touch_mode()
         self._restore_window_geometry()
         self._restore_remote()
+        self._multiview_timer = QTimer(self)
+        self._multiview_timer.timeout.connect(self._refresh_multiview)
+        self._multiview_timer.start(500)
+        self._set_mode(str(self.settings.value("ui/mode", "setup")), check=False)
+        self._refresh_show_strip()
 
         hint = QLabel(
             "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
@@ -5265,60 +5359,429 @@ class ControlPanel(QMainWindow):
     # ------------------------------------------------------------------ UI -- #
 
     def _build_header(self) -> QWidget:
+        """
+        Name and time; a live picture of every stage screen; and the controls
+        that matter whatever tab is open - SETUP / SHOW, PREVIEW -> TAKE, the
+        ready check, and BLACKOUT.
+        """
         bar = QFrame()
         bar.setObjectName("bar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(14, 9, 12, 9)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 8, 12, 8)
+        layout.setSpacing(16)
 
+        left = QVBoxLayout()
+        left.setSpacing(3)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(8)
         mark = QLabel()
         mark.setPixmap(Icons.get("monitor", CLR_ACCENT, 19).pixmap(19, 19))
-        layout.addWidget(mark)
-
+        brand_row.addWidget(mark)
         title = QLabel("Stage Display")
         title.setObjectName("brand")
-        layout.addWidget(title)
-        layout.addSpacing(14)
-
-        self.status_pill = QLabel()
-        layout.addWidget(self.status_pill)
-        layout.addSpacing(14)
-
+        brand_row.addWidget(title)
+        brand_row.addStretch(1)
+        left.addLayout(brand_row)
         # A wall clock the operator can glance at without leaving the app.
         self.clock = QLabel()
         self.clock.setObjectName("clock")
         self.clock.setToolTip("Current time")
-        layout.addWidget(self.clock)
+        left.addWidget(self.clock)
+        self.mode_note = QLabel()
+        self.mode_note.setObjectName("keyHint")
+        left.addWidget(self.mode_note)
+        left.addStretch(1)
+        layout.addLayout(left)
         self._tick_clock()
         clock_timer = QTimer(self)
         clock_timer.timeout.connect(self._tick_clock)
         clock_timer.start(1000)
 
+        # What the audience sees, on every screen, all the time.
+        aspects = {ROLE_MAIN: 16 / 9, ROLE_SIDES: 16 / 9,
+                   ROLE_TOP: DEFAULT_TOP_WIDTH / DEFAULT_TOP_HEIGHT}
+        self.multiview = desk_mod.MultiView({role: ROLE_LABELS[role] for role in STAGE_ROLES},
+                                            aspects, THEME)
+        for tile in self.multiview.tiles.values():
+            tile.clicked.connect(self._on_tile_clicked)
+            tile.filesDropped.connect(self._on_tile_files)
+        layout.addWidget(self.multiview)
         layout.addStretch(1)
 
         # --- global actions ------------------------------------------------ #
-        open_btn = QPushButton("  OPEN OUTPUTS")
-        open_btn.setObjectName("primary")
-        open_btn.setIcon(Icons.get("monitor", "#0b0e13", 16))
-        open_btn.setToolTip("Apply the Screens tab settings and open every stage window")
-        open_btn.clicked.connect(self._apply_routing)
-        layout.addWidget(open_btn)
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addStretch(1)
+        self.mode_switch = desk_mod.ModeSwitch(THEME)
+        self.mode_switch.modeChanged.connect(self._set_mode)
+        top_row.addWidget(self.mode_switch)
+        self.preview_btn = QPushButton("  PREVIEW → TAKE")
+        self.preview_btn.setCheckable(True)
+        self.preview_btn.setIcon(Icons.get("target", CLR_TEXT, 15))
+        self.preview_btn.setToolTip(
+            "On: a file, preset or name chosen by hand waits in PREVIEW until you press TAKE,\n"
+            "so nothing reaches the stage by accident. NEXT in the running order goes straight on.")
+        self.preview_btn.setChecked(self.preview_first)
+        self.preview_btn.toggled.connect(self._set_preview_first)
+        top_row.addWidget(self.preview_btn)
+        ready = QPushButton("  Ready check")
+        ready.setIcon(Icons.get("list", CLR_TEXT, 15))
+        ready.setToolTip("Screens, sound, clicker, files - everything worth knowing before the doors open")
+        ready.clicked.connect(self._open_ready_check)
+        top_row.addWidget(ready)
+        right.addLayout(top_row)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(8)
+        bottom_row.addStretch(1)
+        self.open_btn = QPushButton("  Open outputs")
+        self.open_btn.setIcon(Icons.get("monitor", CLR_TEXT, 16))
+        self.open_btn.setToolTip("Apply the Screens tab settings and open every stage window  (Ctrl+O)")
+        self.open_btn.clicked.connect(self._apply_routing)
+        bottom_row.addWidget(self.open_btn)
 
         blackout = QPushButton("  BLACKOUT")
         blackout.setObjectName("danger")
         blackout.setIcon(Icons.get("power", CLR_DANGER, 16))
-        blackout.setToolTip("Instantly clear every stage screen to black")
+        blackout.setMinimumWidth(150)
+        blackout.setToolTip("Instantly clear every stage screen to black  (B)")
         blackout.clicked.connect(self._blackout_all)
-        layout.addWidget(blackout)
+        bottom_row.addWidget(blackout)
 
         shrink = icon_button("compress", "Shrink to a small bar that stays on top",
                              CLR_DIM, 16)
         shrink.setObjectName("ghost")
         shrink.clicked.connect(self.shrink_to_bar)
-        layout.addWidget(shrink)
+        bottom_row.addWidget(shrink)
+        right.addLayout(bottom_row)
+        layout.addLayout(right)
         # "Close outputs" deliberately lives on the Screens tab: an X in the
         # header corner reads like "quit the app" during a show.
         return bar
+
+    # ------------------------------------------------------------ the desk -- #
+
+    def _refresh_multiview(self) -> None:
+        """What each stage screen shows right now, a couple of times a second."""
+        if not self.isVisible() or self.isMinimized():
+            return
+        presenter = self.presenter
+        rehearsing = getattr(self, "_rehearsal", None) is not None
+        for role, tile in self.multiview.tiles.items():
+            window = self._show_output(role)
+            if window is None:
+                tile.set_state(desk_mod.STATE_CLOSED, None, "closed - click to open")
+                continue
+            card = self.cards.get(role) if hasattr(self, "cards") else None
+            if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+                pixmap = None
+                if presenter.deck is not None and presenter.count() and not presenter.black:
+                    pixmap = presenter.deck.thumb(presenter.index, 256)
+                caption = (f"PowerPoint  ·  {presenter.index + 1} / {presenter.count() or '…'}"
+                           + ("  ·  black" if presenter.black else ""))
+                live = not presenter.black
+            else:
+                pixmap = window.preview(tile.preview_size())
+                live = window.has_picture()
+                parts = []
+                if presenter.live and presenter.role == role and presenter.deck is not None:
+                    parts.append(f"slides {presenter.index + 1}/{presenter.count()}")
+                elif card is not None and card.current_path():
+                    parts.append(os.path.basename(card.current_path()))
+                if window.slide_visible():
+                    parts.append("text")
+                if role == ROLE_TOP and window.is_marquee_running():
+                    parts.append("marquee")
+                caption = "  +  ".join(parts) if parts else ("colour" if live else "black")
+            state = desk_mod.STATE_REHEARSAL if rehearsing else (
+                desk_mod.STATE_LIVE if live else desk_mod.STATE_BLACK)
+            tile.set_state(state, pixmap, caption)
+
+    @Slot(str)
+    def _on_tile_clicked(self, role: str) -> None:
+        self.set_active_role(role)
+        if self._show_output(role) is not None:
+            return
+        if self.routing_rows[role].screen_combo.currentData():
+            self._apply_routing()
+        else:
+            self.statusBar().showMessage(
+                f"{ROLE_LABELS[role]} has no monitor - pick one on Screens & Setup.", 6000)
+
+    @Slot(str, list)
+    def _on_tile_files(self, role: str, paths: List[str]) -> None:
+        """Files dropped on a screen in the header go on that screen."""
+        media = [os.path.normpath(p) for p in paths
+                 if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS)]
+        if not media:
+            self.statusBar().showMessage("Only pictures and videos can go on a screen.", 6000)
+            return
+        card = self.cards[role]
+        card.playlist.add_paths(media, announce=False)
+        self.set_active_role(role)
+        card.loadRequested.emit(media[0])
+
+    # -- SETUP / SHOW ---------------------------------------------------------- #
+
+    @Slot(str)
+    def _set_mode(self, mode: str, check: bool = True) -> None:
+        """
+        SETUP: everything can be prepared and edited. SHOW: the event is on -
+        the library and the screen setup step away, and nothing can be deleted,
+        renamed or rebuilt by a stray tap.
+        """
+        mode = "show" if mode == "show" else "setup"
+        self.ui_mode = mode
+        self.settings.setValue("ui/mode", mode)
+        show = mode == "show"
+        self.mode_switch.set_mode(mode)
+        setup_pages = (self.library, self.screens_page)
+        if show and self.tabs.currentWidget() in setup_pages:
+            self.tabs.setCurrentIndex(0)      # before hiding: Qt would pick a neighbour
+        for page in setup_pages:
+            index = self.tabs.indexOf(page)
+            if index >= 0:
+                self.tabs.setTabVisible(index, not show)
+        self.open_btn.setVisible(not show)
+        for widget in getattr(self, "_preset_edit_widgets", []):
+            widget.setVisible(not show)
+        self.show_tab.set_locked(show)
+        if show:
+            self.mode_note.setText("SHOW  ·  editing locked")
+            self.mode_note.setStyleSheet(f"color: {CLR_DANGER}; font-weight: 700;")
+        else:
+            self.mode_note.setText("SETUP  ·  preparing")
+            self.mode_note.setStyleSheet("")
+        if show and check and any(row["status"] == "fail" for row in self._ready_checks()):
+            self._open_ready_check()
+
+    # -- PREVIEW -> TAKE ------------------------------------------------------- #
+
+    @Slot(bool)
+    def _set_preview_first(self, on: bool) -> None:
+        self.preview_first = on
+        self.settings.setValue("ui/preview_first", "true" if on else "false")
+        if not on and self._pending_change is not None:
+            self._cancel_take()
+        self.statusBar().showMessage(
+            "PREVIEW → TAKE on: choices wait for TAKE." if on else
+            "PREVIEW → TAKE off: choices go straight on stage.", 6000)
+
+    @contextmanager
+    def _direct(self):
+        """Stage changes made inside this go straight on: a TAKE, a running-order step, an undo."""
+        self._direct_depth += 1
+        try:
+            yield
+        finally:
+            self._direct_depth -= 1
+
+    def _change_stage(self, title: str, apply: Callable[[], None], thumb: Optional[QPixmap] = None,
+                      detail: str = "") -> None:
+        """
+        Every change made by hand comes through here: straight on stage, or -
+        with PREVIEW -> TAKE on - into the bar under the header until TAKE.
+        """
+        if self.preview_first and self._direct_depth == 0 and self.isVisible():
+            self._pending_change = {"title": title, "apply": apply, "thumb": thumb}
+            self.take_bar.show_pending(title, detail, thumb)
+            self._sync_take_keys()
+            return
+        self._run_change(title, apply, thumb)
+
+    def _run_change(self, title: str, apply: Callable[[], None], thumb: Optional[QPixmap]) -> None:
+        with self._direct():
+            apply()
+
+    @Slot()
+    def _take(self) -> None:
+        change, self._pending_change = self._pending_change, None
+        self.take_bar.clear_pending()
+        self._sync_take_keys()
+        if change is not None:
+            self._run_change(change["title"], change["apply"], change["thumb"])
+
+    @Slot()
+    def _cancel_take(self) -> None:
+        self._pending_change = None
+        self.take_bar.clear_pending()
+        self._sync_take_keys()
+        self.statusBar().showMessage("Preview cancelled - the stage was not changed.", 4000)
+
+    def _sync_take_keys(self) -> None:
+        pending = self._pending_change is not None
+        self._take_shortcut.setEnabled(pending)
+        # Esc cancels, unless slides are on screen: then it is the clicker's "end"
+        self._cancel_shortcut.setEnabled(pending and not self.presenter.live)
+
+    def _thumb_for_path(self, path: str) -> Optional[QPixmap]:
+        return small_picture(path, QSize(160, 90))
+
+    def _text_thumb(self, title: str, subtitle: str) -> QPixmap:
+        pixmap = QPixmap(160, 90)
+        pixmap.fill(QColor("#05070b"))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        font = QFont("Segoe UI")
+        font.setPixelSize(15)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(QRectF(4, 20, 152, 30), Qt.AlignCenter,
+                         painter.fontMetrics().elidedText(title, Qt.ElideRight, 150))
+        if subtitle:
+            font.setPixelSize(10)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(QColor("#cfd8e6"))
+            painter.drawText(QRectF(4, 50, 152, 20), Qt.AlignCenter,
+                             painter.fontMetrics().elidedText(subtitle, Qt.ElideRight, 150))
+        painter.end()
+        return pixmap
+
+    # -- NEXT everywhere ------------------------------------------------------- #
+
+    def _refresh_show_strip(self) -> None:
+        steps = self.show_tab.steps()
+        visible = bool(steps) and self.tabs.currentWidget() is not self.show_tab
+        self.show_strip.setVisible(visible)
+        if not visible:
+            return
+        index = self.show_index
+        now = steps[index] if 0 <= index < len(steps) else None
+        upcoming = steps[index + 1] if index + 1 < len(steps) else None
+        caption = f"NOW  ·  {index + 1} / {len(steps)}" if now else "READY"
+        now_text = (now["title"] or "Untitled") if now else "Press NEXT to start"
+        next_text = (upcoming["title"] or "Untitled") if upcoming else "— end of the show —"
+        clock = ""
+        if now is not None:
+            elapsed = time.monotonic() - self._show_started
+            clock = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
+        auto = f"auto in {int(self._show_auto + 0.99)} s" if self._show_auto is not None else ""
+        self.show_strip.set_state(caption, now_text, next_text, clock, auto, upcoming is not None)
+
+    # -- ready check ----------------------------------------------------------- #
+
+    @Slot()
+    def _open_ready_check(self) -> None:
+        if self._ready_dialog is None:
+            self._ready_dialog = desk_mod.ReadyCheckDialog(self._ready_checks, self._ready_action,
+                                                           THEME, Icons, self)
+        self._ready_dialog.refresh()
+        self._ready_dialog.show()
+        self._ready_dialog.raise_()
+        self._ready_dialog.activateWindow()
+
+    def _ready_check_open(self) -> bool:
+        return self._ready_dialog is not None and self._ready_dialog.isVisible()
+
+    def _audio_device_name(self) -> str:
+        from PySide6.QtMultimedia import QMediaDevices
+
+        chosen = self.audio_device_combo.currentData()
+        if chosen:
+            return str(chosen)
+        return QMediaDevices.defaultAudioOutput().description()
+
+    def _ready_checks(self) -> List[dict]:
+        rows: List[dict] = []
+
+        def add(status, title, detail="", action=None):
+            rows.append({"status": status, "title": title, "detail": detail, "action": action})
+
+        # -- screens -- #
+        for role in STAGE_ROLES:
+            label = ROLE_LABELS[role]
+            name = self.routing_rows[role].screen_combo.currentData()
+            window = self._show_output(role)
+            if not name:
+                add("fail", f"{label}: no monitor chosen", "Pick its monitor on Screens & Setup.",
+                    ("Screens & Setup", "screens"))
+            elif self._screen_by_name(name) is None:
+                add("fail", f"{label}: its monitor is not connected",
+                    f"Windows does not report “{name}” - check the cable or the LED processor.")
+            elif window is None:
+                add("warn", f"{label}: closed", "The monitor is there; its window is not open.",
+                    ("Open outputs", "open"))
+            else:
+                card = self.cards[role]
+                what = os.path.basename(card.current_path()) if card.current_path() else "black"
+                add("ok", f"{label}: open", f"on screen: {what}")
+        # -- sound -- #
+        device = self._audio_device_name()
+        hall = str(self.settings.value("ready/hall_audio", "") or "")
+        if not device:
+            add("fail", "No sound output device", "Windows reports no speakers or mixer.")
+        elif hall and device != hall:
+            add("warn", f"Sound goes to {device}", f"The hall's device is {hall}.",
+                ("This is the hall's device", "hall_audio"))
+        elif hall:
+            add("ok", f"Sound: {device}", "the hall's device")
+        else:
+            add("info", f"Sound: {device}", "Is this the hall's mixer? Remember it, and the check will "
+                "warn if the sound ever goes somewhere else.", ("Yes, this is the hall's", "hall_audio"))
+        if self.sound_master.value() == 0:
+            add("warn", "Master volume is at 0", "Sound cues and running-order music will be silent.")
+        # -- files -- #
+        steps = self.show_tab.steps()
+        gone = show_missing_files(steps)
+        if not steps:
+            add("info", "The running order is empty", "Fine if this event is run by hand.")
+        elif gone:
+            add("fail", f"Running order: {len(gone)} file(s) missing",
+                ", ".join(os.path.basename(p) for p in gone[:5]) + ("…" if len(gone) > 5 else ""))
+        else:
+            add("ok", f"Running order “{self.show_store.current}”: {len(steps)} step(s)", "every file is there")
+        lost = sorted({os.path.basename(p) for card in self.cards.values()
+                       for p in card.playlist.paths() + [card.current_path()] if p and not os.path.isfile(p)}
+                      | {os.path.basename(cue.path) for cue in self.sound.cues
+                         if cue.path and not os.path.isfile(cue.path)})
+        if lost:
+            add("warn", f"{len(lost)} file(s) on the Live tab are missing", ", ".join(lost[:5]))
+        # -- presentation -- #
+        deck = self.presenter.deck
+        if deck is not None:
+            if deck.error:
+                add("fail", f"Presentation “{deck.name}” did not open", deck.error.splitlines()[0])
+            elif deck.kind == "powerpoint" and self.presenter.in_powerpoint and not pres_mod.powerpoint_available():
+                add("warn", f"Presentation “{deck.name}”", "PowerPoint is not installed: it will show as pictures.")
+            else:
+                add("ok", f"Presentation “{deck.name}”", f"{deck.count or '…'} slides ready")
+        # -- clicker -- #
+        last = self.presentation_tab._last_key
+        ago = time.monotonic() - last[2] if last[2] else None
+        if ago is not None and ago < 1800:
+            minutes = int(ago // 60)
+            add("ok", "Clicker works", f"last press: {last[0]} → {last[1]}, "
+                + (f"{minutes} min ago" if minutes else f"{int(ago)} s ago"))
+        else:
+            add("warn", "Clicker not tested", "Press any clicker button now - this row turns green. "
+                "(Presses here are only a test: nothing moves.)")
+        # -- phone remote -- #
+        if self.remote.running:
+            guest = "  ·  guest link on" if self.remote.guest else ""
+            add("ok", "Phone remote is on", f"{self.remote.clients()} phone(s) connected{guest}")
+        else:
+            add("info", "Phone remote is off", "Only needed if someone runs the show from a phone.",
+                ("Phone remote…", "remote"))
+        if self.preview_first:
+            add("info", "PREVIEW → TAKE is on", "Files, presets and names chosen by hand wait for TAKE.")
+        return rows
+
+    def _ready_action(self, key: str) -> None:
+        if key == "identify":
+            self._identify_screens()
+        elif key == "open":
+            self._apply_routing()
+        elif key == "screens":
+            self._set_mode("setup", check=False)
+            self.tabs.setCurrentWidget(self.screens_page)
+        elif key == "hall_audio":
+            self.settings.setValue("ready/hall_audio", self._audio_device_name())
+        elif key == "remote":
+            self._open_remote_dialog()
 
     def _build_preset_bar(self) -> QWidget:
         """
@@ -5377,6 +5840,8 @@ class ControlPanel(QMainWindow):
         delete_btn.setToolTip("Remove the selected preset")
         delete_btn.clicked.connect(self._delete_preset)
         layout.addWidget(delete_btn)
+        # hidden in SHOW mode
+        self._preset_edit_widgets = [new_preset_btn, save_btn, new_btn, delete_btn]
 
         layout.addSpacing(6)
         self.preset_state = QLabel()
@@ -5514,6 +5979,7 @@ class ControlPanel(QMainWindow):
         self.activateWindow()
 
     def _refresh_mini(self) -> None:
+        self._refresh_show_strip()
         if self.mini is None or not self.mini.isVisible():
             return
         role = self.active_role
@@ -5619,7 +6085,8 @@ class ControlPanel(QMainWindow):
         # earlier steps to land where walking there would have.
         only_explicit = index == self.show_index + 1
         self._open_outputs_for(target)
-        problems = self._apply_show_state(target, step, only_explicit)
+        with self._direct():
+            problems = self._apply_show_state(target, step, only_explicit)
         self.show_index = index
         self._show_step_id = step["id"]
         self._show_started = time.monotonic()
@@ -5827,6 +6294,7 @@ class ControlPanel(QMainWindow):
                 not player.is_playing() and not player.is_paused()
         self._show_auto = remaining
         self.show_tab.set_clock(elapsed, remaining, note)
+        self._refresh_show_strip()
         if go_on:
             self.show_next()
 
@@ -6058,10 +6526,18 @@ class ControlPanel(QMainWindow):
                 "Open the “Screens & Setup” tab, pick a monitor for it, then press "
                 "“OPEN OUTPUTS”.")
             return
-        window.set_slide_style(self.text_slides.style_dict())
-        window.show_slide(title, subtitle, max(120, self.fade_ms() // 2))
-        self.statusBar().showMessage(
-            f"{ROLE_LABELS[role]}: {title}" + (f" — {subtitle}" if subtitle else ""), 8000)
+
+        def apply() -> None:
+            role_now, target = self._slide_output()
+            if target is None:
+                return
+            target.set_slide_style(self.text_slides.style_dict())
+            target.show_slide(title, subtitle, max(120, self.fade_ms() // 2))
+            self.statusBar().showMessage(
+                f"{ROLE_LABELS[role_now]}: {title}" + (f" — {subtitle}" if subtitle else ""), 8000)
+
+        self._change_stage(f"{ROLE_LABELS[role]}  ←  “{title}”", apply,
+                           self._text_thumb(title, subtitle), subtitle)
 
     @Slot()
     def _hide_slide(self) -> None:
@@ -6167,11 +6643,12 @@ class ControlPanel(QMainWindow):
             # fire one "output not open" dialog per screen, in a row.
             open_roles = [r for r in STAGE_ROLES
                           if getattr(self, self.OUTPUT_ATTRS[r], None) is not None]
-            for role in open_roles:
-                card = self.cards[role]
-                if card.playlist.count():
-                    card.playlist.setCurrentRow(0)
-                    card.loadRequested.emit(card.playlist.item(0).data(Qt.UserRole))
+            with self._direct():
+                for role in open_roles:
+                    card = self.cards[role]
+                    if card.playlist.count():
+                        card.playlist.setCurrentRow(0)
+                        card.loadRequested.emit(card.playlist.item(0).data(Qt.UserRole))
             if not open_roles:
                 live_note = "  — nothing is on yet: press OPEN OUTPUTS first"
 
@@ -6209,9 +6686,10 @@ class ControlPanel(QMainWindow):
 
     @Slot(str, str)
     def _library_show(self, role: str, path: str) -> None:
-        self.cards[role].show_loaded(path)      # keeps the playlist in step
-        self.cards[role].loadRequested.emit(path)
+        card = self.cards[role]
+        card.playlist.add_paths([path], announce=False)   # keeps the playlist in step
         self.set_active_role(role)
+        card.loadRequested.emit(path)
 
     @Slot(str, list)
     def _library_queue(self, role: str, paths: List[str]) -> None:
@@ -6518,6 +6996,15 @@ class ControlPanel(QMainWindow):
             self._slide_shortcuts.append(shortcut)
         self._install_learned_keys()
         BaseOutputWindow.key_router = self._route_output_key
+        # PREVIEW -> TAKE
+        self._take_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self._take_shortcut.setContext(Qt.ApplicationShortcut)
+        self._take_shortcut.activated.connect(self._take)
+        self._cancel_shortcut = QShortcut(QKeySequence("Esc"), self)
+        self._cancel_shortcut.setContext(Qt.ApplicationShortcut)
+        self._cancel_shortcut.activated.connect(self._cancel_take)
+        self._take_shortcut.setEnabled(False)
+        self._cancel_shortcut.setEnabled(False)
 
     # ----------------------------------------------------------- clicker --- #
 
@@ -6551,6 +7038,10 @@ class ControlPanel(QMainWindow):
         and every other key does what it always did.
         """
         action = self._slide_action_for(name)
+        if self._ready_check_open():
+            # the operator is testing the clicker: note it, move nothing
+            self.presentation_tab.show_key(name, "test ✓", source)
+            return True
         if self.presenter.live and action:
             self._do_slide(action, name, source)
             return True
@@ -6724,6 +7215,8 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _on_presenter_changed(self) -> None:
+        if hasattr(self, "_cancel_shortcut"):
+            self._sync_take_keys()
         live = self.presenter.live
         for shortcut in self._slide_shortcuts:
             shortcut.setEnabled(live)
@@ -6788,6 +7281,7 @@ class ControlPanel(QMainWindow):
         self.preset_bar.setVisible(not on_dj)
         if on_dj and self.dj_panel is None:
             self._build_dj_panel()
+        self._refresh_show_strip()
 
     def _build_dj_panel(self) -> None:
         try:
@@ -7166,6 +7660,13 @@ class ControlPanel(QMainWindow):
             return getattr(self, self.OUTPUT_ATTRS[role], None)
 
         def on_load(path: str) -> None:
+            if output() is None:
+                put_on(path)          # says why it cannot, at once
+                return
+            self._change_stage(f"{ROLE_LABELS[role]}  ←  {os.path.basename(path)}",
+                               lambda: put_on(path), self._thumb_for_path(path))
+
+        def put_on(path: str) -> None:
             window = output()
             if window is None:
                 QMessageBox.warning(
@@ -7554,17 +8055,12 @@ class ControlPanel(QMainWindow):
         return [w for w in (self.main_output, self.sides_output, self.top_output) if w is not None]
 
     def _update_output_status(self) -> None:
-        parts = []
         for role in STAGE_ROLES:
             is_open = getattr(self, self.OUTPUT_ATTRS[role], None) is not None
-            colour = CLR_OK if is_open else CLR_WARN
-            parts.append(
-                f"<span style='color:{colour};'>●</span> "
-                f"<span style='color:{CLR_MUTED};'>{ROLE_LABELS[role]}</span>"
-            )
             if role in getattr(self, "cards", {}):
                 self.cards[role].set_output_open(is_open)
-        self.status_pill.setText("&nbsp;&nbsp;".join(parts))
+        if hasattr(self, "cards"):
+            self._refresh_multiview()
 
     @Slot()
     def _identify_screens(self) -> None:
@@ -7828,11 +8324,18 @@ class ControlPanel(QMainWindow):
         if not payload:
             QMessageBox.information(self, "No preset", "Save a preset first, then it can be loaded.")
             return
-        self._apply_preset(payload)
-        self.loaded_preset = name
-        self._preset_dirty = False
-        self._describe_preset_state()
-        self.statusBar().showMessage(f"Preset loaded: {name}", 6000)
+
+        def apply() -> None:
+            self._apply_preset(payload)
+            self.loaded_preset = name
+            self._preset_dirty = False
+            self._describe_preset_state()
+            self.statusBar().showMessage(f"Preset loaded: {name}", 6000)
+
+        main_file = payload.get("outputs", {}).get(ROLE_MAIN, {}).get("file", "")
+        self._change_stage(f"Preset  “{name}”", apply,
+                           self._thumb_for_path(main_file) if main_file else None,
+                           "every screen, the sound cues and the marquee")
 
     @Slot()
     def _save_preset(self) -> None:

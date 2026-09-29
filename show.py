@@ -384,8 +384,10 @@ class ShowTab(QWidget):
         body = QHBoxLayout()
         body.setSpacing(10)
         body.addWidget(self._build_list_card(), 5)
-        body.addWidget(self._build_editor_card(), 6)
+        self.editor_card = self._build_editor_card()
+        body.addWidget(self.editor_card, 6)
         outer.addLayout(body, 1)
+        self.locked = False
 
         self._fill_show_combo()
         self._reload_list()
@@ -486,6 +488,7 @@ class ShowTab(QWidget):
         self.show_combo.setMinimumWidth(220)
         self.show_combo.currentIndexChanged.connect(self._on_show_chosen)
         row.addWidget(self.show_combo)
+        self._edit_widgets: List[QWidget] = []     # hidden while the show is on
         for text, icon, tip, handler in (
                 ("  New", "plus", "Start a new running order", self._new_show),
                 ("  Rename", "text", "Rename this running order", self._rename_show),
@@ -496,6 +499,7 @@ class ShowTab(QWidget):
             button.setToolTip(tip)
             button.clicked.connect(handler)
             row.addWidget(button)
+            self._edit_widgets.append(button)
         self.missing_label = QLabel("")
         self.missing_label.setStyleSheet(f"color: {self.theme['warn']}; font-weight: 600;")
         row.addWidget(self.missing_label)
@@ -543,7 +547,12 @@ class ShowTab(QWidget):
             button.setToolTip(tip)
             button.clicked.connect(handler)
             buttons.addWidget(button)
+            self._edit_widgets.append(button)
         buttons.addStretch(1)
+        self.lock_note = QLabel("SHOW mode - the running order is locked. Switch to SETUP to edit it.")
+        self.lock_note.setObjectName("keyHint")
+        self.lock_note.hide()
+        buttons.addWidget(self.lock_note)
         up = QPushButton("▲")
         up.setToolTip("Move the step up")
         up.clicked.connect(lambda: self._move_step(-1))
@@ -552,6 +561,7 @@ class ShowTab(QWidget):
         down.clicked.connect(lambda: self._move_step(1))
         buttons.addWidget(up)
         buttons.addWidget(down)
+        self._edit_widgets += [up, down]
         box.addLayout(buttons)
         return card
 
@@ -711,6 +721,19 @@ class ShowTab(QWidget):
         row.addWidget(audio)
         self.screen_rows[role] = {"mode": mode, "file": field, "loop": loop, "audio": audio}
         return row
+
+    def set_locked(self, locked: bool) -> None:
+        """
+        SHOW mode: the steps can be run and jumped to, not edited, moved,
+        deleted or swapped for another running order.
+        """
+        self.locked = locked
+        for widget in self._edit_widgets:
+            widget.setVisible(not locked)
+        self.editor_card.setVisible(not locked)
+        self.show_combo.setEnabled(not locked)
+        self.lock_note.setVisible(locked)
+        self.list.setDragDropMode(QAbstractItemView.NoDragDrop if locked else QAbstractItemView.InternalMove)
 
     # -- shows --------------------------------------------------------------- #
     def _fill_show_combo(self) -> None:
