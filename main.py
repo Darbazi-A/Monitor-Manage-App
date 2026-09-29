@@ -55,7 +55,14 @@ from contextlib import contextmanager
 import json
 import os
 import sys
+import threading
 import time
+
+# Video decoding on the graphics card where Windows offers it (DXVA2). Measured
+# with the hall's three screens at their real sizes it takes 10-15 points of a
+# CPU core off the playback; FFmpeg falls back to the processor by itself on a
+# machine that cannot. Set before any player exists; an explicit setting wins.
+os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "dxva2")
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
@@ -1120,6 +1127,32 @@ def thumbnailer() -> VideoThumbnailer:
     if _THUMBNAILER is None:
         _THUMBNAILER = VideoThumbnailer()
     return _THUMBNAILER
+
+
+_WARMED: List[str] = []
+
+
+def warm_file(path: str, limit: int = 64 * 1024 * 1024) -> None:
+    """
+    Read a file once, in the background, so it is already in memory when it is
+    wanted - the next item of a playlist, the next step's clips. From a slow
+    disk or a USB stick the first frames then arrive at once.
+    """
+    if not path or path in _WARMED or not os.path.isfile(path):
+        return
+    _WARMED.append(path)
+    del _WARMED[:-24]
+
+    def read() -> None:
+        try:
+            with open(path, "rb") as handle:
+                left = limit
+                while left > 0 and handle.read(min(1 << 20, left)):
+                    left -= 1 << 20
+        except OSError:
+            pass
+
+    threading.Thread(target=read, name="warm", daemon=True).start()
 
 
 def small_picture(path: str, size: QSize) -> Optional[QPixmap]:
@@ -2383,6 +2416,9 @@ class SceneOutputWindow(BaseOutputWindow):
         # Rehearsal windows lay the scene out at the real stage size and scale
         # the view down, so text and marquee sizes look exactly as on stage.
         self._virtual: Optional[QSize] = None
+        # Goes up whenever the picture changes; a still screen is not redrawn
+        # for the multiview until it does.
+        self.picture_version = 0
 
         # --- corner: the speaker's countdown, small, over everything else ------ #
         self._corner_scrim = self._scene.addRect(QRectF(), QPen(Qt.NoPen), QBrush(QColor(0, 0, 0, 160)))
@@ -2431,6 +2467,7 @@ class SceneOutputWindow(BaseOutputWindow):
         return ("video", path)
 
     def commit_media(self, payload) -> None:
+        self.picture_version += 1
         kind, value = payload
         if kind == "image":
             self.engine.clear()
@@ -2447,6 +2484,7 @@ class SceneOutputWindow(BaseOutputWindow):
 
     def set_background_color(self, color: QColor) -> None:
         """Solid-colour background; also clears any image or video."""
+        self.picture_version += 1
         self._bg_color = color
         self._bg_item.setBrush(QBrush(color))
         self.engine.clear()
@@ -2455,6 +2493,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self._video_item.setVisible(False)
 
     def clear_output(self) -> None:
+        self.picture_version += 1
         self.engine.clear()
         self._pixmap_item.setVisible(False)
         self._pixmap_item.setPixmap(QPixmap())
@@ -2462,6 +2501,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self.hide_slide(0)
 
     def set_scale_mode(self, mode: ScaleMode) -> None:
+        self.picture_version += 1
         self._scale_mode = mode
         self._layout_pixmap()
         self._layout_video()
@@ -2469,6 +2509,7 @@ class SceneOutputWindow(BaseOutputWindow):
     # -- marquee ------------------------------------------------------------ #
 
     def set_marquee_text(self, text: str) -> None:
+        self.picture_version += 1
         self._marquee_text = text
         self._text_item.setText(text)
         self._apply_marquee_style()
@@ -2502,6 +2543,7 @@ class SceneOutputWindow(BaseOutputWindow):
 
     def stop_marquee(self) -> None:
         # Hide the text as well, so the audience never sees a frozen line.
+        self.picture_version += 1
         self._marquee_timer.stop()
         self._text_item.setVisible(False)
 
@@ -2662,6 +2704,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self._slide_anim.start()
 
     def _set_slide_opacity(self, value) -> None:
+        self.picture_version += 1
         self._slide_opacity = float(value)
         for item in self._slide_items():
             item.setOpacity(self._slide_opacity)
@@ -2737,8 +2780,15 @@ class SceneOutputWindow(BaseOutputWindow):
     # -- transitions -------------------------------------------------------- #
 
     def transition(self, action: Callable[[], None], fade_ms: int, style: str) -> None:
-        """Crossfades happen inside the scene; dips still use the black overlay window."""
-        if fade_ms > 0 and style == TRANSITION_CROSSFADE:
+        """
+        Crossfades happen inside the scene; dips still use the black overlay window.
+
+        A new video takes a moment to show its first frame. Both a dissolve and a
+        plain cut hold the old picture until that frame has actually arrived -
+        not for a fixed guess - so the audience never sees black in between.
+        """
+        crossfade = fade_ms > 0 and style == TRANSITION_CROSSFADE
+        if crossfade or (fade_ms <= 0 and self.has_picture()):
             still = self.snapshot()       # includes a dissolve already in progress
             if not still.isNull():
                 self._still_anim.stop()
@@ -2747,14 +2797,45 @@ class SceneOutputWindow(BaseOutputWindow):
                 self._still_item.setOpacity(1.0)
                 self._still_item.setVisible(True)
                 action()                  # the new picture is built underneath, unseen
-                # a video's first frame needs a moment to land; a picture is there at once
-                hold = 90 if self._video_item.isVisible() else 0
-                self._still_anim.setDuration(max(60, fade_ms))
-                self._still_anim.setStartValue(1.0)
-                self._still_anim.setEndValue(0.0)
-                QTimer.singleShot(hold, self._still_anim.start)
+                if crossfade:
+                    def dissolve() -> None:
+                        self._still_anim.setDuration(max(60, fade_ms))
+                        self._still_anim.setStartValue(1.0)
+                        self._still_anim.setEndValue(0.0)
+                        self._still_anim.start()
+                    self._when_picture_ready(dissolve)
+                else:
+                    self._when_picture_ready(self._after_dissolve)   # a cut: gone the moment it is there
                 return
+        if fade_ms <= 0:
+            action()
+            return
         super().transition(action, fade_ms, style)
+
+    def _when_picture_ready(self, then: Callable[[], None], longest_ms: int = 600) -> None:
+        """Run `then` once the new video's first frame is on screen (at once for a picture)."""
+        if not self._video_item.isVisible():
+            then()
+            return
+        sink = self._video_item.videoSink()
+        state = {"done": False}
+
+        def fire() -> None:
+            if state["done"]:
+                return
+            state["done"] = True
+            try:
+                sink.videoFrameChanged.disconnect(on_frame)
+            except (RuntimeError, TypeError):
+                pass
+            then()
+
+        def on_frame(frame) -> None:
+            if frame.isValid():
+                QTimer.singleShot(0, fire)    # after it has been painted
+
+        sink.videoFrameChanged.connect(on_frame)
+        QTimer.singleShot(longest_ms, fire)
 
     def _after_dissolve(self) -> None:
         self._still_item.setVisible(False)
@@ -2779,6 +2860,7 @@ class SceneOutputWindow(BaseOutputWindow):
 
     def set_corner_text(self, text: str, colour: str = "#ffffff") -> None:
         """Small text in the bottom-right corner - the speaker's time left. "" takes it away."""
+        self.picture_version += 1
         self._corner_text.setText(text)
         self._corner_text.setBrush(QBrush(QColor(colour or "#ffffff")))
         self._corner_text.setPen(QPen(Qt.NoPen))
@@ -2837,6 +2919,12 @@ class SceneOutputWindow(BaseOutputWindow):
         self._scene.render(painter, QRectF(0, 0, size.width(), size.height()), rect, Qt.IgnoreAspectRatio)
         painter.end()
         return pixmap
+
+    def is_moving(self) -> bool:
+        """Whether the picture changes by itself: video, a scrolling marquee, a fade under way."""
+        return (self._video_item.isVisible() or self.is_marquee_running()
+                or self._still_anim.state() == QVariantAnimation.Running
+                or self._slide_anim.state() == QVariantAnimation.Running)
 
     def has_picture(self) -> bool:
         """Whether anything but black is on this screen."""
@@ -5660,6 +5748,12 @@ class ControlPanel(QMainWindow):
         self.presets = PresetStore()
         self.active_role = ROLE_MAIN
         self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        # The look - touch-sized or not - goes on once, before a single widget
+        # exists: re-styling the finished window cost over half a second of start-up.
+        app = QApplication.instance()
+        sheet = STYLESHEET + (TOUCH_STYLESHEET if self.touch_enabled() else "")
+        if app is not None and app.styleSheet() != sheet:
+            app.setStyleSheet(sheet)
         self._freshly_opened: set = set()
         self.mini: Optional[MiniBar] = None
         self._mini_ticker = QTimer(self)
@@ -5922,7 +6016,13 @@ class ControlPanel(QMainWindow):
                            + ("  ·  black" if presenter.black else ""))
                 live = not presenter.black
             else:
-                pixmap = window.preview(tile.preview_size())
+                drawn = getattr(tile, "_drawn", None)
+                key = (id(window), window.picture_version, tile.preview_size().width())
+                if drawn == key and not window.is_moving() and tile.pixmap is not None:
+                    pixmap = tile.pixmap            # nothing moved: keep the last picture
+                else:
+                    pixmap = window.preview(tile.preview_size())
+                    tile._drawn = key
                 live = window.has_picture()
                 parts = []
                 if presenter.live and presenter.role == role and presenter.deck is not None:
@@ -6879,6 +6979,13 @@ class ControlPanel(QMainWindow):
         self.show_index = index
         self._show_step_id = step["id"]
         self._show_started = time.monotonic()
+        if index + 1 < len(steps):
+            upcoming = steps[index + 1]
+            for role in STAGE_ROLES:
+                if upcoming["screens"][role]["mode"] == "file":
+                    warm_file(upcoming["screens"][role]["path"])
+            if upcoming["sound"]["mode"] == "play":
+                warm_file(upcoming["sound"]["path"])
         self._show_sound_started = step["sound"]["mode"] == "play" and not problems
         self.show_tab.set_running(index)
         self._show_tick()
@@ -8555,6 +8662,9 @@ class ControlPanel(QMainWindow):
             card.show_loaded(path)
             self._mark_preset_dirty()
             self.statusBar().showMessage(f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000)
+            queued = card.playlist.paths()
+            if path in queued and queued.index(path) + 1 < len(queued):
+                warm_file(queued[queued.index(path) + 1])     # the next one is ready too
 
         card.loadRequested.connect(on_load)
         card.queueRequested.connect(
