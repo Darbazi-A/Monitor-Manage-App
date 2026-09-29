@@ -68,6 +68,9 @@ except ImportError:  # pragma: no cover - non-Windows
     winreg = None
 
 from PySide6.QtCore import (
+    QBuffer,
+    QByteArray,
+    QIODevice,
     QEasingCurve,
     QEvent,
     QMimeData,
@@ -465,7 +468,8 @@ class ControlPanel(QMainWindow):
         self._show_timer = QTimer(self)
         self._show_timer.timeout.connect(self._show_tick)
         self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self,
-                                              image=self._remote_slide_image)
+                                              image=self._remote_slide_image,
+                                              screen=self._remote_screen_image)
         self._remote_dialog = None
         self._guest_dialog = None
 
@@ -2002,9 +2006,11 @@ class ControlPanel(QMainWindow):
         screens = []
         for role in STAGE_ROLES:
             path = self.cards[role].current_path()
+            state, moving, version = self._screen_state(role)
             screens.append({"role": role, "label": ROLE_LABELS[role],
                             "open": self._show_output(role) is not None,
-                            "file": os.path.basename(path) if path else ""})
+                            "file": os.path.basename(path) if path else "",
+                            "state": state, "moving": moving, "version": version})
         cues = [{"index": cue.index, "label": cue.label(), "filled": bool(cue.path),
                  "playing": cue.is_playing(), "paused": cue.is_paused()} for cue in self.sound.cues]
         return {
@@ -2922,6 +2928,46 @@ class ControlPanel(QMainWindow):
             presenter.end()
             return True, "Presentation ended."
         return False, "Unknown action."
+
+    def _screen_state(self, role: str):
+        """(closed | black | live | rehearsal, whether it moves by itself, a number that changes with it)."""
+        window = self._show_output(role)
+        if window is None:
+            return "closed", False, "closed"
+        presenter = self.presenter
+        if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+            live, moving, version = not presenter.black, False, f"ppt-{presenter.index}-{presenter.black}"
+        else:
+            live, moving, version = window.has_picture(), window.is_moving(), str(window.picture_version)
+        if self._rehearsal is not None:
+            return "rehearsal", moving, version
+        return ("live" if live else "black"), moving, version
+
+    def _remote_screen_image(self, role: str) -> Optional[bytes]:
+        """A small JPEG of what a stage screen shows, for the phone's multiview."""
+        if role not in STAGE_ROLES:
+            return None
+        window = self._show_output(role)
+        if window is None:
+            return None
+        state, moving, version = self._screen_state(role)
+        cache = self.__dict__.setdefault("_screen_jpegs", {})
+        if not moving and cache.get(role, (None, None))[0] == version:
+            return cache[role][1]
+        presenter = self.presenter
+        if version.startswith("ppt-") and presenter.deck is not None and not presenter.black:
+            data = presenter.deck.jpeg(presenter.index, 480)
+        else:
+            stage = self._stage_size(role)
+            width = 640 if stage.width() > stage.height() * 3 else 480
+            height = max(12, int(width * stage.height() / max(1, stage.width())))
+            buffer_data = QByteArray()
+            buffer = QBuffer(buffer_data)
+            buffer.open(QIODevice.WriteOnly)
+            window.preview(QSize(width, height)).save(buffer, "JPG", 72)
+            data = bytes(buffer_data.data())
+        cache[role] = (version, data)
+        return data
 
     def _remote_slide_image(self, token: str, index: int) -> Optional[bytes]:
         deck = self.presenter.deck

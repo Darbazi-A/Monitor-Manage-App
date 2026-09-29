@@ -73,11 +73,13 @@ class RemoteServer(QObject):
 
     def __init__(self, state: Callable[[], dict], act: Callable[[str, dict], Tuple[bool, str]],
                  parent: Optional[QObject] = None,
-                 image: Optional[Callable[[str, int], Optional[bytes]]] = None) -> None:
+                 image: Optional[Callable[[str, int], Optional[bytes]]] = None,
+                 screen: Optional[Callable[[str], Optional[bytes]]] = None) -> None:
         super().__init__(parent)
         self.state = state
         self.act = act
         self.image = image
+        self.screen = screen            # role -> JPEG of that stage screen, for the multiview
         self.pin = new_pin()
         self.guest = ""                   # the guest link's token; "" = no guest link
         self.port = DEFAULT_PORT
@@ -229,6 +231,13 @@ class RemoteServer(QObject):
             if guest:
                 return 200, _json({"slides": self.state().get("slides", {}), "guest": True}), "application/json"
             return 200, _json(self.state()), "application/json"
+        if path == "/api/screen" and method == "GET" and self.screen is not None:
+            if guest:
+                return 403, _json({"ok": False, "message": "A guest link only turns slides."}), "application/json"
+            data = self.screen(params.get("role", ""))
+            if data is None:
+                return 404, b"that screen is closed", "text/plain"
+            return 200, data, "image/jpeg"
         if path == "/api/slide" and method == "GET" and self.image is not None:
             try:
                 data = self.image(params.get("deck", ""), int(params.get("i", "-1")))
@@ -599,9 +608,29 @@ nav button.on { color:var(--gold); border-color:rgba(227,178,60,.35); background
   padding:10px 16px; border-radius:12px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; text-align:center; }
 #toast.show { opacity:1; }
 .empty { color:var(--muted); text-align:center; padding:20px 6px; }
+/* the multiview: what every stage screen shows */
+.mvbar { display:flex; align-items:center; justify-content:space-between; padding:0 16px; }
+.mvbar button { padding:4px 10px; font-size:11px; border-radius:9px; color:var(--muted); background:transparent; }
+.mv { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 14px 8px; }
+.mv.hidden { display:none; }
+.mv .t { position:relative; background:#05070b; border:1.5px solid var(--edge); border-radius:10px; overflow:hidden; aspect-ratio:16/9; }
+.mv .t.top { grid-column:1 / span 2; aspect-ratio:14/1; }
+.mv .t.live { border-color:var(--red); }
+.mv .t.rehearsal { border-color:#7c9cf0; }
+.mv .t.closed { border-style:dashed; }
+.mv img { width:100%; height:100%; object-fit:contain; display:block; }
+.mv .t.top img { object-fit:fill; }
+.mv .lab, .mv .tag { position:absolute; top:4px; font-size:9px; font-weight:800; letter-spacing:.8px;
+  text-shadow:0 1px 3px #000; }
+.mv .lab { left:7px; color:#fff; }
+.mv .tag { right:7px; color:var(--muted); }
+.mv .t.live .tag { color:#ff8c88; }
+.mv .t.top .lab, .mv .t.top .tag { top:50%; transform:translateY(-50%); }
 </style></head>
 <body>
 <header><div class="dot" id="dot"></div><h1 id="head">Stage remote</h1><div class="clock" id="clock"></div></header>
+<div class="mvbar"><div class="cap">On the screens</div><button id="mvtoggle">hide</button></div>
+<div class="mv" id="mv"></div>
 
 <main id="v-show" class="active">
   <div class="card now"><div class="cap" id="nowcap">Ready</div><h2 id="nowtitle">—</h2>
@@ -668,8 +697,39 @@ function drawPin() { $("pin").textContent = typed.padEnd(4, "·").split("").map(
     $("pad").appendChild(b); }
 })();
 
+const shots = {};          // role -> {key, url}: a still screen is fetched again only when it changes
+let mvHidden = localStorage.getItem("stageMvHidden") === "1";
+function mvLayout() { $("mv").classList.toggle("hidden", mvHidden); $("mvtoggle").textContent = mvHidden ? "show" : "hide"; }
+$("mvtoggle").onclick = () => { mvHidden = !mvHidden; localStorage.setItem("stageMvHidden", mvHidden ? "1" : "0"); mvLayout(); };
+mvLayout();
+async function shot(sc) {
+  const key = sc.version + (sc.moving ? ":" + Math.floor(Date.now() / 1000) : "");
+  if (shots[sc.role] && shots[sc.role].key === key) return null;
+  const r = await fetch(`/api/screen?role=${sc.role}`, { headers: { "X-Pin": pin } });
+  if (!r.ok) return null;
+  const url = URL.createObjectURL(await r.blob());
+  if (shots[sc.role]) URL.revokeObjectURL(shots[sc.role].url);
+  shots[sc.role] = { key, url };
+  return url;
+}
+function renderMv(s) {
+  const mv = $("mv");
+  if (!mv.children.length) mv.innerHTML = s.screens.map(sc =>
+    `<div class="t ${sc.role === "top" ? "top" : ""}" id="mv-${sc.role}"><img alt=""><span class="lab">${esc(sc.label)}</span><span class="tag"></span></div>`).join("");
+  if (mvHidden) return;
+  for (const sc of s.screens) {
+    const el = $("mv-" + sc.role); if (!el) continue;
+    el.className = `t ${sc.role === "top" ? "top" : ""} ${sc.state}`;
+    el.querySelector(".tag").textContent = sc.state === "live" ? "ON AIR" : sc.state.toUpperCase();
+    const img = el.querySelector("img");
+    if (sc.state === "closed") { img.removeAttribute("src"); delete shots[sc.role]; continue; }
+    shot(sc).then(url => { if (url) img.src = url; }).catch(() => {});
+  }
+}
+
 function render() {
   const s = state; if (!s) return;
+  renderMv(s);
   const show = s.show;
   $("head").textContent = show.name || "Stage remote";
   const now = show.index >= 0 ? show.steps[show.index] : null;
