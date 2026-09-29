@@ -5711,11 +5711,6 @@ class ControlPanel(QMainWindow):
         root.setContentsMargins(14, 12, 14, 8)
         root.setSpacing(9)
         root.addWidget(self._build_header())
-        self.take_bar = desk_mod.TakeBar(Icons, THEME)
-        self.take_bar.takeRequested.connect(self._take)
-        self.take_bar.cancelRequested.connect(self._cancel_take)
-        self.take_bar.undoRequested.connect(self._undo)
-        root.addWidget(self.take_bar)
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
 
@@ -5832,6 +5827,17 @@ class ControlPanel(QMainWindow):
             tile.clicked.connect(self._on_tile_clicked)
             tile.filesDropped.connect(self._on_tile_files)
         layout.addWidget(self.multiview)
+
+        # PREVIEW -> TAKE and Undo live in the header's free middle, so nothing
+        # below moves when they come and go (the sound pads used to be pushed
+        # off the bottom for ten seconds after every change)
+        layout.addStretch(1)
+        self.take_bar = desk_mod.TakeBar(Icons, THEME)
+        self.take_bar.takeRequested.connect(self._take)
+        self.take_bar.cancelRequested.connect(self._cancel_take)
+        self.take_bar.undoRequested.connect(self._undo)
+        self.take_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(self.take_bar, 30)
         layout.addStretch(1)
 
         # --- global actions ------------------------------------------------ #
@@ -9312,6 +9318,7 @@ class ControlPanel(QMainWindow):
         self.presenter.release()             # a PowerPoint slide show closes with the app
         if self.presenter.deck is not None:
             self.presenter.deck.stop()
+        pres_mod.release_powerpoint()        # and the hidden PowerPoint behind it, once idle
         self.remote.stop()
         self.show_store.save()
         if self.dj_panel:

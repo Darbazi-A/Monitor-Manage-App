@@ -77,8 +77,20 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 # opens a file, and closing it here must not end a slide show of the original
 $copy = Join-Path $dir ("source" + [IO.Path]::GetExtension($src))
 Copy-Item -LiteralPath $src -Destination $copy -Force
-$app = New-Object -ComObject PowerPoint.Application
-$pres = $app.Presentations.Open($copy, -1, 0, 0)
+# PowerPoint may still be closing down after an earlier use (it takes seconds);
+# an Open on that instance fails at once. Let it go, then start a fresh one.
+$app = $null; $pres = $null
+for ($try = 0; $pres -eq $null; $try++) {
+  try {
+    $app = New-Object -ComObject PowerPoint.Application
+    $pres = $app.Presentations.Open($copy, -1, 0, 0)
+  } catch {
+    if ($try -ge 40) { throw }
+    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app) } catch { }
+    $app = $null
+    Start-Sleep -Milliseconds 500
+  }
+}
 try {
   $sw = $pres.PageSetup.SlideWidth; $sh = $pres.PageSetup.SlideHeight
   $scale = [Math]::Min($W / $sw, $H / $sh)
@@ -102,7 +114,9 @@ try {
   "DONE"
 } finally {
   $pres.Close()
-  if ($app.Presentations.Count -eq 0) { $app.Quit() }
+  # PowerPoint is left running, hidden: quitting takes seconds, and a slide show
+  # starting meanwhile would attach to the instance that is going away.
+  # The keeper (keep_powerpoint_ready) holds it; it goes when the app closes.
   Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
 }
 """
@@ -114,8 +128,20 @@ try {
 POWERSHELL_SHOW = r"""
 $ErrorActionPreference = 'Stop'
 function Say($text) { [Console]::Out.WriteLine($text); [Console]::Out.Flush() }
-$app = New-Object -ComObject PowerPoint.Application
-$pres = $app.Presentations.Open($env:SDC_SRC, -1, 0, 0)
+# PowerPoint may still be closing down after an earlier use (it takes seconds);
+# an Open on that instance fails at once. Let it go, then start a fresh one.
+$app = $null; $pres = $null
+for ($try = 0; $pres -eq $null; $try++) {
+  try {
+    $app = New-Object -ComObject PowerPoint.Application
+    $pres = $app.Presentations.Open($env:SDC_SRC, -1, 0, 0)
+  } catch {
+    if ($try -ge 40) { throw }
+    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app) } catch { }
+    $app = $null
+    Start-Sleep -Milliseconds 500
+  }
+}
 $show = $null
 function State {
   try { $v = $show.View; Say ("STATE " + $v.Slide.SlideIndex + " " + $v.State + " " + $v.CurrentShowPosition) }
@@ -163,7 +189,7 @@ try {
 } finally {
   try { if ($show -ne $null) { $show.View.Exit() } } catch { }
   try { $pres.Close() } catch { }
-  if ($app.Presentations.Count -eq 0) { $app.Quit() }
+  # not $app.Quit(): see the export script
 }
 """
 
@@ -320,6 +346,7 @@ class Deck(QObject):
         process.setProcessEnvironment(env)
         process.readyReadStandardOutput.connect(self._on_output)
         process.finished.connect(self._on_converted)
+        keep_powerpoint_ready()
         encoded = base64.b64encode(POWERSHELL_EXPORT.encode("utf-16-le")).decode("ascii")
         process.start("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
         self._process = process
@@ -431,6 +458,45 @@ class Deck(QObject):
         return self._jpegs[key]
 
 
+# One small process holds on to PowerPoint while the app runs. Without it,
+# PowerPoint shuts itself down each time a slide show or an export lets go of
+# it - which takes seconds, and a show started meanwhile attaches to the
+# instance that is going away and never starts. When the app closes (or dies)
+# its pipe closes, the keeper lets go, and PowerPoint - if nobody else is using
+# it - closes by itself. A PowerPoint the operator opened is never closed.
+POWERSHELL_KEEPER = r"""
+$app = New-Object -ComObject PowerPoint.Application
+[void][Console]::In.ReadLine()
+"""
+_keeper: Optional[subprocess.Popen] = None
+
+
+def keep_powerpoint_ready() -> None:
+    global _keeper
+    if _keeper is not None and _keeper.poll() is None:
+        return
+    if not powerpoint_available():
+        return
+    encoded = base64.b64encode(POWERSHELL_KEEPER.encode("utf-16-le")).decode("ascii")
+    try:
+        _keeper = subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        _keeper = None
+
+
+def release_powerpoint() -> None:
+    """The app is closing: let PowerPoint go (it closes once nothing else holds it)."""
+    global _keeper
+    if _keeper is not None:
+        try:
+            _keeper.stdin.close()
+        except (OSError, ValueError):
+            pass
+        _keeper = None
+
+
 class PowerPointShow(QObject):
     """
     A real PowerPoint slideshow on a stage screen, driven over a PowerShell
@@ -468,6 +534,7 @@ class PowerPointShow(QObject):
         self._deadline = QTimer(self)
         self._deadline.setSingleShot(True)
         self._deadline.timeout.connect(self._too_slow)
+        keep_powerpoint_ready()
         encoded = base64.b64encode(POWERSHELL_SHOW.encode("utf-16-le")).decode("ascii")
         try:
             self.process: Optional[subprocess.Popen] = subprocess.Popen(

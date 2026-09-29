@@ -280,29 +280,31 @@ class TakeBar(QFrame):
         self.setObjectName("takeBar")
         self.theme = theme
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 6, 8, 6)
+        row.setContentsMargins(10, 6, 8, 6)
         row.setSpacing(10)
-        self.tag = QLabel()
-        self.tag.setObjectName("takeTag")
-        row.addWidget(self.tag)
         self.thumb = QLabel()
         self.thumb.setFixedSize(80, 45)
         self.thumb.setAlignment(Qt.AlignCenter)
         self.thumb.setStyleSheet("background: #05070b; border-radius: 4px;")
         row.addWidget(self.thumb)
         texts = QVBoxLayout()
-        texts.setSpacing(0)
+        texts.setSpacing(1)
+        self.tag = QLabel()
+        self.tag.setObjectName("takeTag")
+        texts.addWidget(self.tag, 0, Qt.AlignLeft)
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         texts.addWidget(self.title)
         self.detail = QLabel()
         self.detail.setObjectName("cardHint")
+        self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         texts.addWidget(self.detail)
         row.addLayout(texts, 1)
         self.take_btn = QPushButton("  TAKE")
         self.take_btn.setObjectName("primary")
         self.take_btn.setIcon(icons.get("play", theme["ink"], 16))
-        self.take_btn.setMinimumSize(150, 40)
+        self.take_btn.setMinimumSize(120, 40)
         self.take_btn.setStyleSheet("font-size: 15px; font-weight: 700;")
         self.take_btn.setToolTip("Put it on stage now  (Ctrl+Enter)")
         self.take_btn.clicked.connect(self.takeRequested.emit)
@@ -380,8 +382,8 @@ class TakeBar(QFrame):
     def _set_tag(self, text: str, colour: str) -> None:
         self.tag.setText(text)
         self.tag.setStyleSheet(
-            f"color: {colour}; font-size: 11px; font-weight: 800; letter-spacing: 1px;"
-            f"border: 1px solid {colour}; border-radius: 9px; padding: 3px 9px;")
+            f"color: {colour}; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+            f"border: 1px solid {colour}; border-radius: 7px; padding: 0px 7px;")
 
     def _set_thumb(self, pixmap: Optional[QPixmap]) -> None:
         if pixmap is None or pixmap.isNull():

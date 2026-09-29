@@ -15,6 +15,12 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 
 ## Features
 
+- **The desk** — a live picture of every stage screen in the header (red frame
+  = on air), **SETUP / SHOW** modes (SHOW locks editing and deleting),
+  **PREVIEW → TAKE** so nothing reaches the stage by accident, **Undo** for a
+  few seconds after any change, a **Rehearse** window that tries the show out
+  without touching the stage, a **Ready check** before the doors open, and
+  health chips in the status bar. See [The desk](#the-desk).
 - **Display routing** — assign each role to a physical monitor; the widest
   monitor is auto-detected as the ceiling strip.
 - **Custom output geometry** — LED processors (Nova Studio, LVP, …) often map a
@@ -56,11 +62,11 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 - **Marquee** — text, typeface, pixel size, colour and scroll speed, drawn over
   live video via a `QGraphicsScene`.
 - **Presets** — routing, geometry, playlists, scaling, volumes and marquee
-  settings saved as JSON, on their own labelled row that shows which preset is
-  on the screens and whether it has unsaved changes. Loading one transitions
-  every screen rather than cutting, and **New** clears everything back to blank
-  for building the next show (monitor routing is kept — that is the hall's
-  wiring, not the event).
+  settings saved as JSON, shown as picture tiles of what each one puts on the
+  screens; the one on the screens is marked ON SCREEN (green), or CHANGED
+  (amber) once edited by hand. One tap loads it with a transition on every
+  screen; **Blank** clears everything for building the next show (monitor
+  routing is kept — that is the hall's wiring, not the event).
 - **Start with Windows** — optionally open the app at login and put a chosen
   preset on the screens, after a delay that lets LED processors finish booting.
 - **Compact bar** — shrink the dashboard to a strip that floats above
@@ -70,10 +76,13 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   and hot cues, a kill-EQ/filter/echo mixer with headphone cue and recording,
   and a synthesised techno machine (drums + acid bass) that can lock to a deck.
 - **Running order** — an event as steps (screens, sound, text, marquee, notes,
-  auto-advance), run with one NEXT button, `Page Down` or a presenter clicker.
-- **Slides** — PDF and PowerPoint straight from the app, with presenter view
-  (next slide, notes, timer), a clicker that works whichever window is in
-  front, and a phone page for turning slides.
+  auto-advance, how long each takes), with pictures of each step's screens and
+  the time the show should end, run with one NEXT button — on every tab —
+  `Page Down` or a presenter clicker.
+- **Slides** — PDF and PowerPoint (with its animations) straight from the app,
+  with presenter view (next slide, notes, a time limit counted down), a
+  clicker that works whichever window is in front, and phone pages for
+  turning slides — one for the crew, a slides-only QR link for guests.
 - **Phone remote** — NEXT, BLACKOUT, sound cues and presets from any phone on
   the Wi-Fi, behind a PIN.
 - **Blackout** — clears every stage screen at once.
@@ -95,9 +104,13 @@ MP4 is the safe choice).
 
 1. **Screens & Setup** → assign the monitors → **Apply routing / Open outputs**.
    Use *Identify monitors* if Windows has shuffled the order.
-2. Back on **Live**, drop the prepared media onto each card.
-3. During the event, click a playlist entry (or the ◀ ▶ arrows) to switch.
-4. Save it all as a preset so the next assembly is one click away.
+2. Back on **Live**, drop the prepared media onto each card (or onto a screen in
+   the header).
+3. Try it in **Rehearse** if you like; save it as a preset so the next assembly
+   is one tap away.
+4. Before the doors open: **Ready check**, then switch to **SHOW**.
+5. During the event, click a playlist entry (or the ◀ ▶ arrows), a preset, or
+   NEXT for the running order.
 
 The dashboard opens filling the screen and comes back the size it was left.
 Applying a preset never moves or un-maximises it — that used to drag the window
@@ -106,6 +119,70 @@ to one side before every show.
 `Escape` on a stage screen closes just that window; press **OPEN OUTPUTS** to
 bring it back. Quitting while outputs are live asks first — closing the app
 blacks out the hall.
+
+## The desk
+
+![The desk](docs/live.png)
+
+**The header shows the hall.** Each stage screen appears as a small live
+picture of exactly what the audience sees — video, names and the ceiling
+marquee included. Its frame says the state at a glance: **red = on air**, grey =
+black, dashed = closed (click to open it). Drop a picture or video on a screen
+there and it goes on that screen. During a PowerPoint show the tile shows the
+current slide.
+
+**SETUP / SHOW.** SETUP is for preparing: everything can be edited. SHOW is for
+the event: the Library and Screens & Setup tabs step away, the running order
+cannot be edited, moved or deleted, preset saving and deleting disappear, and
+Rehearse and Open outputs are hidden — a stray tap cannot undo an evening's
+preparation. Switching to SHOW runs the ready check and opens it if something
+is wrong. The choice is remembered.
+
+**PREVIEW → TAKE.** With it on, a file, preset or name chosen by hand does not
+go on stage at once: it waits in a bar under the header with a picture of what
+it is and where it goes, until **TAKE** (`Ctrl`+`Enter`) or **Cancel** (`Esc`).
+Running-order steps still go straight on — NEXT is their TAKE.
+
+**Undo.** For ten seconds after any change made by hand — a file, a preset, a
+name, a screen's black button, even BLACKOUT — the bar offers **Undo**
+(`Ctrl`+`Z`), which puts back exactly what was on the screens. Running-order
+steps have **Back** for that.
+
+**Rehearse** opens the three stage screens in one window on the desk, at the
+stage's real sizes, scaled down. While it is open the whole dashboard drives
+those instead of the stage — presets, the running order, names, slides (as
+pictures, so PowerPoint never opens on the hall's screen) — and the hall keeps
+what it had. Sounds started while rehearsing are silent, or go to a device you
+pick (headphones); the running order gets its own music players, so the hall's
+music is not faded out. **End rehearsal** gives the dashboard the stage back
+exactly as it was.
+
+**Ready check** — one page before the doors open: every screen (monitor
+connected, window open, what is on it), the sound device (remember the hall's
+mixer once and it warns if sound ever goes elsewhere), the master volume,
+missing files in the running order and on the Live tab, the presentation, the
+clicker (press it — the row turns green; presses during the check move
+nothing), and the phone remote. It re-checks every second.
+
+**Status bar.** Chips for the screens, the sound device (or *muted*), the
+clicker, connected phones and missing files, coloured by how they are; a click
+opens the ready check. **?** shows every keyboard shortcut.
+
+**NOW / NEXT everywhere.** Under every tab but Show, one line carries the
+running order: the step that is on, its time, the next one, Back and
+**NEXT STEP**.
+
+**Gold means the one thing to press.** Each screen has at most one gold
+button — NEXT on Show and Slides, SHOW THIS NAME on Text, TAKE while a change
+waits. Red is for what the audience sees (on air, BLACKOUT); green for ready
+(an open window reads OPEN, a preset ON SCREEN).
+
+**Hold to confirm.** What cannot be taken back — *Close outputs*, a preset's
+*Blank* and *Delete*, and ending a presentation — acts only when held down for
+a moment; a bar fills while it is held, and a quick tap does nothing.
+
+The whole dashboard fits a 1080p desk monitor, with touch-sized controls; a
+tab scrolls rather than pushing the window off the screen.
 
 ### Keys
 
@@ -116,11 +193,13 @@ blacks out the hall.
 | `Space` | play / pause that screen |
 | `F1`–`F8` | play / pause that sound cue |
 | `Shift`+`F1`–`F8` | stop it and rewind |
-| `Ctrl`+`Space` | fade out every sound cue |
+| `Ctrl`+`Space` | stop every sound (quick fade); *Fade out* on the Live tab takes three seconds |
 | `Ctrl`+`→` / `Ctrl`+`←` | next / previous name on the Text tab |
 | `Ctrl`+`H` | hide the text |
 | `B` | blackout every screen (pictures only — sound keeps playing) |
 | `Ctrl`+`O` | apply routing / open outputs |
+| `Ctrl`+`Enter` / `Esc` | TAKE / cancel a change waiting in PREVIEW |
+| `Ctrl`+`Z` | undo the last change made by hand (for ten seconds) |
 | `Page Down` / `Page Up` | next / previous step of the running order — what a wireless presenter clicker sends; while slides are on screen, next / previous slide |
 
 While slides are on screen the clicker's other keys work as in PowerPoint:
@@ -155,6 +234,12 @@ set up, and leaves anything already right untouched — a background that is
 already playing is not restarted, and a one-off fanfare from an earlier step is
 not replayed. NOW and NEXT are shown at the top with a countdown when a step
 goes on by itself; closed outputs open by themselves when a step needs them.
+
+Each step shows small pictures of what it puts on the Main Stage and the
+Side Screens, and — if given under *Takes about* — how many minutes it lasts.
+The list adds the show up (*6 steps · about 1 h 05 min*) and, once it runs,
+says when it should end; the NOW clock turns amber when a step runs past its
+time.
 
 **From stage** adds a step that recreates whatever is on the screens right now
 — set the look up on the Live tab, capture it, name it. Steps can be reordered
@@ -200,7 +285,15 @@ NEXT stops on the last slide instead of showing PowerPoint's "End of slide show"
 screen. The dashboard keeps the focus, and a stage window kept on top steps
 aside for the show and comes back after it. If PowerPoint cannot start the show,
 the slides appear as pictures instead. Untick it for the picture mode; PDFs and
-folders of pictures are always pictures.
+folders of pictures are always pictures. Once used, PowerPoint stays ready,
+hidden, while the app runs — a show starts in under a second, and ending one and
+starting the next straight away just works — and it closes by itself after the
+app does (a PowerPoint you opened yourself is never closed).
+
+**Time limit.** Give the talk a limit (*Limit … min*) and the desk clock
+counts the time left instead of up — amber in the last two minutes, red and
+counting on once over. *Countdown on …* also shows it, small in the corner of a
+stage screen the speaker can see (the side screens, say). Both are remembered.
 
 **The clicker.** Page Down / Page Up (what almost every clicker sends), the
 arrows, Space and Enter turn slides; B blacks out; Esc ends. It works:
@@ -314,6 +407,11 @@ music. Pausing and stopping animate the level to zero first
 noticeable than the sound itself. Blackout is deliberately visual only;
 `Ctrl`+`Space` is the sound equivalent.
 
+Next to the output picker, **what is playing and how long it has left**, in
+large type — the sound that ends soonest, amber in its last ten seconds — and
+**Fade out**, a gentle three-second fade of everything, beside the quicker
+**STOP SOUND**.
+
 **Output device** picks which sound card everything plays through — cues *and*
 video audio. On a hall PC feeding a mixing console this matters: the default
 Windows device is rarely the one going to the PA.
@@ -326,6 +424,13 @@ Built for award ceremonies. The running order is a plain text box, one slide per
 line, because the list already exists in a document and can be pasted straight
 in; a line may carry a second, smaller line after `|`. Click a slide, or use
 `Ctrl`+`→`, and it appears on the chosen screen.
+
+**Looks**: ready-made ones — a lower third (name and role, low), a big centred
+title, a gold award name, a caption at the top — set size, position, colours and
+the shade in one go; *Save look…* keeps your own. **Preview** shows the selected
+name at the chosen screen's real shape, drawn by the same machinery as the
+stage over a live picture of what that screen shows now — so a name that is
+too long, or unreadable over the footage, is seen before it goes up.
 
 The text is drawn into the same `QGraphicsScene` as the background, so it
 composites over live video — the reason the outputs stopped using `QVideoWidget`.
@@ -344,7 +449,12 @@ shape the media is, including the 2816×128 strips cut for the ceiling.
 
 Selecting one item enables **Show now on**; selecting several enables **Add to
 playlist**, which is how an event gets prepared. Sound files offer the cue slots
-instead, and the buttons that do not apply are simply disabled.
+instead, and the buttons that do not apply are simply disabled. Files can also
+be dragged straight onto a screen in the header, or onto a card.
+
+**☆ Favourite** keeps the selected files under **★ Favourites** at the top of
+the folder picker, whichever folder they live in — the handful of backgrounds
+used at every assembly, one click away.
 
 ## Transitions
 
@@ -577,6 +687,7 @@ Everything lives in `main.py`:
 | `classify_media`, `scan_event_folder` | where each file in an event folder belongs |
 | `EventFolderDialog` | the plan, shown before anything is applied |
 | `MiniBar` | the floating strip the dashboard shrinks to |
+| `RehearsalMonitor` | the rehearsal window: three stage screens at their real sizes, scaled down |
 | `ControlPanel` | the dashboard |
 
 The DJ desk is kept apart, because it is the one part that needs numpy and is
@@ -597,6 +708,7 @@ The running order and the remote are separate modules too; the dashboard
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link), `RemoteDialog`, `GuestDialog`, and the phone pages themselves |
 | `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |
 | `qr.py` | a small QR code encoder (no extra packages) for the phone links |
+| `desk.py` | the desk: `MultiView` / `ScreenTile`, `ModeSwitch`, `TakeBar` (preview, TAKE, undo), `ShowStrip`, `ReadyCheckDialog`, `PresetStrip`, `HealthBar`, `ShortcutsDialog`, `HoldButton`, and `PageTabs`, whose pages scroll instead of outgrowing the screen |
 
 `presets.json` and `shows.json` are deliberately git-ignored: they hold absolute
 paths to media on one particular machine.
