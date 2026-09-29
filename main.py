@@ -127,6 +127,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressDialog,
@@ -1297,6 +1298,11 @@ QPushButton#ghost {{ background: transparent; border: none; padding: 5px; }}
 QPushButton#ghost:hover {{ background: {CLR_HOVER}; border: none; }}
 QPushButton#ghost:disabled {{ background: transparent; border: none; }}
 QPushButton#transport {{ font-size: 15px; font-weight: 600; padding: 9px 0px; }}
+QPushButton#healthChip {{
+    background: transparent; border: 1px solid {CLR_EDGE}; border-radius: 9px;
+    padding: 2px 10px; font-size: 11px; font-weight: 600; color: {CLR_MUTED};
+}}
+QPushButton#healthChip:hover {{ background: {CLR_HOVER}; border-color: {CLR_EDGE_HI}; }}
 
 /* Inputs sit in a well: recessed, no outline until they matter. */
 QComboBox, QSpinBox, QLineEdit, QFontComboBox, QPlainTextEdit {{
@@ -3361,8 +3367,7 @@ class MediaLibrary(QWidget):
         bar.addWidget(unpin)
 
         build = QPushButton("  Build a show from a folder…")
-        build.setObjectName("primary")
-        build.setIcon(Icons.get("folder", CLR_INK, 15))
+        build.setIcon(Icons.get("folder", CLR_TEXT, 15))
         build.setToolTip("Scan an event folder and sort everything onto the right screens")
         build.clicked.connect(self.buildRequested.emit)
         bar.addWidget(build)
@@ -3434,7 +3439,6 @@ class MediaLibrary(QWidget):
         self.show_buttons: Dict[str, QPushButton] = {}
         for role in STAGE_ROLES:
             button = QPushButton(ROLE_LABELS[role])
-            button.setObjectName("primary")
             button.clicked.connect(lambda _c=False, r=role: self._send(r))
             actions.addWidget(button)
             self.show_buttons[role] = button
@@ -4197,7 +4201,7 @@ class OutputCard(QFrame):
     # -- state -------------------------------------------------------------- #
 
     def set_output_open(self, is_open: bool) -> None:
-        self.state_badge.setText("LIVE" if is_open else "CLOSED")
+        self.state_badge.setText("OPEN" if is_open else "CLOSED")
         self.state_badge.setObjectName("badgeLive" if is_open else "badgeOff")
         self.state_badge.setToolTip(
             "This screen's output window is open" if is_open else
@@ -4419,8 +4423,7 @@ class TopCard(OutputCard):
         self.speed_label.setMinimumWidth(58)
         speed_row.addWidget(self.speed_label)
         start = QPushButton("  Start")
-        start.setObjectName("primary")
-        start.setIcon(Icons.get("play", "#0b0e13"))
+        start.setIcon(Icons.get("play", CLR_TEXT))
         start.setToolTip("Start scrolling the text across the strip")
         start.clicked.connect(self.marqueeStart.emit)
         stop = QPushButton("  Stop")
@@ -5345,12 +5348,14 @@ class ControlPanel(QMainWindow):
         self._set_mode(str(self.settings.value("ui/mode", "setup")), check=False)
         self._refresh_show_strip()
 
-        hint = QLabel(
-            "  1 2 3 pick a screen · ← → previous / next · Space play-pause · "
-            "F1–F8 play/pause sound · Shift+F… stop · B blackout · PgDn / PgUp running order"
-        )
-        hint.setObjectName("keyHint")
-        self.statusBar().addPermanentWidget(hint)
+        self.health = desk_mod.HealthBar(THEME)
+        self.health.checkRequested.connect(self._open_ready_check)
+        self.health.helpRequested.connect(self._show_shortcuts)
+        self.statusBar().addPermanentWidget(self.health)
+        self._health_timer = QTimer(self)
+        self._health_timer.timeout.connect(self._refresh_health)
+        self._health_timer.start(2000)
+        self._refresh_health()
         self.statusBar().showMessage(
             "Screens & Setup → assign monitors → OPEN OUTPUTS.   "
             "Then drop media onto a card, or build a playlist."
@@ -5661,6 +5666,8 @@ class ControlPanel(QMainWindow):
             clock = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
         auto = f"auto in {int(self._show_auto + 0.99)} s" if self._show_auto is not None else ""
         self.show_strip.set_state(caption, now_text, next_text, clock, auto, upcoming is not None)
+        # Slides, Text and Screens have a gold button of their own; there, the step NEXT steps back
+        self.show_strip.set_emphasis(self.tabs.currentWidget() in (self.tabs.widget(0), self.library, self.dj_page))
 
     # -- ready check ----------------------------------------------------------- #
 
@@ -5770,6 +5777,43 @@ class ControlPanel(QMainWindow):
             add("info", "PREVIEW → TAKE is on", "Files, presets and names chosen by hand wait for TAKE.")
         return rows
 
+    def _refresh_health(self) -> None:
+        """The status bar's chips: screens, sound, clicker, phones, files."""
+        if not self.isVisible():
+            return
+        items = []
+        open_count = sum(1 for role in STAGE_ROLES if self._show_output(role) is not None)
+        routed = sum(1 for role in STAGE_ROLES if self.routing_rows[role].screen_combo.currentData())
+        items.append((f"Screens {open_count}/{len(STAGE_ROLES)}",
+                      "ok" if open_count == len(STAGE_ROLES) else ("warn" if open_count < routed else "info"),
+                      "Stage windows open"))
+        device = self._audio_device_name()
+        hall = str(self.settings.value("ready/hall_audio", "") or "")
+        short = device if len(device) <= 30 else device[:28] + "…"
+        if self.sound_master.value() == 0:
+            items.append((f"Sound muted  ·  {short}", "warn", "Master volume is at 0"))
+        elif hall and device != hall:
+            items.append((f"Sound: {short}", "warn", f"Not the hall's device ({hall})"))
+        else:
+            items.append((f"Sound: {short}", "ok" if hall else "info", device))
+        last = self.presentation_tab._last_key
+        ago = time.monotonic() - last[2] if last[2] else None
+        if ago is not None and ago < 1800:
+            items.append((f"Clicker {int(ago // 60)} min" if ago >= 60 else "Clicker ✓", "ok",
+                          f"Last press: {last[0]}"))
+        else:
+            items.append(("Clicker untested", "info", "No clicker press seen yet"))
+        if self.remote.running:
+            items.append((f"Phones {self.remote.clients()}", "ok", "The phone remote is on"))
+        gone = show_missing_files(self.show_tab.steps())
+        if gone:
+            items.append((f"{len(gone)} file(s) missing", "fail", "\n".join(gone[:8])))
+        self.health.set_items(items)
+
+    @Slot()
+    def _show_shortcuts(self) -> None:
+        desk_mod.ShortcutsDialog(THEME, self).exec()
+
     def _ready_action(self, key: str) -> None:
         if key == "identify":
             self._identify_screens()
@@ -5785,75 +5829,140 @@ class ControlPanel(QMainWindow):
 
     def _build_preset_bar(self) -> QWidget:
         """
-        Presets get their own labelled row.
-
-        As four unlabelled icons in the header this was guesswork - which one
-        loads, which one overwrites, and what is on the screens right now. Words
-        and a state line answer all three.
+        Presets as pictures: what each one puts on the screens, the one that is
+        on the screens now marked green (amber once it has been changed). One
+        tap loads; saving, renaming and deleting are SETUP work, at the end of
+        the row and on a right-click.
         """
         bar = QFrame()
         bar.setObjectName("bar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(14, 9, 14, 9)
-        layout.setSpacing(9)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(12)
 
+        caption_box = QVBoxLayout()
+        caption_box.setSpacing(4)
+        caption_row = QHBoxLayout()
+        caption_row.setSpacing(6)
         glyph = QLabel()
         glyph.setPixmap(Icons.get("list", CLR_MUTED, 16).pixmap(16, 16))
-        layout.addWidget(glyph)
-
-        caption = QLabel("Preset")
+        caption_row.addWidget(glyph)
+        caption = QLabel("PRESETS")
         caption.setObjectName("sectionTitle")
-        layout.addWidget(caption)
+        caption.setToolTip(f"Saved in {PRESET_FILE}")
+        caption_row.addWidget(caption)
+        caption_row.addStretch(1)
+        caption_box.addLayout(caption_row)
+        self.preset_state = QLabel()
+        self.preset_state.setObjectName("cardHint")
+        self.preset_state.setWordWrap(True)
+        self.preset_state.setFixedWidth(150)
+        caption_box.addWidget(self.preset_state)
+        caption_box.addStretch(1)
+        layout.addLayout(caption_box)
 
+        # The chosen preset lives in a combo nobody sees: saving, deleting and
+        # the autostart all read it, as they always have.
         self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(230)
-        self.preset_combo.setToolTip("Saved setups: routing, playlists, marquee, volumes")
+        self.preset_combo.hide()
         layout.addWidget(self.preset_combo)
 
-        new_preset_btn = QPushButton("  New")
-        new_preset_btn.setIcon(Icons.get("plus", CLR_TEXT, 15))
-        new_preset_btn.setToolTip("Clear everything and start a fresh show from blank")
-        new_preset_btn.clicked.connect(self._new_preset)
-        layout.addWidget(new_preset_btn)
+        self.preset_strip = desk_mod.PresetStrip(THEME)
+        self.preset_strip.presetClicked.connect(self._on_preset_tile)
+        self.preset_strip.menuRequested.connect(self._preset_menu)
+        layout.addWidget(self.preset_strip, 1)
 
-        load_btn = QPushButton("  Load")
-        load_btn.setObjectName("primary")
-        load_btn.setIcon(Icons.get("folder", "#0b0e13", 15))
-        load_btn.setToolTip("Put the selected preset on the screens")
-        load_btn.clicked.connect(self._load_preset)
-        layout.addWidget(load_btn)
-
-        save_btn = QPushButton("  Save")
-        save_btn.setIcon(Icons.get("save", CLR_TEXT, 15))
-        save_btn.setToolTip("Overwrite the selected preset with what is set up now")
-        save_btn.clicked.connect(self._save_preset)
-        layout.addWidget(save_btn)
-
+        edit = QGridLayout()
+        edit.setHorizontalSpacing(6)
+        edit.setVerticalSpacing(6)
         new_btn = QPushButton("  Save as new…")
         new_btn.setIcon(Icons.get("plus", CLR_TEXT, 15))
-        new_btn.setToolTip("Store the current setup under a new name")
+        new_btn.setToolTip("Store what is set up now under a new name")
         new_btn.clicked.connect(self._save_preset_as)
-        layout.addWidget(new_btn)
-
+        save_btn = QPushButton("  Save")
+        save_btn.setIcon(Icons.get("save", CLR_TEXT, 15))
+        save_btn.setToolTip("Overwrite the chosen preset with what is set up now")
+        save_btn.clicked.connect(self._save_preset)
+        new_preset_btn = QPushButton("  Blank")
+        new_preset_btn.setIcon(Icons.get("refresh", CLR_TEXT, 15))
+        new_preset_btn.setToolTip("Clear everything and start a fresh show from blank")
+        new_preset_btn.clicked.connect(self._new_preset)
         delete_btn = QPushButton("  Delete")
         delete_btn.setIcon(Icons.get("trash", CLR_TEXT, 15))
-        delete_btn.setToolTip("Remove the selected preset")
+        delete_btn.setToolTip("Remove the chosen preset")
         delete_btn.clicked.connect(self._delete_preset)
-        layout.addWidget(delete_btn)
+        edit.addWidget(new_btn, 0, 0)
+        edit.addWidget(save_btn, 0, 1)
+        edit.addWidget(new_preset_btn, 1, 0)
+        edit.addWidget(delete_btn, 1, 1)
+        layout.addLayout(edit)
         # hidden in SHOW mode
         self._preset_edit_widgets = [new_preset_btn, save_btn, new_btn, delete_btn]
 
-        layout.addSpacing(6)
-        self.preset_state = QLabel()
-        self.preset_state.setObjectName("cardHint")
-        layout.addWidget(self.preset_state)
-
-        layout.addStretch(1)
-        where = QLabel(f"saved in {os.path.basename(PRESET_FILE)}")
-        where.setObjectName("keyHint")
-        where.setToolTip(PRESET_FILE)
-        layout.addWidget(where)
+        # video frames for the pictures arrive later; rebuild once they have
+        self._preset_pictures_timer = QTimer(self)
+        self._preset_pictures_timer.setSingleShot(True)
+        self._preset_pictures_timer.timeout.connect(self._rebuild_preset_strip)
+        thumbnailer().ready.connect(lambda *_a: self._preset_pictures_timer.start(400))
         return bar
+
+    def _preset_picture(self, payload: dict) -> QPixmap:
+        """A preset at a glance: the Main Stage, the side screens inset, the ceiling strip on top."""
+        canvas = QPixmap(176, 99)
+        canvas.fill(QColor("#05070b"))
+        outputs = payload.get("outputs", {})
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        def cover(path: str, rect: QRect) -> bool:
+            picture = small_picture(path, QSize(320, 180)) if path else None
+            if picture is None or picture.isNull():
+                return False
+            scale = max(rect.width() / picture.width(), rect.height() / picture.height())
+            sw, sh = rect.width() / scale, rect.height() / scale
+            painter.drawPixmap(QRectF(rect), picture,
+                               QRectF((picture.width() - sw) / 2, (picture.height() - sh) / 2, sw, sh))
+            return True
+
+        cover(outputs.get(ROLE_MAIN, {}).get("file", ""), QRect(0, 0, 176, 99))
+        top_rect = QRect(0, 0, 176, 9)
+        if not cover(outputs.get(ROLE_TOP, {}).get("file", ""), top_rect):
+            painter.fillRect(top_rect, QColor(payload.get("top", {}).get("background", "#101828")))
+        sides = outputs.get(ROLE_SIDES, {}).get("file", "")
+        if sides:
+            inset = QRect(6, 99 - 6 - 27, 48, 27)
+            painter.fillRect(inset.adjusted(-1, -1, 1, 1), QColor(CLR_BG))
+            if not cover(sides, inset):
+                painter.fillRect(inset, QColor("#05070b"))
+        painter.end()
+        return canvas
+
+    def _rebuild_preset_strip(self) -> None:
+        items = [(name, self._preset_picture(self.presets.get(name) or {})) for name in self.presets.names()]
+        self.preset_strip.set_presets(items)
+        self._mark_preset_strip()
+
+    def _mark_preset_strip(self) -> None:
+        if hasattr(self, "preset_strip"):
+            chosen = self.preset_combo.currentText() if self.preset_combo.isEnabled() else None
+            self.preset_strip.mark(self.loaded_preset, self._preset_dirty, chosen)
+
+    @Slot(str)
+    def _on_preset_tile(self, name: str) -> None:
+        self.preset_combo.setCurrentText(name)
+        self._mark_preset_strip()
+        self._load_preset()
+
+    def _preset_menu(self, name: str, position) -> None:
+        self.preset_combo.setCurrentText(name)
+        self._mark_preset_strip()
+        menu = QMenu(self)
+        menu.addAction(f"Put “{name}” on the screens", self._load_preset)
+        if self.ui_mode == "setup":
+            menu.addSeparator()
+            menu.addAction(f"Save what is set up now into “{name}”", self._save_preset)
+            menu.addAction(f"Delete “{name}”…", self._delete_preset)
+        menu.exec(position)
 
     def _mark_preset_dirty(self) -> None:
         if not self._preset_dirty:
@@ -5861,6 +5970,7 @@ class ControlPanel(QMainWindow):
             self._describe_preset_state()
 
     def _describe_preset_state(self) -> None:
+        self._mark_preset_strip()
         if self.loaded_preset is None:
             self.preset_state.setText("nothing loaded")
             self.preset_state.setStyleSheet(f"color: {CLR_MUTED};")
@@ -8155,6 +8265,8 @@ class ControlPanel(QMainWindow):
             if index >= 0:
                 self.preset_combo.setCurrentIndex(index)
         self.preset_combo.blockSignals(False)
+
+        self._rebuild_preset_strip()
 
         # The autostart picker offers the same list.
         wanted = self.autostart_preset.currentText()

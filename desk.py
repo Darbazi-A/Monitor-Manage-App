@@ -360,6 +360,7 @@ class ShowStrip(QFrame):
         super().__init__()
         self.setObjectName("bar")
         self.theme = theme
+        self.icons = icons
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 6, 8, 6)
         row.setSpacing(12)
@@ -396,14 +397,23 @@ class ShowStrip(QFrame):
         back.setToolTip("Previous step  (Page Up)")
         back.clicked.connect(self.backRequested.emit)
         row.addWidget(back)
-        self.next_btn = QPushButton("  NEXT")
+        self.next_btn = QPushButton("  NEXT STEP")
         self.next_btn.setObjectName("primary")
         self.next_btn.setIcon(icons.get("next", theme["ink"], 18))
-        self.next_btn.setMinimumSize(150, 38)
+        self.next_btn.setMinimumSize(160, 38)
         self.next_btn.setStyleSheet("font-size: 15px; font-weight: 700;")
         self.next_btn.setToolTip("Run the next step  (Page Down)")
         self.next_btn.clicked.connect(self.nextRequested.emit)
         row.addWidget(self.next_btn)
+
+    def set_emphasis(self, gold: bool) -> None:
+        """Gold only where it is the one main action on screen."""
+        name = "primary" if gold else ""
+        if self.next_btn.objectName() != name:
+            self.next_btn.setObjectName(name)
+            self.next_btn.setIcon(self.icons.get("next", self.theme["ink"] if gold else self.theme["text"], 18))
+            self.next_btn.style().unpolish(self.next_btn)
+            self.next_btn.style().polish(self.next_btn)
 
     def set_state(self, caption: str, now: str, upcoming: str, clock: str, auto: str,
                   has_next: bool) -> None:
@@ -540,3 +550,238 @@ class ReadyCheckDialog(QDialog):
         self.act(key)
         self._shown = None
         self.refresh()
+
+
+# --------------------------------------------------------------------------- #
+# Presets as pictures
+# --------------------------------------------------------------------------- #
+
+class PresetTile(QWidget):
+    """One preset: a picture of what it puts on the screens, and its name."""
+
+    clicked = Signal(str)
+    menuRequested = Signal(str, object)     # name, global position
+
+    SIZE = QSize(132, 92)
+
+    def __init__(self, name: str, picture: Optional[QPixmap], theme: dict) -> None:
+        super().__init__()
+        self.name = name
+        self.picture = picture
+        self.theme = theme
+        self.state = ""                     # "" | "on" (on the screens) | "changed"
+        self.selected = False
+        self.setFixedSize(self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"{name} - click to put it on the screens; right-click for more")
+
+    def set_state(self, state: str, selected: bool) -> None:
+        self.state, self.selected = state, selected
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        theme = self.theme
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        frame = QRectF(1, 1, self.width() - 2, 66)
+        clip = QPainterPath()
+        clip.addRoundedRect(frame, 7, 7)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#05070b"))
+        p.drawPath(clip)
+        if self.picture is not None and not self.picture.isNull():
+            # cover the frame, cropping the middle out of the picture
+            pw, ph = self.picture.width(), self.picture.height()
+            scale = max(frame.width() / pw, frame.height() / ph)
+            sw, sh = frame.width() / scale, frame.height() / scale
+            source = QRectF((pw - sw) / 2, (ph - sh) / 2, sw, sh)
+            p.save()
+            p.setClipPath(clip)
+            p.drawPixmap(frame, self.picture, source)
+            p.restore()
+        else:
+            p.setPen(QColor(theme["muted"]))
+            p.setFont(_font(10))
+            p.drawText(frame, Qt.AlignCenter, "black")
+        colour = {"on": theme["ok"], "changed": theme["warn"]}.get(self.state)
+        if colour:
+            pen = QPen(QColor(colour), 2)
+        elif self.selected:
+            pen = QPen(QColor(theme["dim"]), 1.5)
+        else:
+            pen = QPen(QColor(theme["edge"]), 1)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(frame, 7, 7)
+        if colour:
+            tag = "ON SCREEN" if self.state == "on" else "CHANGED"
+            p.setFont(_font(9, QFont.Bold))
+            width = p.fontMetrics().horizontalAdvance(tag) + 12
+            box = QRectF(frame.right() - width - 4, frame.top() + 4, width, 15)
+            p.setPen(Qt.NoPen)
+            fill = QColor(colour)
+            fill.setAlpha(230)
+            p.setBrush(fill)
+            p.drawRoundedRect(box, 7, 7)
+            p.setPen(QColor(theme["ink"]))
+            p.drawText(box, Qt.AlignCenter, tag)
+        p.setFont(_font(12, QFont.DemiBold))
+        p.setPen(QColor(theme["text"]))
+        name_rect = QRectF(2, 70, self.width() - 4, 20)
+        p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                   p.fontMetrics().elidedText(self.name, Qt.ElideRight, int(name_rect.width())))
+        p.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.name)
+        elif event.button() == Qt.RightButton:
+            self.menuRequested.emit(self.name, event.globalPosition().toPoint())
+
+
+class PresetStrip(QScrollArea):
+    """Every preset as a picture, in a row; the one on the screens marked green."""
+
+    presetClicked = Signal(str)
+    menuRequested = Signal(str, object)
+
+    def __init__(self, theme: dict) -> None:
+        super().__init__()
+        self.theme = theme
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFixedHeight(PresetTile.SIZE.height() + 14)
+        self.setStyleSheet("QScrollArea { background: transparent; } "
+                           "QScrollArea > QWidget > QWidget { background: transparent; }")
+        host = QWidget()
+        self.row = QHBoxLayout(host)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(10)
+        self.row.addStretch(1)
+        self.setWidget(host)
+        self.tiles: Dict[str, PresetTile] = {}
+        self.empty = QLabel("No presets yet - set the screens up, then “Save as new…”")
+        self.empty.setObjectName("cardHint")
+        self.row.insertWidget(0, self.empty)
+
+    def set_presets(self, items: List[tuple]) -> None:
+        """items: (name, picture) in order."""
+        for tile in self.tiles.values():
+            tile.setParent(None)
+            tile.deleteLater()
+        self.tiles = {}
+        for position, (name, picture) in enumerate(items):
+            tile = PresetTile(name, picture, self.theme)
+            tile.clicked.connect(self.presetClicked.emit)
+            tile.menuRequested.connect(self.menuRequested.emit)
+            self.row.insertWidget(position, tile)
+            self.tiles[name] = tile
+        self.empty.setVisible(not items)
+
+    def mark(self, loaded: Optional[str], changed: bool, selected: Optional[str]) -> None:
+        for name, tile in self.tiles.items():
+            state = ("changed" if changed else "on") if name == loaded else ""
+            tile.set_state(state, name == selected)
+
+
+# --------------------------------------------------------------------------- #
+# Health, and the keys
+# --------------------------------------------------------------------------- #
+
+class HealthBar(QWidget):
+    """
+    The status bar's right side: a chip per thing that matters during a show,
+    coloured by how it is. A click on any of them opens the ready check.
+    """
+
+    checkRequested = Signal()
+    helpRequested = Signal()
+
+    def __init__(self, theme: dict) -> None:
+        super().__init__()
+        self.theme = theme
+        self.row = QHBoxLayout(self)
+        self.row.setContentsMargins(0, 0, 4, 0)
+        self.row.setSpacing(6)
+        self.chips: List[QPushButton] = []
+        self.help = QPushButton("?")
+        self.help.setObjectName("healthChip")
+        self.help.setToolTip("Keyboard shortcuts")
+        self.help.setFixedWidth(30)
+        self.help.clicked.connect(self.helpRequested.emit)
+        self.row.addWidget(self.help)
+
+    def set_items(self, items: List[tuple]) -> None:
+        """items: (text, status, tooltip); status ok | warn | fail | info."""
+        while len(self.chips) < len(items):
+            chip = QPushButton()
+            chip.setObjectName("healthChip")
+            chip.clicked.connect(self.checkRequested.emit)
+            self.row.insertWidget(len(self.chips), chip)
+            self.chips.append(chip)
+        for chip, (text, status, tip) in zip(self.chips, items):
+            colour = {"ok": self.theme["ok"], "warn": self.theme["warn"], "fail": self.theme["danger"],
+                      "info": self.theme["muted"]}[status]
+            chip.setText(f"●  {text}")
+            chip.setToolTip(tip + "\n\nClick for the ready check.")
+            chip.setStyleSheet(f"color: {colour};")
+            chip.setProperty("status", status)
+            chip.show()
+        for chip in self.chips[len(items):]:
+            chip.hide()
+
+
+SHORTCUTS = (
+    ("Running order", (("Page Down", "next step (the clicker's forward button)"),
+                       ("Page Up", "step back"))),
+    ("Screens", (("1  2  3", "choose Main / Sides / Top for the keys below"),
+                 ("← →", "previous / next file in that screen's playlist"),
+                 ("Space", "play / pause that screen's video"),
+                 ("B", "BLACKOUT - every screen to black"),
+                 ("Ctrl+O", "open the stage outputs"))),
+    ("Preview → TAKE", (("Ctrl+Enter", "TAKE - put the waiting change on stage"),
+                        ("Esc", "cancel it"),
+                        ("Ctrl+Z", "undo the last change (for a few seconds)"))),
+    ("Sound", (("F1 … F8", "play / pause a sound cue"),
+               ("Shift+F1 … F8", "stop that cue"),
+               ("Ctrl+Space", "stop all sound"))),
+    ("Names on screen", (("Ctrl+→  Ctrl+←", "next / previous name"),
+                         ("Ctrl+H", "hide the text"))),
+    ("Slides (while on screen)", (("Page Down  →  Space", "next slide or animation"),
+                                  ("Page Up  ←", "back"),
+                                  ("B  or  .", "black the slides"),
+                                  ("Esc", "end the presentation"))),
+)
+
+
+class ShortcutsDialog(QDialog):
+    """Every key, in one place - instead of a line of small print under the window."""
+
+    def __init__(self, theme: dict, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard shortcuts")
+        self.setMinimumWidth(560)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(22, 18, 22, 18)
+        box.setSpacing(4)
+        for section, keys in SHORTCUTS:
+            title = QLabel(section.upper())
+            title.setObjectName("sectionTitle")
+            title.setContentsMargins(0, 10, 0, 2)
+            box.addWidget(title)
+            for key, meaning in keys:
+                row = QHBoxLayout()
+                label = QLabel(key)
+                label.setFixedWidth(170)
+                label.setStyleSheet(f"color: {theme['accent']}; font-weight: 600;")
+                row.addWidget(label)
+                text = QLabel(meaning)
+                text.setObjectName("cardHint")
+                row.addWidget(text, 1)
+                box.addLayout(row)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        box.addSpacing(10)
+        box.addWidget(close, 0, Qt.AlignRight)

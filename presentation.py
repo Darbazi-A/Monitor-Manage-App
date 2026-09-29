@@ -1291,8 +1291,8 @@ class PresentationTab(QWidget):
             self.live_btn.setObjectName("danger")
         else:
             self.live_btn.setText(f"  Show on {role_label}")
-            self.live_btn.setIcon(self.icons.get("monitor", "#0b0e13", 16))
-            self.live_btn.setObjectName("primary")
+            self.live_btn.setIcon(self.icons.get("monitor", self.theme["text"], 16))
+            self.live_btn.setObjectName("")
         self.live_btn.style().unpolish(self.live_btn)
         self.live_btn.style().polish(self.live_btn)
         self.live_btn.setEnabled(presenter.can_go_live())
