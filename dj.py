@@ -13,6 +13,8 @@ with a right-click, a finger does with a long press; double-tap resets a knob.
 """
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 import json
 import math
 import os
@@ -323,7 +325,7 @@ class Knob(TouchInput, QWidget):
         self._hover = False
         self.setFixedSize(max(self.dial + 16, 52), self.dial + 20)
         self.setCursor(Qt.SizeVerCursor)
-        self.setToolTip(tip or f"{label} - drag up/down · double-tap resets")
+        self.setToolTip(tip or tr("{0} - drag up/down · double-tap resets").format(label))
 
     def value(self) -> float:
         return self._value
@@ -612,7 +614,7 @@ class Platter(TouchInput, QWidget):
         self.setMaximumHeight(330)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setCursor(Qt.OpenHandCursor)
-        self.setToolTip("Hold the record to scratch · drag the outer ring to nudge")
+        self.setToolTip(tr('Hold the record to scratch · drag the outer ring to nudge'))
 
     def take_motion(self) -> float:
         motion, self._motion = self._motion, 0.0
@@ -892,7 +894,7 @@ class WaveDetail(TouchInput, QWidget):
         self._shown = None
         self._drag_x: Optional[float] = None
         self.setFixedHeight(de.DETAIL_H + 8)
-        self.setToolTip("Tap to zoom · drag while paused to move through the track")
+        self.setToolTip(tr('Tap to zoom · drag while paused to move through the track'))
 
     # -- building the picture ---------------------------------------------- #
     def set_track(self, track: Optional[de.Track]) -> None:
@@ -1029,7 +1031,7 @@ class WaveDetail(TouchInput, QWidget):
             p.setPen(QColor(DIM))
             p.setFont(_font(8, QFont.DemiBold))
             p.drawText(rect.adjusted(10, 4, -10, -4), Qt.AlignTop | Qt.AlignRight,
-                       f"analysing  {int(self.loading * 100)}%")
+                       tr("analysing  {0}%").format(int(self.loading * 100)))
         text = self.message or ("" if track is not None else "No track loaded")
         if text:
             p.setPen(QColor(DIM))
@@ -1056,7 +1058,7 @@ class WaveOverview(TouchInput, QWidget):
         self._shown = None
         self.setFixedHeight(36)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Tap to jump to that point")
+        self.setToolTip(tr('Tap to jump to that point'))
 
     def set_track(self, track: Optional[de.Track]) -> None:
         self.track = track
@@ -1392,10 +1394,10 @@ class DeckView(QFrame):
         header.addWidget(badge)
         names = QVBoxLayout()
         names.setSpacing(0)
-        self.title = QLabel("Empty deck")
+        self.title = QLabel(tr('Empty deck'))
         self.title.setObjectName("djTrack")
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.sub = QLabel("drop a track, or double-tap one in the crate")
+        self.sub = QLabel(tr('drop a track, or double-tap one in the crate'))
         self.sub.setObjectName("djSub")
         self.sub.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         names.addWidget(self.title)
@@ -1408,9 +1410,9 @@ class DeckView(QFrame):
         self.bpm_btn.setFocusPolicy(Qt.NoFocus)
         self.bpm_btn.setCursor(Qt.PointingHandCursor)
         self.bpm_btn.setStyleSheet(f"color: {self.colour};")
-        self.bpm_btn.setToolTip("Tap: double / halve the tempo, or move beat 1 here")
+        self.bpm_btn.setToolTip(tr('Tap: double / halve the tempo, or move beat 1 here'))
         self.bpm_btn.clicked.connect(self._bpm_menu)
-        self.bpm_sub = QLabel("BPM")
+        self.bpm_sub = QLabel(tr('BPM'))
         self.bpm_sub.setObjectName("djSmall")
         self.bpm_sub.setAlignment(Qt.AlignRight)
         tempo.addWidget(self.bpm_btn, 0, Qt.AlignRight)
@@ -1497,12 +1499,12 @@ class DeckView(QFrame):
 
         loops = QHBoxLayout()
         loops.setSpacing(5)
-        caption = QLabel("LOOP")
+        caption = QLabel(tr('LOOP'))
         caption.setObjectName("djSmall")
         loops.addWidget(caption)
         self.loop_btns: Dict[int, QPushButton] = {}
         for beats in (1, 2, 4, 8, 16):
-            btn = _button(str(beats), f"Loop {beats} beat(s) from the nearest beat · tap again to exit",
+            btn = _button(str(beats), tr("Loop {0} beat(s) from the nearest beat · tap again to exit").format(beats),
                           True)
             btn.clicked.connect(lambda _c=False, b=beats: self._on_loop(b))
             loops.addWidget(btn, 1)
@@ -1523,10 +1525,10 @@ class DeckView(QFrame):
     # -- loading ------------------------------------------------------------ #
     def load(self, path: str) -> None:
         if self.deck.playing:
-            self.status.emit(f"Deck {self.letter} is playing - pause it before loading a new track.")
+            self.status.emit(tr("Deck {0} is playing - pause it before loading a new track.").format(self.letter))
             return
         if not de.is_audio(path) or not os.path.isfile(path):
-            self.status.emit(f"Not an audio file: {os.path.basename(path)}")
+            self.status.emit(tr("Not an audio file: {0}").format(os.path.basename(path)))
             return
         if self.job is not None:
             if self.job.track is not None:
@@ -1602,9 +1604,9 @@ class DeckView(QFrame):
         _set_text(self.sub, f"{int(track.duration // 60)}:{int(track.duration % 60):02d}  ·  {folder}")
         self.panel.crate.update_row(track.path)
         if not track.bpm:
-            self.status.emit(f"Deck {self.letter}: no steady beat found - sync and loops are off.")
+            self.status.emit(tr("Deck {0}: no steady beat found - sync and loops are off.").format(self.letter))
         else:
-            self.status.emit(f"Deck {self.letter}: {track.title} - {track.bpm:g} BPM")
+            self.status.emit(tr("Deck {0}: {1} - {2:g} BPM").format(self.letter, track.title, track.bpm))
 
     def _on_failed(self, job: de.LoadJob, message: str) -> None:
         if job is not self.job:
@@ -1614,12 +1616,12 @@ class DeckView(QFrame):
         self.detail.message = "Could not load this file"
         self.detail.update()
         _set_text(self.sub, message)
-        self.status.emit(f"Deck {self.letter}: {message}")
+        self.status.emit(tr("Deck {0}: {1}").format(self.letter, message))
 
     def _browse(self) -> None:
         start = self.panel.crate.current_folder() or os.path.expanduser("~/Music")
         path, _ = QFileDialog.getOpenFileName(
-            self, f"Load on deck {self.letter}", start,
+            self, tr('Load on deck {0}').format(self.letter), start,
             "Audio (" + " ".join(f"*{e}" for e in de.AUDIO_EXTENSIONS) + ")")
         if path:
             self.load(path)
@@ -1682,7 +1684,7 @@ class DeckView(QFrame):
     def _clear_hot(self, i: int) -> None:
         deck = self.deck
         self.engine.post(lambda: deck.hot.__setitem__(i, None))
-        self.status.emit(f"Deck {self.letter}: hot cue {i + 1} cleared")
+        self.status.emit(tr("Deck {0}: hot cue {1} cleared").format(self.letter, i + 1))
 
     def _on_loop(self, beats: int) -> None:
         deck = self.deck
@@ -1767,10 +1769,10 @@ class DeckView(QFrame):
         if track is None or not track.complete:
             return
         menu = QMenu(self)
-        double = menu.addAction("Tempo × 2")
-        half = menu.addAction("Tempo ÷ 2")
+        double = menu.addAction(tr('Tempo × 2'))
+        half = menu.addAction(tr('Tempo ÷ 2'))
         menu.addSeparator()
-        here = menu.addAction("Beat 1 is here (move the grid)")
+        here = menu.addAction(tr('Beat 1 is here (move the grid)'))
         for action in (double, half, here):
             action.setEnabled(bool(track.bpm))
         chosen = menu.exec(self.bpm_btn.mapToGlobal(self.bpm_btn.rect().bottomLeft()))
@@ -1822,7 +1824,7 @@ class DeckView(QFrame):
         _set_text(self.remain_label, "-" + _clock((track.duration - sec) / max(0.05, rate)))
         bpm = deck.effective_bpm()
         _set_text(self.bpm_btn, f"{bpm:6.2f}" if bpm else ("…" if not track.complete else "---.--"))
-        sub = (f"{track.bpm:g} orig" if track.bpm else
+        sub = (tr("{0:g} orig").format(track.bpm) if track.bpm else
                "analysing…" if not track.complete else "no beat found")
         _set_text(self.bpm_sub, ("SYNC · " + sub) if deck.sync else sub)
 
@@ -1842,7 +1844,7 @@ class DeckView(QFrame):
 
         if self.play_btn.isChecked() != deck.playing:
             self.play_btn.setChecked(deck.playing)
-            self.play_btn.setText("❚❚  PAUSE" if deck.playing else "▶  PLAY")
+            self.play_btn.setText(tr('❚❚  PAUSE') if deck.playing else tr('▶  PLAY'))
         for i, btn in enumerate(self.hot_btns):
             is_set = deck.hot[i] is not None
             if self._hot_shown[i] != is_set:
@@ -1934,7 +1936,7 @@ class MixerView(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        title = QLabel("MIXER")
+        title = QLabel(tr('MIXER'))
         title.setObjectName("djTitle")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
@@ -2007,11 +2009,11 @@ class MixerView(QFrame):
         if on:
             path = os.path.join(self.mix_folder(), time.strftime("Mix %Y-%m-%d %H-%M-%S.wav"))
             engine.start_recording(path)
-            self.panel.show_status(f"Recording to {path}")
+            self.panel.show_status(tr('Recording to {0}').format(path))
         else:
             engine.stop_recording()
             if engine.rec_path:
-                self.panel.show_status(f"Mix saved: {engine.rec_path}")
+                self.panel.show_status(tr('Mix saved: {0}').format(engine.rec_path))
 
     def refresh(self) -> bool:
         engine = self.panel.engine
@@ -2056,7 +2058,7 @@ class MachineView(QFrame):
         dot = QLabel("●")
         dot.setStyleSheet(f"color: {MACHINE_COLOUR}; font-size: 14px;")
         top.addWidget(dot)
-        title = QLabel("TECHNO MACHINE")
+        title = QLabel(tr('TECHNO MACHINE'))
         title.setObjectName("djTitle")
         top.addWidget(title)
         top.addSpacing(8)
@@ -2072,7 +2074,7 @@ class MachineView(QFrame):
         self.bpm.setRange(60.0, 200.0)
         self.bpm.setDecimals(1)
         self.bpm.setSingleStep(0.5)
-        self.bpm.setSuffix(" BPM")
+        self.bpm.setSuffix(tr(' BPM'))
         self.bpm.setValue(m.bpm)
         self.bpm.setFixedWidth(108)
         self.bpm.valueChanged.connect(self._on_bpm)
@@ -2084,7 +2086,7 @@ class MachineView(QFrame):
         self.sync_btn.toggled.connect(self._on_sync)
         top.addWidget(self.sync_btn)
         top.addSpacing(8)
-        key_label = QLabel("KEY")
+        key_label = QLabel(tr('KEY'))
         key_label.setObjectName("djSmall")
         top.addWidget(key_label)
         self.key = QComboBox()
@@ -2097,7 +2099,7 @@ class MachineView(QFrame):
         self.pattern = QComboBox()
         self.pattern.setObjectName("dj")
         self.pattern.addItems(list(de.PATTERNS))
-        self.pattern.setToolTip("Pattern bank")
+        self.pattern.setToolTip(tr('Pattern bank'))
         top.addWidget(self.pattern)
         load = _button("LOAD", "Load the chosen pattern (also sets its tempo and swing)")
         load.clicked.connect(self._load_pattern)
@@ -2120,8 +2122,7 @@ class MachineView(QFrame):
         self.grid.acidChanged.connect(self._acid_changed)
         grid_column.addWidget(self.grid, 1)
         # Spelled out, not in a tooltip: there is no hover on a touch screen.
-        hint = QLabel("tap = step on/off  ·  hold = accent (ACID: accent / slide)  ·  "
-                      "drag an ACID step up or down = note  ·  tap a row name = mute")
+        hint = QLabel(tr('tap = step on/off  ·  hold = accent (ACID: accent / slide)  ·  drag an ACID step up or down = note  ·  tap a row name = mute'))
         hint.setObjectName("djHint")
         hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         grid_column.addWidget(hint)
@@ -2230,7 +2231,7 @@ class MachineView(QFrame):
         pattern = dict(rows={row: de._pattern(t) for row, t in preset["rows"].items()},
                        acid=de._acid(preset["acid"]))
         self._apply_pattern(pattern, preset["bpm"], preset["swing"])
-        self.panel.show_status(f"Machine: {name} pattern loaded")
+        self.panel.show_status(tr('Machine: {0} pattern loaded').format(name))
 
     def _randomise(self) -> None:
         self._apply_pattern(de.random_pattern())
@@ -2291,7 +2292,7 @@ class CrateView(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
         top = QHBoxLayout()
-        title = QLabel("CRATE")
+        title = QLabel(tr('CRATE'))
         title.setObjectName("djTitle")
         top.addWidget(title)
         self.folder = QComboBox()
@@ -2311,7 +2312,7 @@ class CrateView(QFrame):
         layout.addLayout(top)
         self.search = QLineEdit()
         self.search.setObjectName("dj")
-        self.search.setPlaceholderText("Search…")
+        self.search.setPlaceholderText(tr('Search…'))
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter)
         layout.addWidget(self.search)
@@ -2340,7 +2341,7 @@ class CrateView(QFrame):
         layout.addWidget(self.list, 1)
         buttons = QHBoxLayout()
         for i, letter in enumerate("AB"):
-            btn = _button(f"→ DECK {letter}", f"Load the selected track on deck {letter}")
+            btn = _button(tr("→ DECK {0}").format(letter), tr("Load the selected track on deck {0}").format(letter))
             btn.setMinimumHeight(SIZE.transport - 4)
             btn.setStyleSheet(f"QPushButton#dj {{ color: {DECK_COLOURS[i]}; }}")
             btn.clicked.connect(lambda _c=False, i=i: self._load_selected(i))
@@ -2365,7 +2366,7 @@ class CrateView(QFrame):
 
     def _add_folder(self) -> None:
         start = self.current_folder() or os.path.expanduser("~/Music")
-        path = QFileDialog.getExistingDirectory(self, "Add a music folder", start)
+        path = QFileDialog.getExistingDirectory(self, tr('Add a music folder'), start)
         if path and path not in self.folders():
             self.folder.addItem(os.path.basename(path) or path, path)
             self.folder.setCurrentIndex(self.folder.count() - 1)
@@ -2486,21 +2487,21 @@ class DJPanel(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
-        self.health = QLabel("● AUDIO")
+        self.health = QLabel(tr('● AUDIO'))
         self.health.setObjectName("djPill")
         bar.addWidget(self.health)
         self.status = QLabel("")
         self.status.setObjectName("djHint")
         self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         bar.addWidget(self.status, 1)
-        out_label = QLabel("OUTPUT")
+        out_label = QLabel(tr('OUTPUT'))
         out_label.setObjectName("djSmall")
         bar.addWidget(out_label)
         self.out_combo = QComboBox()
         self.out_combo.setObjectName("dj")
         self.out_combo.setMinimumWidth(200)
         bar.addWidget(self.out_combo)
-        phones_label = QLabel("HEADPHONES")
+        phones_label = QLabel(tr('HEADPHONES'))
         phones_label.setObjectName("djSmall")
         bar.addWidget(phones_label)
         self.phones_combo = QComboBox()
@@ -2553,12 +2554,12 @@ class DJPanel(QWidget):
     def _fill_devices(self, default_device: Optional[str]) -> None:
         names = [d.description() for d in QMediaDevices.audioOutputs()]
         wanted = self.settings.value("dj/device", "") or default_device or ""
-        self.out_combo.addItem("System default", "")
+        self.out_combo.addItem(tr('System default'), "")
         for name in names:
             self.out_combo.addItem(name, name)
         self.out_combo.setCurrentIndex(max(0, self.out_combo.findData(wanted)))
         phones = self.settings.value("dj/phones", "")
-        self.phones_combo.addItem("Off", "")
+        self.phones_combo.addItem(tr('Off'), "")
         for name in names:
             self.phones_combo.addItem(name, name)
         self.phones_combo.setCurrentIndex(max(0, self.phones_combo.findData(phones)))
@@ -2567,8 +2568,7 @@ class DJPanel(QWidget):
         main = self.out_combo.currentData() or None
         phones = self.phones_combo.currentData() or None
         if phones and phones == main:
-            self.show_status("Headphones and output are the same device - pick a different one "
-                             "for headphones.")
+            self.show_status(tr('Headphones and output are the same device - pick a different one for headphones.'))
             phones = None
         self.engine.set_devices(main, phones)
         if save:
@@ -2583,7 +2583,7 @@ class DJPanel(QWidget):
         if deck < 0:
             a, b = self.engine.decks
             if a.playing and b.playing:
-                self.show_status("Both decks are playing - pause one first.")
+                self.show_status(tr('Both decks are playing - pause one first.'))
                 return
             deck = 0 if not a.playing and (a.track is None or b.playing) else 1
         (self.deck_a if deck == 0 else self.deck_b).load(path)
@@ -2616,7 +2616,7 @@ class DJPanel(QWidget):
             text, colour = "● DROPOUT", WARN
             tip = "The sound card ran dry - something else is keeping the computer busy."
         else:
-            text, colour = f"● AUDIO  {latency} ms", OK
+            text, colour = tr("● AUDIO  {0} ms").format(latency), OK
             tip = "Sound is flowing. The figure is how far the sound card runs behind the screen."
         if self.health.text() != text:
             self.health.setText(text)

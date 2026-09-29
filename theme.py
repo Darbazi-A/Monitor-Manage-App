@@ -104,6 +104,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from config import *  # noqa: F401,F403
+from i18n import language
 
 # Palette. Navy ground and a gold accent, taken from the school's own colours -
 # a generic dark-grey-and-blue theme looked like every other dark-grey-and-blue
@@ -877,6 +878,12 @@ def _switch_images() -> Dict[str, str]:
             picture.save(path)
         paths[name] = path.replace("\\", "/")
     return paths
+
+
+def language_stylesheet() -> str:
+    """Consolas has no Georgian letters - Qt's stand-in draws them as capitals - so
+    the timecodes, which carry words, are set in Segoe UI when the app speaks Georgian."""
+    return "" if language() == "en" else 'QLabel#timecode { font-family: "Segoe UI"; }\n'
 
 
 def touch_stylesheet() -> str:

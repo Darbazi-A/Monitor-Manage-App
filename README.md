@@ -83,8 +83,15 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   with presenter view (next slide, notes, a time limit counted down), a
   clicker that works whichever window is in front, and phone pages for
   turning slides — one for the crew, a slides-only QR link for guests.
-- **Phone remote** — NEXT, BLACKOUT, sound cues and presets from any phone on
-  the Wi-Fi, behind a PIN.
+- **Phone remote** — a live picture of every stage screen, NEXT, BLACKOUT,
+  sound cues and presets from any phone on the Wi-Fi, behind a PIN.
+- **Keeps going when something fails** — a screen whose monitor drops out comes
+  back by itself, the stage is put back after a crash, and presets and running
+  orders are backed up before every change. See
+  [When something goes wrong](#when-something-goes-wrong).
+- **Dark room** — the dashboard dims in two steps so it does not light up the
+  desk in a dark hall.
+- **English or Georgian** — the whole interface, phone pages included.
 - **Blackout** — clears every stage screen at once.
 - Stage windows are frameless, cannot be closed by the audience, and stay out of
   the taskbar (`Qt.Tool`), so only the dashboard appears there.
@@ -324,6 +331,12 @@ phone camera (or open the address it shows, for example
 in by itself* puts the PIN into the code as well (in the part of the link that
 never leaves the phone), for the crew's own phones — anyone with a photo of that
 code can run the show until *New PIN*, so it is off by default.
+
+The page opens with **what the hall sees**: Main Stage and Side Screens side by
+side with the ceiling strip under them, framed red when on air — names, marquee
+and PowerPoint slides included. Moving screens refresh every second, still ones
+only when they change (small JPEGs, about 13 KB each), and the pictures can be
+hidden. They need the PIN like everything else; the guest link cannot see them.
 
 - **SHOW**: NOW with the step's notes and running time, a thumb-sized **NEXT**,
   Back, Start over, and the whole running order — tap a step, then GO.
@@ -590,8 +603,49 @@ finger-sized controls when Windows reports a touch screen; *Larger controls* and
 — slider handles, check boxes, scroll bars, list rows, tabs — and makes lists
 scroll with a flick, while keeping every tab on one 1080p screen. Nothing that
 matters is shown only on hover: the position handles are always visible and
-the step-sequencer instructions are written out under the grid. The DJ tab
-picks up a change the next time the app starts.
+the step-sequencer instructions are written out under the grid. Check boxes
+become on/off switches, gold when on. The DJ tab picks up a change the next time
+the app starts.
+
+## Dark room
+
+The moon button in the header dims the whole dashboard — *dim*, then *darker*,
+then back — so the desk does not light up the operator and the front rows once
+the hall lights go down. It is only a veil of paint over the window: clicks,
+touches and keys go straight through, and the stage screens are never touched.
+The choice is remembered.
+
+## When something goes wrong
+
+**A screen's monitor goes away** — an LED processor restarting, a loose cable:
+that stage window is hidden at once (it keeps playing, unseen, instead of
+landing on the desk) and put back exactly where it belongs when the monitor
+returns. The routing keeps a disconnected monitor's place, a window Windows has
+moved elsewhere is moved back, and the header and status bar say which monitor
+is gone.
+
+**The app crashes or the PC restarts.** What is on stage is written down every
+few seconds. The next start offers it back — files, names, marquee, slides, the
+running order's step — and puts it back by itself after 20 seconds if nobody
+answers, for an unattended restart. A proper close offers nothing.
+
+**A preset or running order is overwritten.** `presets.json` and `shows.json`
+are copied into `backups/` before they change (at most one copy every two
+minutes, the newest ten of each). **Screens & Setup → Backups** puts a copy back
+with a hold to confirm; what was there is kept as a copy too.
+
+## Language
+
+**Screens & Setup → Language / ენა**: English or ქართული. The choice is used from
+the next start — the app offers to restart at once (it still asks first if the
+screens are live). Everything the operator reads is translated: tabs, buttons,
+hints, messages, the ready check and the phone pages. Names, file names and
+steps stay as they were typed.
+
+The Georgian text lives in `i18n_ka.py` as one table keyed by the English text,
+and `remote_ka.py` holds the phone pages' Georgian; a string with no entry
+simply stays English. `tr()` in `i18n.py` looks a string up; captions that are
+upper-case in English stay in ordinary letters in Georgian.
 
 ## Keeping it light
 
@@ -621,6 +675,16 @@ What made the difference:
 - **numpy's maths library is held to one thread**; it used to reserve ~180 MB
   on import for threads the desk never uses.
 - **The Library fills its thumbnails when first opened**, not at start-up.
+- **Video is decoded on the graphics card** (DXVA2) where Windows offers it:
+  three playing screens went from about 67 % to 47 % of a CPU core (FFmpeg
+  falls back to the processor by itself).
+- **Start-up 1.5 s → 0.9 s**: the stylesheet is set once, before any widget
+  exists, instead of re-styling the finished window.
+- **Clean cuts**: a cut or a dissolve waits for the new video's first frame, so
+  no black frame shows in between.
+- **Files are read ahead**: the next playlist item and the next step's files are
+  pulled into the disk cache in the background, so they start at once even
+  from a slow disk.
 
 ## Lighting backgrounds
 
@@ -664,31 +728,24 @@ entry. The same switches work by hand for testing.
 
 ## Layout
 
-Everything lives in `main.py`:
+`main.py` is the dashboard (`ControlPanel`), presets, autostart and the
+constants tests override; it takes every module's names back in, so `main.X`
+still works. The rest is split by what it does:
 
-| Class | Role |
+| Module | Role |
 | --- | --- |
-| `Icons` | line icons drawn with `QPainter` — no image assets |
-| `MediaEngine` | `QMediaPlayer` wrapper: looping, safe source swapping, audio |
-| `SoundCue`, `SoundDeck` | one sound per key, with fade-out and its own level |
-| `CuePad` | one cue as a small player: drop target, transport, seek bar |
-| `BaseOutputWindow` | frameless, un-closable, taskbar-less stage window |
-| `SceneOutputWindow` | any output, drawn through a `QGraphicsScene` |
-| `StandardOutputWindow` / `TopOutputWindow` | Main+Sides / the ceiling strip |
-| `VideoThumbnailer` | pulls one real frame out of a clip; a failure flags it as unplayable |
-| `MediaProblem`, `describe_media` | why a file was refused, in plain language |
-| `FadeOverlay` | crossfades or dips one output between pictures |
-| `DropZone`, `Playlist` | drag & drop target and the prepared-media list |
-| `MediaLibrary` | folder browser with thumbnails, feeding screens and cues |
-| `TextSlides` | the running order of names, and how they are styled |
-| `OutputCard`, `TopCard` | one output's live controls |
-| `RoutingRow`, `PresetStore` | setup and persistence |
-| `Autostart` | the per-user "run at login" registry entry |
-| `classify_media`, `scan_event_folder` | where each file in an event folder belongs |
-| `EventFolderDialog` | the plan, shown before anything is applied |
-| `MiniBar` | the floating strip the dashboard shrinks to |
-| `RehearsalMonitor` | the rehearsal window: three stage screens at their real sizes, scaled down |
-| `ControlPanel` | the dashboard |
+| `config.py` | roles, media types, sizes, transitions, and the hardware-decoding switch |
+| `theme.py` | palette, stylesheet (touch and language additions), `Icons` drawn with `QPainter` — no image assets |
+| `i18n.py`, `i18n_ka.py` | `tr()`, the chosen language, and the Georgian table |
+| `media.py` | `MediaProblem`, `describe_media` (why a file was refused, in plain language), `VideoThumbnailer`, `classify_media` / `scan_event_folder` (where each file of an event folder belongs), read-ahead |
+| `outputs.py` | `MediaEngine`, `BaseOutputWindow` / `SceneOutputWindow` (frameless, un-closable, taskbar-less), `FadeOverlay`, `RehearsalMonitor` |
+| `sound.py` | `SoundCue`, `SoundDeck`, `CuePad` — one sound per key, with fades and its own level |
+| `cards.py` | `OutputCard`, `TopCard`, `DropZone`, `Playlist` — the Live tab |
+| `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
+| `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
+| `routing.py` | `RoutingRow`: the Screens & Setup rows |
+| `minibar.py` | `MiniBar`, the floating strip the dashboard shrinks to |
+| `backups.py` | the copies of `presets.json` and `shows.json` |
 
 The DJ desk is kept apart, because it is the one part that needs numpy and is
 only imported the first time its tab opens:

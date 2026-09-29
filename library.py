@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -167,46 +169,46 @@ class MediaLibrary(QWidget):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("folder", CLR_ACCENT, 16).pixmap(16, 16))
         bar.addWidget(glyph)
-        title = QLabel("MEDIA LIBRARY")
+        title = QLabel(tr('MEDIA LIBRARY'))
         title.setObjectName("sectionTitle")
         bar.addWidget(title)
 
         self.places = QComboBox()
         self.places.setMinimumWidth(240)
-        self.places.setToolTip("Pinned folders")
+        self.places.setToolTip(tr('Pinned folders'))
         self.places.activated.connect(self._on_place_chosen)
         bar.addWidget(self.places)
 
-        pin = QPushButton("  Pin this folder")
+        pin = QPushButton(tr('  Pin this folder'))
         pin.setIcon(Icons.get("plus", CLR_TEXT, 15))
-        pin.setToolTip("Keep this folder in the list above")
+        pin.setToolTip(tr('Keep this folder in the list above'))
         pin.clicked.connect(self._pin_current)
         bar.addWidget(pin)
 
-        unpin = QPushButton("  Unpin")
+        unpin = QPushButton(tr('  Unpin'))
         unpin.setIcon(Icons.get("minus", CLR_TEXT, 15))
         unpin.clicked.connect(self._unpin_current)
         bar.addWidget(unpin)
 
-        build = QPushButton("  Build a show from a folder…")
+        build = QPushButton(tr('  Build a show from a folder…'))
         build.setIcon(Icons.get("folder", CLR_TEXT, 15))
-        build.setToolTip("Scan an event folder and sort everything onto the right screens")
+        build.setToolTip(tr('Scan an event folder and sort everything onto the right screens'))
         build.clicked.connect(self.buildRequested.emit)
         bar.addWidget(build)
 
-        browse = QPushButton("  Open folder…")
+        browse = QPushButton(tr('  Open folder…'))
         browse.setIcon(Icons.get("open", CLR_TEXT, 15))
         browse.clicked.connect(self._browse_folder)
         bar.addWidget(browse)
 
         bar.addStretch(1)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("filter by name…")
+        self.search.setPlaceholderText(tr('filter by name…'))
         self.search.setMaximumWidth(220)
         self.search.textChanged.connect(lambda _t: self._fill_files())
         bar.addWidget(self.search)
 
-        refresh = icon_button("refresh", "Re-read this folder", CLR_MUTED, 16)
+        refresh = icon_button("refresh", tr('Re-read this folder'), CLR_MUTED, 16)
         refresh.setObjectName("ghost")
         refresh.clicked.connect(lambda: self.set_folder(self._folder))
         bar.addWidget(refresh)
@@ -252,17 +254,17 @@ class MediaLibrary(QWidget):
         # --- actions ------------------------------------------------------- #
         actions = QHBoxLayout()
         actions.setSpacing(7)
-        self.selection_label = QLabel("nothing selected")
+        self.selection_label = QLabel(tr('nothing selected'))
         self.selection_label.setObjectName("cardHint")
         self.selection_label.setMinimumWidth(150)
         actions.addWidget(self.selection_label)
-        self.fav_button = QPushButton("  ☆ Favourite")
-        self.fav_button.setToolTip("Keep the selected files under ★ Favourites, whichever folder they are in")
+        self.fav_button = QPushButton(tr('  ☆ Favourite'))
+        self.fav_button.setToolTip(tr('Keep the selected files under ★ Favourites, whichever folder they are in'))
         self.fav_button.clicked.connect(self._toggle_favourite)
         actions.addWidget(self.fav_button)
 
         actions.addSpacing(10)
-        show_caption = QLabel("Show now on")
+        show_caption = QLabel(tr('Show now on'))
         show_caption.setObjectName("cardHint")
         actions.addWidget(show_caption)
         self.show_buttons: Dict[str, QPushButton] = {}
@@ -273,7 +275,7 @@ class MediaLibrary(QWidget):
             self.show_buttons[role] = button
 
         actions.addSpacing(14)
-        queue_caption = QLabel("Add to playlist")
+        queue_caption = QLabel(tr('Add to playlist'))
         queue_caption.setObjectName("cardHint")
         actions.addWidget(queue_caption)
         self.queue_buttons: Dict[str, QPushButton] = {}
@@ -284,14 +286,14 @@ class MediaLibrary(QWidget):
             self.queue_buttons[role] = button
 
         actions.addSpacing(14)
-        cue_caption = QLabel("Sound cue")
+        cue_caption = QLabel(tr('Sound cue'))
         cue_caption.setObjectName("cardHint")
         actions.addWidget(cue_caption)
         self.cue_slot = QComboBox()
         for slot in range(SOUND_SLOTS):
             self.cue_slot.addItem(f"F{slot + 1}", slot)
         actions.addWidget(self.cue_slot)
-        self.cue_button = QPushButton("Assign")
+        self.cue_button = QPushButton(tr('Assign'))
         self.cue_button.clicked.connect(self._assign_cue)
         actions.addWidget(self.cue_button)
 
@@ -328,12 +330,12 @@ class MediaLibrary(QWidget):
     def _rebuild_places(self) -> None:
         self.places.blockSignals(True)
         self.places.clear()
-        self.places.addItem("★  Favourites", FAVOURITES)
+        self.places.addItem(tr('★  Favourites'), FAVOURITES)
         # An unpinned folder still gets an entry, otherwise the picker goes blank
         # and it looks as though nothing is open.
         if self._folder and self._folder not in self._pinned and not self._show_favourites:
             self.places.addItem(
-                (os.path.basename(self._folder) or self._folder) + "   (not pinned)", self._folder)
+                (os.path.basename(self._folder) or self._folder) + tr('   (not pinned)'), self._folder)
         for folder in self._pinned:
             self.places.addItem(os.path.basename(folder) or folder, folder)
         index = self.places.findData(FAVOURITES if self._show_favourites else self._folder)
@@ -359,7 +361,7 @@ class MediaLibrary(QWidget):
             self._rebuild_places()
 
     def _browse_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Open a media folder", self._folder or "")
+        folder = QFileDialog.getExistingDirectory(self, tr('Open a media folder'), self._folder or "")
         if folder:
             self.set_folder(os.path.normpath(folder))
 
@@ -396,7 +398,7 @@ class MediaLibrary(QWidget):
         self.folders.clear()
         parent = os.path.dirname(self._folder)
         if parent and parent != self._folder:
-            item = QListWidgetItem("..  up one level")
+            item = QListWidgetItem(tr('..  up one level'))
             item.setData(Qt.UserRole, parent)
             item.setIcon(Icons.get("folder", CLR_MUTED, 16))
             self.folders.addItem(item)
@@ -405,7 +407,7 @@ class MediaLibrary(QWidget):
                 (e for e in os.scandir(self._folder) if e.is_dir() and not e.name.startswith(".")),
                 key=lambda e: e.name.lower())
         except OSError as exc:
-            self.path_label.setText(f"{self._folder}   —   cannot read: {exc}")
+            self.path_label.setText(tr('{0}   —   cannot read: {1}').format(self._folder, exc))
             return
         for entry in entries:
             item = QListWidgetItem(entry.name)
@@ -452,15 +454,15 @@ class MediaLibrary(QWidget):
             item = QListWidgetItem(
                 self.files.fontMetrics().elidedText(label, Qt.ElideMiddle, self.GRID.width() - 18))
             item.setData(Qt.UserRole, os.path.normpath(path))
-            item.setToolTip(path + "\n\nDrag it onto a screen in the header, or onto a card, to show it.")
+            item.setToolTip(path + tr('\n\nDrag it onto a screen in the header, or onto a card, to show it.'))
             item.setIcon(self._thumb_for(path, extension))
             item.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
             self.files.addItem(item)
             shown += 1
 
-        note = f"{where}      {shown} item(s)"
+        note = tr("{0}      {1} item(s)").format(where, shown)
         if shown >= self.MAX_ITEMS:
-            note += f"  —  showing the first {self.MAX_ITEMS}, use the filter to narrow it"
+            note += tr("  —  showing the first {0}, use the filter to narrow it").format(self.MAX_ITEMS)
         if self._show_favourites and not candidates:
             note = "★  Favourites  -  none yet: select files in any folder and press ☆ Favourite"
         self.path_label.setText(note)
@@ -556,16 +558,16 @@ class MediaLibrary(QWidget):
         visual = [p for p in paths if p not in audio]
 
         if not paths:
-            self.selection_label.setText("nothing selected")
+            self.selection_label.setText(tr('nothing selected'))
         elif len(paths) == 1:
             self.selection_label.setText(os.path.basename(paths[0]))
         else:
-            self.selection_label.setText(f"{len(paths)} items selected")
+            self.selection_label.setText(tr('{0} items selected').format(len(paths)))
 
         starred = {os.path.normcase(p) for p in self._favourites}
         self.fav_button.setEnabled(bool(paths))
-        self.fav_button.setText("  ★ Unfavourite" if paths and all(os.path.normcase(p) in starred for p in paths)
-                                else "  ☆ Favourite")
+        self.fav_button.setText(tr('  ★ Unfavourite') if paths and all(os.path.normcase(p) in starred for p in paths)
+                                else tr('  ☆ Favourite'))
         for button in self.show_buttons.values():
             button.setEnabled(len(visual) == 1 and not audio)
         for button in self.queue_buttons.values():
@@ -620,7 +622,7 @@ class EventFolderDialog(QDialog):
 
     def __init__(self, folder: str, rows: List[tuple], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Build a show from a folder")
+        self.setWindowTitle(tr('Build a show from a folder'))
         self.setMinimumSize(760, 560)
         self._rows = rows
 
@@ -665,7 +667,7 @@ class EventFolderDialog(QDialog):
 
             combo = QComboBox()
             for label, value in self.DEST_LABELS:
-                combo.addItem(label, value)
+                combo.addItem(tr(label), value)
             combo.setCurrentIndex(max(0, combo.findData(role)))
             combo.currentIndexChanged.connect(lambda _i: self._update_summary())
             self.table.setCellWidget(index, 2, combo)
@@ -673,19 +675,19 @@ class EventFolderDialog(QDialog):
 
         layout.addWidget(self.table, 1)
 
-        self.replace_check = QCheckBox("Clear the current show first")
+        self.replace_check = QCheckBox(tr('Clear the current show first'))
         self.replace_check.setChecked(True)
         layout.addWidget(self.replace_check)
 
-        self.go_live_check = QCheckBox("Put the first item of each screen on straight away")
+        self.go_live_check = QCheckBox(tr('Put the first item of each screen on straight away'))
         layout.addWidget(self.go_live_check)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(tr('Cancel'))
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
-        build = QPushButton("  Build the show")
+        build = QPushButton(tr('  Build the show'))
         build.setObjectName("primary")
         build.setIcon(Icons.get("play", CLR_INK, 15))
         build.clicked.connect(self.accept)
@@ -701,8 +703,8 @@ class EventFolderDialog(QDialog):
         parts = []
         for label, value in self.DEST_LABELS:
             if counts.get(value):
-                parts.append(f"{counts[value]} \u2192 {label}")
-        self.summary.setText("   \u00b7   ".join(parts) if parts else "nothing to import")
+                parts.append(f"{counts[value]} \u2192 {tr(label)}")
+        self.summary.setText("   \u00b7   ".join(parts) if parts else tr('nothing to import'))
 
     def assignments(self) -> Dict[str, List[str]]:
         result: Dict[str, List[str]] = {}

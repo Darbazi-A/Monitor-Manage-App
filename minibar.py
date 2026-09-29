@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -155,30 +157,30 @@ class MiniBar(QWidget):
 
         grip = QLabel()
         grip.setPixmap(Icons.get("grip", CLR_MUTED, 15).pixmap(15, 15))
-        grip.setToolTip("Drag to move")
+        grip.setToolTip(tr('Drag to move'))
         top.addWidget(grip)
         top.addSpacing(2)
 
         self.screen_buttons: Dict[str, QPushButton] = {}
         for role, short in ((ROLE_MAIN, "Main"), (ROLE_SIDES, "Sides"), (ROLE_TOP, "Top")):
-            button = QPushButton(short)
+            button = QPushButton(tr(short))
             button.setObjectName("miniScreen")
             button.setCheckable(True)
-            button.setToolTip(f"Arrows and play act on {ROLE_LABELS[role]}")
+            button.setToolTip(tr('Arrows and play act on {0}').format(ROLE_LABELS[role]))
             button.clicked.connect(lambda _c=False, r=role: self.screenChosen.emit(r))
             top.addWidget(button)
             self.screen_buttons[role] = button
 
         top.addSpacing(4)
-        prev_btn = icon_button("prev", "Previous in that screen's playlist", CLR_TEXT, 15)
+        prev_btn = icon_button("prev", tr("Previous in that screen's playlist"), CLR_TEXT, 15)
         prev_btn.clicked.connect(lambda: self.stepRequested.emit(-1))
         top.addWidget(prev_btn)
 
-        self.play_btn = icon_button("play", "Play / pause that screen", CLR_TEXT, 15)
+        self.play_btn = icon_button("play", tr('Play / pause that screen'), CLR_TEXT, 15)
         self.play_btn.clicked.connect(self.playPauseRequested.emit)
         top.addWidget(self.play_btn)
 
-        next_btn = icon_button("next", "Next in that screen's playlist", CLR_TEXT, 15)
+        next_btn = icon_button("next", tr("Next in that screen's playlist"), CLR_TEXT, 15)
         next_btn.clicked.connect(lambda: self.stepRequested.emit(1))
         top.addWidget(next_btn)
 
@@ -190,12 +192,12 @@ class MiniBar(QWidget):
 
         self.preset_combo = QComboBox()
         self.preset_combo.setMinimumWidth(140)
-        self.preset_combo.setToolTip("Saved shows")
+        self.preset_combo.setToolTip(tr('Saved shows'))
         top.addWidget(self.preset_combo)
 
-        load = QPushButton("Load")
+        load = QPushButton(tr('Load'))
         load.setObjectName("primary")
-        load.setToolTip("Put this preset on the screens")
+        load.setToolTip(tr('Put this preset on the screens'))
         load.clicked.connect(lambda: self.presetRequested.emit(self.preset_combo.currentText()))
         top.addWidget(load)
         body.addLayout(top)
@@ -218,18 +220,18 @@ class MiniBar(QWidget):
         self.sound_label.setObjectName("miniNow")
         bottom.addWidget(self.sound_label, 1)
 
-        quiet = QPushButton("  Silence")
+        quiet = QPushButton(tr('  Silence'))
         quiet.setIcon(Icons.get("mute", CLR_DIM, 15))
-        quiet.setToolTip("Fade out every sound cue")
+        quiet.setToolTip(tr('Fade out every sound cue'))
         quiet.clicked.connect(self.stopSoundRequested.emit)
         bottom.addWidget(quiet)
 
-        blackout = QPushButton("BLACKOUT")
+        blackout = QPushButton(tr('BLACKOUT'))
         blackout.setObjectName("danger")
         blackout.clicked.connect(self.blackoutRequested.emit)
         bottom.addWidget(blackout)
 
-        expand = icon_button("expand", "Back to the full dashboard", CLR_DIM, 16)
+        expand = icon_button("expand", tr('Back to the full dashboard'), CLR_DIM, 16)
         expand.clicked.connect(self.expandRequested.emit)
         bottom.addWidget(expand)
         body.addLayout(bottom)
@@ -239,16 +241,16 @@ class MiniBar(QWidget):
         show = QHBoxLayout(self.show_row)
         show.setContentsMargins(0, 0, 0, 0)
         show.setSpacing(6)
-        back = icon_button("prev", "Back one step (Page Up)", CLR_TEXT, 15)
+        back = icon_button("prev", tr('Back one step (Page Up)'), CLR_TEXT, 15)
         back.clicked.connect(self.showBackRequested.emit)
         show.addWidget(back)
         self.show_label = QLabel()
         self.show_label.setObjectName("miniNow")
         show.addWidget(self.show_label, 1)
-        self.show_next = QPushButton("  NEXT")
+        self.show_next = QPushButton(tr('  NEXT'))
         self.show_next.setObjectName("primary")
         self.show_next.setIcon(Icons.get("next", "#0b0e13", 15))
-        self.show_next.setToolTip("Run the next step of the running order (Page Down)")
+        self.show_next.setToolTip(tr('Run the next step of the running order (Page Down)'))
         self.show_next.clicked.connect(self.showNextRequested.emit)
         show.addWidget(self.show_next)
         body.addWidget(self.show_row)
@@ -284,7 +286,7 @@ class MiniBar(QWidget):
                 if index >= 0:
                     self.preset_combo.setCurrentIndex(index)
         else:
-            self.preset_combo.addItem("no presets")
+            self.preset_combo.addItem(tr('no presets'))
             self.preset_combo.setEnabled(False)
         self.preset_combo.blockSignals(False)
 
@@ -306,7 +308,7 @@ class MiniBar(QWidget):
             button.setEnabled(filled)
             self._restyle_if(button, "playing", "true" if cue.is_playing() else "false")
             self._restyle_if(button, "paused", "true" if cue.is_paused() else "false")
-            button.setToolTip(cue.label() if filled else f"F{cue.index + 1} is empty")
+            button.setToolTip(cue.label() if filled else tr('F{0} is empty').format(cue.index + 1))
             if cue.is_playing():
                 running.append(f"{cue.label()}  {format_time(cue.position())}")
         metrics = self.sound_label.fontMetrics()

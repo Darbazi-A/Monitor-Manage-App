@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import Labels, tr  # noqa: E402
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -188,12 +190,12 @@ ROLE_TOP = "top"
 
 STAGE_ROLES = (ROLE_MAIN, ROLE_SIDES, ROLE_TOP)
 
-ROLE_LABELS = {
+ROLE_LABELS = Labels({         # answers in the chosen language
     ROLE_CONTROL: "Control Panel",
     ROLE_MAIN: "Main Stage",
     ROLE_SIDES: "Side Screens",
     ROLE_TOP: "Top Screen",
-}
+})
 
 # The LED strip's real canvas, as mapped in Nova Studio - NOT what Windows reports.
 DEFAULT_TOP_WIDTH = 2818

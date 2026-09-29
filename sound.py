@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -154,9 +156,9 @@ class SoundCue(QObject):
         kind = describe_media(path)
         if kind != "audio":
             raise MediaProblem(
-                "Not a sound file",
-                f"{os.path.basename(path)} is {'an image' if kind == 'image' else 'a video'}.",
-                "Sound cues take audio files - mp3, wav, m4a, flac and the like.",
+                tr('Not a sound file'),
+                tr('{0} is {1}.').format(os.path.basename(path), 'an image' if kind == 'image' else 'a video'),
+                tr('Sound cues take audio files - mp3, wav, m4a, flac and the like.'),
             )
         self.stop(0)
         self.path = path
@@ -425,14 +427,14 @@ class CuePad(QFrame):
         top.addWidget(self.key_label)
         top.addStretch(1)
 
-        self.loop_btn = icon_button("repeat", "Loop this cue", CLR_MUTED, 13)
+        self.loop_btn = icon_button("repeat", tr('Loop this cue'), CLR_MUTED, 13)
         self.loop_btn.setObjectName("ghost")
         self.loop_btn.setCheckable(True)
         self.loop_btn.setFixedSize(19, 19)
         self.loop_btn.toggled.connect(self.loopToggled.emit)
         top.addWidget(self.loop_btn)
 
-        self.clear_btn = icon_button("close", "Empty this cue", CLR_MUTED, 12)
+        self.clear_btn = icon_button("close", tr('Empty this cue'), CLR_MUTED, 12)
         self.clear_btn.setObjectName("ghost")
         self.clear_btn.setFixedSize(19, 19)
         self.clear_btn.clicked.connect(self.cleared.emit)
@@ -445,13 +447,13 @@ class CuePad(QFrame):
 
         transport = QHBoxLayout()
         transport.setSpacing(4)
-        self.play_btn = icon_button("play", "Play / pause", CLR_TEXT, 13)
+        self.play_btn = icon_button("play", tr('Play / pause'), CLR_TEXT, 13)
         self.play_btn.setObjectName("ghost")
         self.play_btn.setFixedSize(21, 19)
         self.play_btn.clicked.connect(self.playPauseRequested.emit)
         transport.addWidget(self.play_btn)
 
-        self.stop_btn = icon_button("stop", "Stop and rewind", CLR_MUTED, 12)
+        self.stop_btn = icon_button("stop", tr('Stop and rewind'), CLR_MUTED, 12)
         self.stop_btn.setObjectName("ghost")
         self.stop_btn.setFixedSize(21, 19)
         self.stop_btn.clicked.connect(self.stopRequested.emit)
@@ -467,7 +469,7 @@ class CuePad(QFrame):
         self.scrub.setObjectName("scrub")
         self.scrub.setRange(0, 1)
         self.scrub.setFixedHeight(12)
-        self.scrub.setToolTip("Position - drag to move through the sound")
+        self.scrub.setToolTip(tr('Position - drag to move through the sound'))
         self.scrub.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
         self.scrub.sliderReleased.connect(self._on_scrub_released)
         layout.addWidget(self.scrub)
@@ -501,10 +503,10 @@ class CuePad(QFrame):
             self.name_label.setText(
                 metrics.elidedText(cue.label(), Qt.ElideRight, max(70, self.width() - 24)))
             self.setToolTip(cue.path + "\n\nF" + str(self.index + 1)
-                            + " plays and pauses, Shift+F" + str(self.index + 1) + " stops")
+                            + " plays and pauses, Shift+F" + str(self.index + 1) + tr(' stops'))
         else:
-            self.name_label.setText("drop a sound")
-            self.setToolTip("Drop a sound file here, or click to choose one for F"
+            self.name_label.setText(tr('drop a sound'))
+            self.setToolTip(tr('Drop a sound file here, or click to choose one for F')
                             + str(self.index + 1))
 
         if filled:
@@ -570,7 +572,7 @@ class CuePad(QFrame):
                 chooser = "Sound files (" + " ".join(
                     sorted("*" + e for e in AUDIO_EXTENSIONS)) + ");;All files (*.*)"
                 path, _ = QFileDialog.getOpenFileName(
-                    self, "Sound for F" + str(self.index + 1), "", chooser)
+                    self, tr('Sound for F') + str(self.index + 1), "", chooser)
                 if path:
                     self.assignRequested.emit(os.path.normpath(path))
         event.accept()

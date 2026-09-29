@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import caps, tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -755,9 +757,9 @@ class SceneOutputWindow(BaseOutputWindow):
             return ("image", load_pixmap(path))
         if kind == "audio":
             raise MediaProblem(
-                "That is a sound file",
-                f"{os.path.basename(path)} is audio, and a screen cannot show it.",
-                "Drop it on one of the sound cues at the bottom of the Live tab instead.",
+                tr('That is a sound file'),
+                tr('{0} is audio, and a screen cannot show it.').format(os.path.basename(path)),
+                tr('Drop it on one of the sound cues at the bottom of the Live tab instead.'),
             )
         return ("video", path)
 
@@ -1278,7 +1280,7 @@ class RehearsalMonitor(QWidget):
 
     def __init__(self, sizes: Dict[str, QSize]) -> None:
         super().__init__(None, Qt.Window)
-        self.setWindowTitle("Rehearsal - nothing reaches the stage")
+        self.setWindowTitle(tr('Rehearsal - nothing reaches the stage'))
         if os.path.exists(ICON_FILE):
             self.setWindowIcon(QIcon(ICON_FILE))
         self.resize(1200, 760)
@@ -1288,26 +1290,24 @@ class RehearsalMonitor(QWidget):
 
         head = QHBoxLayout()
         head.setSpacing(10)
-        tag = QLabel("REHEARSAL")
+        tag = QLabel(tr('REHEARSAL'))
         tag.setStyleSheet(f"color: {THEME['rehearse']}; font-weight: 800; letter-spacing: 1px;"
                           f"border: 1px solid {THEME['rehearse']}; border-radius: 9px; padding: 3px 10px;")
         head.addWidget(tag)
-        note = QLabel("The dashboard drives these screens now; the hall keeps what it had. "
-                      "Slides show as pictures here.")
+        note = QLabel(tr('The dashboard drives these screens now; the hall keeps what it had. Slides show as pictures here.'))
         note.setObjectName("cardHint")
         head.addWidget(note, 1)
-        head.addWidget(QLabel("Sound"))
+        head.addWidget(QLabel(tr('Sound')))
         self.sound_combo = QComboBox()
-        self.sound_combo.addItem("Silent", "")
+        self.sound_combo.addItem(tr('Silent'), "")
         from PySide6.QtMultimedia import QMediaDevices
         for device in QMediaDevices.audioOutputs():
             self.sound_combo.addItem(device.description(), device.description())
-        self.sound_combo.setToolTip("New sounds started while rehearsing: silent, or on a device of your choice\n"
-                                    "(headphones) - never the hall unless you pick it.")
+        self.sound_combo.setToolTip(tr('New sounds started while rehearsing: silent, or on a device of your choice\n(headphones) - never the hall unless you pick it.'))
         self.sound_combo.currentIndexChanged.connect(
             lambda _i: self.soundChosen.emit(self.sound_combo.currentData() or ""))
         head.addWidget(self.sound_combo)
-        end = QPushButton("  End rehearsal")
+        end = QPushButton(tr('  End rehearsal'))
         end.setIcon(Icons.get("close", CLR_TEXT, 15))
         end.clicked.connect(self.endRequested.emit)
         head.addWidget(end)
@@ -1319,7 +1319,7 @@ class RehearsalMonitor(QWidget):
         strip = QVBoxLayout()
         for role, cls in ((ROLE_MAIN, StandardOutputWindow), (ROLE_SIDES, StandardOutputWindow),
                           (ROLE_TOP, TopOutputWindow)):
-            window = cls(f"{ROLE_LABELS[role]} (rehearsal)")
+            window = cls(tr("{0} (rehearsal)").format(ROLE_LABELS[role]))
             window.setWindowFlags(Qt.Widget)
             window.setCursor(Qt.ArrowCursor)
             window.setFocusPolicy(Qt.NoFocus)
@@ -1329,7 +1329,7 @@ class RehearsalMonitor(QWidget):
             self.outputs[role] = window
             box = QVBoxLayout()
             box.setSpacing(4)
-            caption = QLabel(f"{ROLE_LABELS[role].upper()}   {size.width()}×{size.height()}")
+            caption = QLabel(f"{caps(ROLE_LABELS[role])}   {size.width()}×{size.height()}")
             caption.setObjectName("sectionTitle")
             box.addWidget(caption)
             box.addWidget(AspectHolder(window, size.width() / max(1, size.height())), 1)

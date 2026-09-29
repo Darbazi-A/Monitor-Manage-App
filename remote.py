@@ -15,6 +15,9 @@ guest link retires the old one.
 """
 from __future__ import annotations
 
+from i18n import language, tr  # noqa: E402 - the interface's language
+import remote_ka  # noqa: E402 - the phone pages in Georgian
+
 import json
 import random
 import secrets
@@ -202,27 +205,28 @@ class RemoteServer(QObject):
                 params: Optional[dict] = None):
         params = params or {}
         if path in ("/", "/index.html"):
-            return 200, PAGE.encode("utf-8"), "text/html; charset=utf-8"
+            return 200, _page(PAGE, remote_ka.PAGE_KA), "text/html; charset=utf-8"
         if path == "/slides":
-            return 200, SLIDES_PAGE.encode("utf-8"), "text/html; charset=utf-8"
+            return 200, _page(SLIDES_PAGE, remote_ka.SLIDES_KA), "text/html; charset=utf-8"
         if path == "/manifest.json":
             return 200, MANIFEST.encode("utf-8"), "application/manifest+json"
         if path.startswith("/p/"):
             # the page itself holds nothing; an old link says so instead of asking for a PIN
-            page = SLIDES_PAGE if self.guest and path[3:] == self.guest else EXPIRED_PAGE
-            return 200, page.encode("utf-8"), "text/html; charset=utf-8"
+            if self.guest and path[3:] == self.guest:
+                return 200, _page(SLIDES_PAGE, remote_ka.SLIDES_KA), "text/html; charset=utf-8"
+            return 200, _page(EXPIRED_PAGE, remote_ka.EXPIRED_KA), "text/html; charset=utf-8"
         if not path.startswith("/api/"):
             return 404, b"not found", "text/plain"
 
         count, until = self._failures.get(ip, (0, 0.0))
         if until > time.monotonic():
-            return 429, _json({"ok": False, "message": "Too many wrong PINs - wait a minute."}), "application/json"
+            return 429, _json({"ok": False, "message": tr("Too many wrong PINs - wait a minute.")}), "application/json"
         offered = headers.get("x-guest", "")
         guest = bool(offered) and bool(self.guest) and secrets.compare_digest(offered, self.guest)
         if not guest and not secrets.compare_digest(headers.get("x-pin", ""), self.pin):
             count += 1
             self._failures[ip] = (0, time.monotonic() + 60) if count >= 5 else (count, 0.0)
-            message = "This guest link has expired." if offered else "Wrong PIN"
+            message = tr("This guest link has expired.") if offered else tr("Wrong PIN")
             return 401, _json({"ok": False, "message": message}), "application/json"
         self._failures.pop(ip, None)
         self._seen[ip] = time.monotonic()
@@ -233,7 +237,7 @@ class RemoteServer(QObject):
             return 200, _json(self.state()), "application/json"
         if path == "/api/screen" and method == "GET" and self.screen is not None:
             if guest:
-                return 403, _json({"ok": False, "message": "A guest link only turns slides."}), "application/json"
+                return 403, _json({"ok": False, "message": tr("A guest link only turns slides.")}), "application/json"
             data = self.screen(params.get("role", ""))
             if data is None:
                 return 404, b"that screen is closed", "text/plain"
@@ -253,17 +257,24 @@ class RemoteServer(QObject):
                 return 400, _json({"ok": False, "message": "bad JSON"}), "application/json"
             action = str(data.get("action", ""))
             if guest and action not in GUEST_ACTIONS:
-                return 403, _json({"ok": False, "message": "A guest link only turns slides."}), "application/json"
+                return 403, _json({"ok": False, "message": tr("A guest link only turns slides.")}), "application/json"
             if action in ("next", "back", "slide_next", "slide_back"):
                 # a double tap must not skip a step
                 now = time.monotonic()
                 gap = 0.35 if action.startswith("slide_") else 0.6   # slides are flicked through faster
                 if now - self._last_step_action < gap:
-                    return 200, _json({"ok": True, "message": "ignored double tap"}), "application/json"
+                    return 200, _json({"ok": True, "message": tr("ignored double tap")}), "application/json"
                 self._last_step_action = now
             ok, message = self.act(action, data)
             return 200, _json({"ok": ok, "message": message}), "application/json"
         return 404, _json({"ok": False, "message": "unknown"}), "application/json"
+
+
+def _page(page: str, georgian) -> bytes:
+    """A phone page in the interface's language."""
+    if language() == "ka":
+        page = remote_ka.localized(page, georgian)
+    return page.encode("utf-8")
 
 
 def _json(value) -> bytes:
@@ -288,14 +299,13 @@ class RemoteDialog(QDialog):
         self.server = server
         self.theme = theme
         self.qr_with_pin = qr_with_pin
-        self.setWindowTitle("Phone remote")
+        self.setWindowTitle(tr('Phone remote'))
         self.setMinimumWidth(520)
         box = QVBoxLayout(self)
         box.setContentsMargins(22, 20, 22, 20)
         box.setSpacing(12)
 
-        intro = QLabel("Run the show from a phone or tablet: NEXT, BACK, BLACKOUT, the sound cues "
-                       "and the presets. The phone must be on the same Wi-Fi as this computer.")
+        intro = QLabel(tr('Run the show from a phone or tablet: NEXT, BACK, BLACKOUT, the sound cues and the presets. The phone must be on the same Wi-Fi as this computer.'))
         intro.setWordWrap(True)
         intro.setObjectName("cardHint")
         box.addWidget(intro)
@@ -306,7 +316,7 @@ class RemoteDialog(QDialog):
         self.switch.setMinimumHeight(44)
         self.switch.clicked.connect(lambda on: self.toggled.emit(on))
         row.addWidget(self.switch, 1)
-        row.addWidget(QLabel("Port"))
+        row.addWidget(QLabel(tr('Port')))
         self.port = QSpinBox()
         self.port.setRange(1024, 65535)
         self.port.setValue(server.port)
@@ -318,7 +328,7 @@ class RemoteDialog(QDialog):
         middle.setSpacing(18)
         left = QVBoxLayout()
         left.setSpacing(10)
-        caption = QLabel("ON THE PHONE, OPEN  ·  OR SCAN")
+        caption = QLabel(tr('ON THE PHONE, OPEN  ·  OR SCAN'))
         caption.setObjectName("sectionTitle")
         left.addWidget(caption)
         self.address = QLabel()
@@ -327,26 +337,25 @@ class RemoteDialog(QDialog):
         left.addWidget(self.address)
 
         pin_row = QHBoxLayout()
-        caption = QLabel("PIN")
+        caption = QLabel(tr('PIN'))
         caption.setObjectName("sectionTitle")
         pin_row.addWidget(caption)
         self.pin = QLabel()
         self.pin.setStyleSheet("font-size: 30px; font-weight: 800; letter-spacing: 8px;")
         pin_row.addWidget(self.pin)
         pin_row.addStretch(1)
-        renew = QPushButton("  New PIN")
-        renew.setToolTip("Phones that know the old PIN will be asked again")
+        renew = QPushButton(tr('  New PIN'))
+        renew.setToolTip(tr('Phones that know the old PIN will be asked again'))
         renew.clicked.connect(self.pinRenewed.emit)
         pin_row.addWidget(renew)
         left.addLayout(pin_row)
-        self.qr_pin_check = QCheckBox("The QR code logs in by itself (no PIN to type)")
-        self.qr_pin_check.setToolTip("Handy for the crew. Anyone with a photo of this QR code can run the show\n"
-                                     "until you press New PIN - keep it off for codes that leave the desk.")
+        self.qr_pin_check = QCheckBox(tr('The QR code logs in by itself (no PIN to type)'))
+        self.qr_pin_check.setToolTip(tr('Handy for the crew. Anyone with a photo of this QR code can run the show\nuntil you press New PIN - keep it off for codes that leave the desk.'))
         self.qr_pin_check.setChecked(qr_with_pin)
         self.qr_pin_check.toggled.connect(self._on_qr_pin)
         left.addWidget(self.qr_pin_check)
-        guest = QPushButton("  Guest slide clicker (QR, slides only)…")
-        guest.setToolTip("A separate QR code for a visiting speaker: next / back slide, nothing else")
+        guest = QPushButton(tr('  Guest slide clicker (QR, slides only)…'))
+        guest.setToolTip(tr('A separate QR code for a visiting speaker: next / back slide, nothing else'))
         guest.clicked.connect(self.guestRequested.emit)
         left.addWidget(guest, 0, Qt.AlignLeft)
         left.addStretch(1)
@@ -363,13 +372,12 @@ class RemoteDialog(QDialog):
         self.status.setWordWrap(True)
         box.addWidget(self.status)
 
-        note = QLabel("The first time it is switched on, Windows may ask whether Python may use the "
-                      "network: allow it on private networks.")
+        note = QLabel(tr('The first time it is switched on, Windows may ask whether Python may use the network: allow it on private networks.'))
         note.setObjectName("keyHint")
         note.setWordWrap(True)
         box.addWidget(note)
 
-        close = QPushButton("Close")
+        close = QPushButton(tr('Close'))
         close.clicked.connect(self.accept)
         box.addWidget(close, 0, Qt.AlignRight)
         server.clientsChanged.connect(lambda _n: self.refresh())
@@ -390,7 +398,7 @@ class RemoteDialog(QDialog):
     def refresh(self, error: str = "") -> None:
         on = self.server.running
         self.switch.setChecked(on)
-        self.switch.setText("●  Remote is ON  —  tap to switch off" if on else "Switch the remote on")
+        self.switch.setText(tr('●  Remote is ON  —  tap to switch off') if on else tr('Switch the remote on'))
         self.switch.setObjectName("primary" if not on else "")
         self.switch.style().unpolish(self.switch)
         self.switch.style().polish(self.switch)
@@ -399,7 +407,7 @@ class RemoteDialog(QDialog):
         if on and addresses:
             self.address.setText("\n".join(addresses[:2]))
         elif on:
-            self.address.setText(f"http://<this computer>:{self.server.port}")
+            self.address.setText(tr('http://<this computer>:{0}').format(self.server.port))
         else:
             self.address.setText("—")
         self.pin.setText(self.server.pin if on else "····")
@@ -409,16 +417,16 @@ class RemoteDialog(QDialog):
             self.qr.setToolTip(text)
         else:
             self.qr.setPixmap(QPixmap())
-            self.qr.setText("QR code\nwhen the\nremote is on")
+            self.qr.setText(tr('QR code\nwhen the\nremote is on'))
         if error:
-            self.status.setText(f"Could not start: {error}")
+            self.status.setText(tr('Could not start: {0}').format(error))
             self.status.setStyleSheet(f"color: {self.theme['danger']};")
         elif on:
             count = self.server.clients()
-            self.status.setText(f"{count} phone(s) connected." if count else "Waiting for a phone…")
+            self.status.setText(tr('{0} phone(s) connected.').format(count) if count else tr('Waiting for a phone…'))
             self.status.setStyleSheet(f"color: {self.theme['ok']};" if count else "")
         else:
-            self.status.setText("Off. Nobody can reach the app from the network.")
+            self.status.setText(tr('Off. Nobody can reach the app from the network.'))
             self.status.setStyleSheet("")
 
 
@@ -432,15 +440,13 @@ class GuestDialog(QDialog):
         super().__init__(parent)
         self.server = server
         self.theme = theme
-        self.setWindowTitle("Guest slide clicker")
+        self.setWindowTitle(tr('Guest slide clicker'))
         self.setMinimumWidth(460)
         box = QVBoxLayout(self)
         box.setContentsMargins(22, 20, 22, 20)
         box.setSpacing(12)
 
-        intro = QLabel("For a guest speaker: they scan this with the phone camera and get NEXT and BACK for "
-                       "the slides - no PIN, and nothing else: no screens, no sound, no running order. "
-                       "The phone must be on the same Wi-Fi as this computer.")
+        intro = QLabel(tr('For a guest speaker: they scan this with the phone camera and get NEXT and BACK for the slides - no PIN, and nothing else: no screens, no sound, no running order. The phone must be on the same Wi-Fi as this computer.'))
         intro.setWordWrap(True)
         intro.setObjectName("cardHint")
         box.addWidget(intro)
@@ -467,14 +473,14 @@ class GuestDialog(QDialog):
         self.switch.setMinimumHeight(40)
         self.switch.clicked.connect(lambda on: self.enabledToggled.emit(on))
         row.addWidget(self.switch, 1)
-        self.renew = QPushButton("  New link")
+        self.renew = QPushButton(tr('  New link'))
         self.renew.setMinimumHeight(40)
-        self.renew.setToolTip("A fresh QR code; phones holding the old one are shut out at once")
+        self.renew.setToolTip(tr('A fresh QR code; phones holding the old one are shut out at once'))
         self.renew.clicked.connect(self.renewRequested.emit)
         row.addWidget(self.renew)
         box.addLayout(row)
 
-        close = QPushButton("Close")
+        close = QPushButton(tr('Close'))
         close.clicked.connect(self.accept)
         box.addWidget(close, 0, Qt.AlignRight)
         server.clientsChanged.connect(lambda _n: self.refresh())
@@ -484,7 +490,7 @@ class GuestDialog(QDialog):
         server = self.server
         on = bool(server.guest)
         self.switch.setChecked(on)
-        self.switch.setText("●  Guest link is ON  —  tap to switch off" if on else "Make a guest link")
+        self.switch.setText(tr('●  Guest link is ON  —  tap to switch off') if on else tr('Make a guest link'))
         self.switch.setObjectName("" if on else "primary")
         self.switch.style().unpolish(self.switch)
         self.switch.style().polish(self.switch)
@@ -498,19 +504,19 @@ class GuestDialog(QDialog):
             self.qr.setText("—")
             self.url.setText("")
         if error:
-            self.status.setText(f"Could not start the phone remote: {error}")
+            self.status.setText(tr('Could not start the phone remote: {0}').format(error))
             self.status.setStyleSheet(f"color: {self.theme['danger']};")
         elif not on:
-            self.status.setText("No guest link: nobody can turn the slides from a phone without the PIN.")
+            self.status.setText(tr('No guest link: nobody can turn the slides from a phone without the PIN.'))
             self.status.setStyleSheet("")
         elif not server.running:
-            self.status.setText("The phone remote is off, so the link does not work yet.")
+            self.status.setText(tr('The phone remote is off, so the link does not work yet.'))
             self.status.setStyleSheet(f"color: {self.theme['warn']};")
         elif not server.addresses():
-            self.status.setText("This computer is not on a network the phone can reach.")
+            self.status.setText(tr('This computer is not on a network the phone can reach.'))
             self.status.setStyleSheet(f"color: {self.theme['warn']};")
         else:
-            self.status.setText("Slides only. Switch it off or make a new link after the talk.")
+            self.status.setText(tr('Slides only. Switch it off or make a new link after the talk.'))
             self.status.setStyleSheet(f"color: {self.theme['ok']};")
 
 

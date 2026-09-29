@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -185,8 +187,8 @@ class RoutingRow(QWidget):
         layout.addWidget(self.screen_combo, 0, 1)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Fullscreen", False)
-        self.mode_combo.addItem("Custom size", True)
+        self.mode_combo.addItem(tr('Fullscreen'), False)
+        self.mode_combo.addItem(tr('Custom size'), True)
         self.mode_combo.currentIndexChanged.connect(self._sync_enabled)
         layout.addWidget(self.mode_combo, 0, 2)
 
@@ -211,14 +213,13 @@ class RoutingRow(QWidget):
             self._spin_wrappers.append(wrapper)
             layout.addWidget(wrapper, 0, column)
 
-        self.spins["x"].setToolTip("Offset from the monitor's left edge")
-        self.spins["y"].setToolTip("Offset from the monitor's top edge")
+        self.spins["x"].setToolTip(tr("Offset from the monitor's left edge"))
+        self.spins["y"].setToolTip(tr("Offset from the monitor's top edge"))
 
-        self.on_top_check = QCheckBox("On top")
+        self.on_top_check = QCheckBox(tr('On top'))
         self.on_top_check.setChecked(True)
         self.on_top_check.setToolTip(
-            "Keep this output above other windows.\n"
-            "Switch it OFF to show a presentation or a browser over this screen."
+            tr('Keep this output above other windows.\nSwitch it OFF to show a presentation or a browser over this screen.')
         )
         self.on_top_check.toggled.connect(
             lambda checked: self.onTopChanged.emit(self.role, checked)

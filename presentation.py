@@ -14,6 +14,8 @@ Kept free of main.py imports: the dashboard hands in the stage, icons and colour
 """
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 import base64
 import hashlib
 import json
@@ -241,15 +243,15 @@ class Deck(QObject):
     def start(self) -> Optional[str]:
         """Begin preparing the slides; returns an error message if it cannot."""
         if self.kind == "unknown":
-            return "Open a PDF, a PowerPoint file, or a folder of pictures."
+            return tr('Open a PDF, a PowerPoint file, or a folder of pictures.')
         if not os.path.exists(self.path):
-            return f"{os.path.basename(self.path)} is missing."
+            return tr("{0} is missing.").format(os.path.basename(self.path))
         if self.kind == "images":
             folder = self.path if os.path.isdir(self.path) else None
             files = ([os.path.join(folder, f) for f in sorted(os.listdir(folder), key=_natural)
                       if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS] if folder else [self.path])
             if not files:
-                return "That folder has no pictures in it."
+                return tr('That folder has no pictures in it.')
             self.pages = files
             self.count = len(files)
             self.notes = [""] * self.count
@@ -261,11 +263,11 @@ class Deck(QObject):
         os.makedirs(self.dir, exist_ok=True)
         if self.kind == "pdf":
             if QPdfDocument is None:
-                return "PDF support (QtPdf) is not installed."
+                return tr('PDF support (QtPdf) is not installed.')
             self._pdf = QPdfDocument(self)
             status = self._pdf.load(self.path)
             if status != QPdfDocument.Error.None_ or self._pdf.pageCount() <= 0:
-                return f"This PDF could not be opened ({getattr(status, 'name', status)})."
+                return tr('This PDF could not be opened ({0}).').format(getattr(status, 'name', status))
             self.count = self._pdf.pageCount()
             self.pages = [None] * self.count
             self.notes = [""] * self.count
@@ -273,8 +275,7 @@ class Deck(QObject):
             self.progress.emit()
             return None
         if not powerpoint_available():
-            return ("PowerPoint is not installed on this PC. In PowerPoint on another "
-                    "computer use File → Save as → PDF, and open the PDF here.")
+            return (tr('PowerPoint is not installed on this PC. In PowerPoint on another computer use File → Save as → PDF, and open the PDF here.'))
         self._convert_powerpoint()
         return None
 
@@ -543,7 +544,7 @@ class PowerPointShow(QObject):
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except OSError as error:
             self.process = None
-            QTimer.singleShot(0, lambda: self._fail(f"PowerShell could not start: {error}"))
+            QTimer.singleShot(0, lambda: self._fail(tr("PowerShell could not start: {0}").format(error)))
             return
         threading.Thread(target=self._read, daemon=True).start()
         self._deadline.start(45000)
@@ -780,7 +781,7 @@ class Presenter(QObject):
             self.changed.emit()
             return True
         if self.index + 1 >= self.count():
-            self.note.emit("Last slide.")
+            self.note.emit(tr('Last slide.'))
             return False
         self.goto(self.index + 1)
         return True
@@ -814,7 +815,7 @@ class Presenter(QObject):
     # -- on stage ------------------------------------------------------------ #
     def go_live(self, role: Optional[str] = None, restart: bool = False) -> None:
         if not self.can_go_live():
-            self.note.emit("Open a presentation first.")
+            self.note.emit(tr('Open a presentation first.'))
             return
         if self.live and ((role and role != self.role) or restart):
             self.end()
@@ -849,7 +850,7 @@ class Presenter(QObject):
         path = self.deck.ensure(self.index) if self.deck else None
         if not path:
             self._waiting = True              # PowerPoint still converting: shown when ready
-            self.note.emit("Preparing that slide…")
+            self.note.emit(tr('Preparing that slide…'))
             return
         self._waiting = False
         error = self.stage.present(self.role, path, self.fade_ms)
@@ -863,14 +864,14 @@ class Presenter(QObject):
                               self.deck.slide_index(self.index), self)
         show.state.connect(self._on_show_state)
         show.ended.connect(self._on_show_ended)
-        show.edge.connect(lambda: self.note.emit("Last slide."))
+        show.edge.connect(lambda: self.note.emit(tr('Last slide.')))
         show.failed.connect(self._on_show_failed)
-        show.started.connect(lambda: self.note.emit("Playing in PowerPoint - animations included."))
+        show.started.connect(lambda: self.note.emit(tr('Playing in PowerPoint - animations included.')))
         show.started.connect(self.stage.refocus)
         self.show = show
         self.at_end = False
         self._seen = None
-        self.note.emit("Starting PowerPoint…")
+        self.note.emit(tr('Starting PowerPoint…'))
 
     def _stop_show(self) -> None:
         show, self.show = self.show, None
@@ -898,14 +899,14 @@ class Presenter(QObject):
                 self.live = False
                 self.black = False
                 self.stage.give_back_room(self.role)
-                self.note.emit("PowerPoint's slide show was closed.")
+                self.note.emit(tr("PowerPoint's slide show was closed."))
                 self.changed.emit()
 
     def _on_show_failed(self, message: str) -> None:
         self.show = None
         self.stage.give_back_room(self.role)
         if self.live and self.count():
-            self.note.emit(message + " Showing the slides as pictures instead (no animations).")
+            self.note.emit(message + tr(' Showing the slides as pictures instead (no animations).'))
             self._show()
         else:
             self.live = False
@@ -970,7 +971,7 @@ class SlideView(QWidget):
         else:
             p.setPen(QColor(self.theme["muted"]))
             p.setFont(_font(10))
-            p.drawText(area, Qt.AlignCenter, self.placeholder)
+            p.drawText(area, Qt.AlignCenter, tr(self.placeholder))
         if self.badge:
             p.setFont(_font(8, QFont.Bold))
             width = p.fontMetrics().horizontalAdvance(self.badge) + 22
@@ -990,7 +991,7 @@ class LearnDialog(QDialog):
 
     def __init__(self, theme: dict, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Learn the clicker")
+        self.setWindowTitle(tr('Learn the clicker'))
         self.setMinimumWidth(460)
         self.steps = [("next", "NEXT (forward)"), ("back", "BACK"), ("black", "BLACK screen (optional)")]
         self.learned: Dict[str, dict] = {}
@@ -1007,12 +1008,12 @@ class LearnDialog(QDialog):
         self.heard.setWordWrap(True)
         box.addWidget(self.heard)
         row = QHBoxLayout()
-        skip = QPushButton("Skip")
+        skip = QPushButton(tr('Skip'))
         skip.setFocusPolicy(Qt.NoFocus)
         skip.clicked.connect(self._advance)
         row.addWidget(skip)
         row.addStretch(1)
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(tr('Cancel'))
         cancel.setFocusPolicy(Qt.NoFocus)
         cancel.clicked.connect(self.reject)
         row.addWidget(cancel)
@@ -1023,7 +1024,7 @@ class LearnDialog(QDialog):
         if self._at >= len(self.steps):
             self.accept()
             return
-        self.prompt.setText(f"Press the clicker's {self.steps[self._at][1]} button")
+        self.prompt.setText(tr("Press the clicker's {0} button").format(self.steps[self._at][1]))
 
     def _advance(self) -> None:
         self._at += 1
@@ -1090,23 +1091,21 @@ class PresentationTab(QWidget):
         column.addLayout(top)
         limit_row = top                      # one row: counter, limit, countdown, clock
         limit_row.setSpacing(6)
-        caption = QLabel("Limit")
+        caption = QLabel(tr('Limit'))
         caption.setObjectName("cardHint")
         limit_row.addWidget(caption)
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(0, 240)
-        self.limit_spin.setSuffix(" min")
-        self.limit_spin.setSpecialValueText("none")
-        self.limit_spin.setToolTip("How long the speaker has. The clock above counts down, amber in the last\n"
-                                   "two minutes, red once over.")
+        self.limit_spin.setSuffix(tr(' min'))
+        self.limit_spin.setSpecialValueText(tr('none'))
+        self.limit_spin.setToolTip(tr('How long the speaker has. The clock above counts down, amber in the last\ntwo minutes, red once over.'))
         self.limit_spin.valueChanged.connect(self._on_limit)
         limit_row.addWidget(self.limit_spin)
         self.countdown_combo = QComboBox()
-        self.countdown_combo.addItem("countdown: desk only", "")
+        self.countdown_combo.addItem(tr('countdown: desk only'), "")
         for role, label in role_labels.items():
-            self.countdown_combo.addItem(f"countdown on {label}", role)
-        self.countdown_combo.setToolTip("Also show the time left, small in the corner of a stage screen\n"
-                                        "the speaker can see (not the one a PowerPoint show covers)")
+            self.countdown_combo.addItem(tr('countdown on {0}').format(label), role)
+        self.countdown_combo.setToolTip(tr('Also show the time left, small in the corner of a stage screen\nthe speaker can see (not the one a PowerPoint show covers)'))
         self.countdown_combo.currentIndexChanged.connect(self._on_countdown_target)
         limit_row.addWidget(self.countdown_combo)
         limit_row.addSpacing(10)
@@ -1114,14 +1113,14 @@ class PresentationTab(QWidget):
         self.limit_minutes = 0
         self.countdown_role = ""
         self._countdown_shown = ("", "", "")
-        caption = QLabel("NEXT SLIDE")
+        caption = QLabel(tr('NEXT SLIDE'))
         caption.setObjectName("sectionTitle")
         column.addWidget(caption)
         self.upcoming = SlideView(theme, "—")
         self.upcoming.setMinimumHeight(110)
         self.upcoming.setMaximumHeight(230)
         column.addWidget(self.upcoming, 2)
-        caption = QLabel("NOTES")
+        caption = QLabel(tr('NOTES'))
         caption.setObjectName("sectionTitle")
         column.addWidget(caption)
         self.notes = QLabel("")
@@ -1136,19 +1135,19 @@ class PresentationTab(QWidget):
         column.addWidget(notes_scroll, 1)
         nav = QHBoxLayout()
         nav.setSpacing(8)
-        back = QPushButton("  Back")
+        back = QPushButton(tr('  Back'))
         back.setIcon(icons.get("prev", theme["text"], 16))
         back.setMinimumHeight(52)
-        back.setToolTip("Previous slide  (clicker back, Page Up, ←)")
+        back.setToolTip(tr('Previous slide  (clicker back, Page Up, ←)'))
         back.clicked.connect(self.presenter.back)
         nav.addWidget(back, 2)
-        self.next_btn = QPushButton("  NEXT")
+        self.next_btn = QPushButton(tr('  NEXT'))
         self.next_btn.setObjectName("primary")
         self.next_btn.setIcon(icons.get("next", "#0b0e13", 20))
         self.next_btn.setIconSize(QSize(20, 20))
         self.next_btn.setMinimumHeight(52)
         self.next_btn.setStyleSheet("font-size: 17px; font-weight: 700;")
-        self.next_btn.setToolTip("Next slide  (clicker forward, Page Down, →, Space)")
+        self.next_btn.setToolTip(tr('Next slide  (clicker forward, Page Down, →, Space)'))
         self.next_btn.clicked.connect(self.presenter.next)
         nav.addWidget(self.next_btn, 3)
         column.addLayout(nav)
@@ -1158,10 +1157,10 @@ class PresentationTab(QWidget):
         self.live_btn.setMinimumHeight(46)
         self.live_btn.clicked.connect(self._toggle_live)
         stage_row.addWidget(self.live_btn, 3)
-        self.black_btn = QPushButton("  Black")
+        self.black_btn = QPushButton(tr('  Black'))
         self.black_btn.setCheckable(True)
         self.black_btn.setMinimumHeight(46)
-        self.black_btn.setToolTip("Black out the presentation screen  (clicker black, B)")
+        self.black_btn.setToolTip(tr('Black out the presentation screen  (clicker black, B)'))
         self.black_btn.clicked.connect(lambda: self.presenter.toggle_black())
         stage_row.addWidget(self.black_btn, 2)
         column.addLayout(stage_row)
@@ -1195,40 +1194,38 @@ class PresentationTab(QWidget):
         row = QHBoxLayout(bar)
         row.setContentsMargins(14, 8, 14, 8)
         row.setSpacing(8)
-        open_file = QPushButton("  Open…")
+        open_file = QPushButton(tr('  Open…'))
         open_file.setIcon(self.icons.get("folder", self.theme["text"], 15))
-        open_file.setToolTip("A PDF or PowerPoint file")
+        open_file.setToolTip(tr('A PDF or PowerPoint file'))
         open_file.clicked.connect(self._open_file)
         row.addWidget(open_file)
-        open_folder = QPushButton("  Folder of pictures…")
+        open_folder = QPushButton(tr('  Folder of pictures…'))
         open_folder.setIcon(self.icons.get("image", self.theme["text"], 15))
         open_folder.clicked.connect(self._open_folder)
         row.addWidget(open_folder)
         self.recent = QComboBox()
         self.recent.setMinimumWidth(240)
-        self.recent.setToolTip("Recently opened")
+        self.recent.setToolTip(tr('Recently opened'))
         self.recent.activated.connect(self._open_recent)
         row.addWidget(self.recent)
         row.addSpacing(10)
-        row.addWidget(QLabel("Screen"))
+        row.addWidget(QLabel(tr('Screen')))
         self.target = QComboBox()
         for role, label in self.role_labels.items():
             self.target.addItem(label, role)
-        self.target.setToolTip("Which screen the slides appear on")
+        self.target.setToolTip(tr('Which screen the slides appear on'))
         self.target.currentIndexChanged.connect(self._on_target)
         row.addWidget(self.target)
-        row.addWidget(QLabel("Change"))
+        row.addWidget(QLabel(tr('Change')))
         self.transition = QComboBox()
         for caption, ms in TRANSITIONS:
-            self.transition.addItem(caption, ms)
+            self.transition.addItem(tr(caption), ms)
         self.transition.currentIndexChanged.connect(
             lambda: setattr(self.presenter, "fade_ms", int(self.transition.currentData())))
         row.addWidget(self.transition)
-        self.powerpoint_check = QCheckBox("PowerPoint animations")
+        self.powerpoint_check = QCheckBox(tr('PowerPoint animations'))
         self.powerpoint_check.setToolTip(
-            "On: PowerPoint files play in PowerPoint itself on the stage screen, so animations,\n"
-            "videos and slide transitions work. NEXT, the clicker and the phone drive it.\n"
-            "Off: they are shown as still pictures (PDFs always are).")
+            tr('On: PowerPoint files play in PowerPoint itself on the stage screen, so animations,\nvideos and slide transitions work. NEXT, the clicker and the phone drive it.\nOff: they are shown as still pictures (PDFs always are).'))
         self.powerpoint_check.setChecked(self.presenter.in_powerpoint)
         self.powerpoint_check.setEnabled(powerpoint_available())
         self.powerpoint_check.toggled.connect(self._on_powerpoint)
@@ -1245,30 +1242,29 @@ class PresentationTab(QWidget):
         row = QHBoxLayout(bar)
         row.setContentsMargins(14, 8, 14, 8)
         row.setSpacing(10)
-        caption = QLabel("Clicker")
+        caption = QLabel(tr('Clicker'))
         caption.setObjectName("sectionTitle")
         row.addWidget(caption)
-        self.key_label = QLabel("press a clicker button to test it")
+        self.key_label = QLabel(tr('press a clicker button to test it'))
         self.key_label.setObjectName("cardHint")
         self.key_label.setMinimumWidth(260)
         row.addWidget(self.key_label)
-        hint = QLabel("Page Down / Up · arrows · Space · B = black · F5 start · Esc end")
+        hint = QLabel(tr('Page Down / Up · arrows · Space · B = black · F5 start · Esc end'))
         hint.setObjectName("keyHint")
         row.addWidget(hint, 1)
-        learn = QPushButton("  Learn my clicker…")
+        learn = QPushButton(tr('  Learn my clicker…'))
         learn.setIcon(self.icons.get("target", self.theme["text"], 15))
-        learn.setToolTip("For a clicker that sends unusual keys: press its buttons once")
+        learn.setToolTip(tr('For a clicker that sends unusual keys: press its buttons once'))
         learn.clicked.connect(self.learnRequested.emit)
         row.addWidget(learn)
-        guest = QPushButton("  Guest phone clicker…")
+        guest = QPushButton(tr('  Guest phone clicker…'))
         guest.setIcon(self.icons.get("phone", self.theme["text"], 15))
-        guest.setToolTip("A QR code for a guest speaker's phone: next / back slide, nothing else")
+        guest.setToolTip(tr("A QR code for a guest speaker's phone: next / back slide, nothing else"))
         guest.clicked.connect(self.guestRequested.emit)
         row.addWidget(guest)
-        self.global_check = QCheckBox("Works even when another program is in front")
+        self.global_check = QCheckBox(tr('Works even when another program is in front'))
         self.global_check.setToolTip(
-            "While slides are on screen, the clicker's Page Down / Page Up (and any learned keys)\n"
-            "reach this app even if PowerPoint, a browser or anything else has focus.")
+            tr("While slides are on screen, the clicker's Page Down / Page Up (and any learned keys)\nreach this app even if PowerPoint, a browser or anything else has focus."))
         self.global_check.toggled.connect(self.globalToggled.emit)
         row.addWidget(self.global_check)
         return bar
@@ -1277,7 +1273,7 @@ class PresentationTab(QWidget):
     def set_recent(self, paths: List[str]) -> None:
         self.recent.blockSignals(True)
         self.recent.clear()
-        self.recent.addItem("Recent…", "")
+        self.recent.addItem(tr('Recent…'), "")
         for path in paths:
             self.recent.addItem(os.path.basename(path.rstrip("\\/")) or path, path)
             self.recent.setItemData(self.recent.count() - 1, path, Qt.ToolTipRole)
@@ -1285,12 +1281,12 @@ class PresentationTab(QWidget):
 
     def _open_file(self) -> None:
         start = os.path.dirname(self.presenter.deck.path) if self.presenter.deck else os.path.expanduser("~/Desktop")
-        path, _ = QFileDialog.getOpenFileName(self, "Open a presentation", start, OPEN_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, tr('Open a presentation'), start, OPEN_FILTER)
         if path:
             self.open_path(path)
 
     def _open_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "A folder of slide pictures", os.path.expanduser("~/Desktop"))
+        path = QFileDialog.getExistingDirectory(self, tr('A folder of slide pictures'), os.path.expanduser("~/Desktop"))
         if path:
             self.open_path(path)
 
@@ -1356,39 +1352,39 @@ class PresentationTab(QWidget):
         else:
             self.counter.setText(f"{presenter.index + 1} / {count}" if count else "…")
             pixmap = deck.thumb(presenter.index, 1280) if count else None
-            where = f"in PowerPoint  ·  {role_label}" if presenter.playing_in_powerpoint() else role_label
+            where = tr("in PowerPoint  ·  {0}").format(role_label) if presenter.playing_in_powerpoint() else role_label
             if presenter.live and presenter.black:
-                badge, colour = f"BLACK  ·  {where}", self.theme["warn"]
+                badge, colour = tr("BLACK  ·  {0}").format(where), self.theme["warn"]
             elif presenter.live:
-                badge, colour = f"LIVE  ·  {where}", self.theme["danger"]
+                badge, colour = tr("LIVE  ·  {0}").format(where), self.theme["danger"]
             else:
-                badge, colour = "PREVIEW  ·  not on screen", self.theme["muted"]
+                badge, colour = tr("PREVIEW  ·  not on screen"), self.theme["muted"]
             self.current.show_slide(pixmap, badge, colour, dimmed=presenter.live and presenter.black)
             if presenter.index + 1 < count:
                 self.upcoming.show_slide(deck.thumb(presenter.index + 1, 640), "")
             else:
                 self.upcoming.show_slide(None, "")
-                self.upcoming.placeholder = "last slide" if count else "—"
+                self.upcoming.placeholder = tr("last slide") if count else "—"
             notes = presenter.notes()
-            self.notes.setText(notes or ("" if deck.kind != "powerpoint" else "no notes on this slide"))
+            self.notes.setText(notes or ("" if deck.kind != "powerpoint" else tr("no notes on this slide")))
             self._sync_thumbs()
             if deck.error:
                 self.show_status(deck.error.splitlines()[0], self.theme["danger"])
             elif not deck.done:
-                self.show_status(f"Preparing slides  {deck.ready_count()} / {count or '…'}")
+                self.show_status(tr('Preparing slides  {0} / {1}').format(deck.ready_count(), count or '…'))
             elif presenter.playing_in_powerpoint():
                 state = "starting…" if not presenter.show.running else (
                     "end of the show - NEXT does nothing more" if presenter.at_end else "animations on")
-                self.show_status(f"{deck.name}  ·  {count} slides  ·  PowerPoint {state}", self.theme["accent"])
+                self.show_status(tr('{0}  ·  {1} slides  ·  PowerPoint {2}').format(deck.name, count, state), self.theme["accent"])
             else:
-                self.show_status(f"{deck.name}  ·  {count} slides", "")
+                self.show_status(tr('{0}  ·  {1} slides').format(deck.name, count), "")
         self.live_btn.set_hold(presenter.live)
         if presenter.live:
-            self.live_btn.setText(f"  End  ·  back to the {role_label} background   (hold)")
+            self.live_btn.setText(tr('  End  ·  back to the {0} background   (hold)').format(role_label))
             self.live_btn.setIcon(self.icons.get("stop", self.theme["danger"], 16))
             self.live_btn.setObjectName("danger")
         else:
-            self.live_btn.setText(f"  Show on {role_label}")
+            self.live_btn.setText(tr('  Show on {0}').format(role_label))
             self.live_btn.setIcon(self.icons.get("monitor", self.theme["text"], 16))
             self.live_btn.setObjectName("")
         self.live_btn.style().unpolish(self.live_btn)
@@ -1443,11 +1439,11 @@ class PresentationTab(QWidget):
         """The desk clock: time on screen, or time left of the limit - and its colour."""
         clock = lambda seconds: f"{int(seconds // 60)}:{int(seconds % 60):02d}"  # noqa: E731
         if not self.limit_minutes:
-            return f"on screen {clock(elapsed)}", ""
+            return tr("on screen {0}").format(clock(elapsed)), ""
         left = self.limit_minutes * 60 - elapsed
         if left < 0:
-            return f"{clock(-left)} OVER the {self.limit_minutes} min", self.theme["danger"]
-        return f"{clock(left)} left of {self.limit_minutes} min", self.theme["warn"] if left <= 120 else ""
+            return tr("{0} OVER the {1} min").format(clock(-left), self.limit_minutes), self.theme["danger"]
+        return tr("{0} left of {1} min").format(clock(left), self.limit_minutes), self.theme["warn"] if left <= 120 else ""
 
     def _tick(self) -> None:
         elapsed = self.presenter.elapsed()
@@ -1471,6 +1467,6 @@ class PresentationTab(QWidget):
         if len(self._last_key) == 4 and self._last_key[0]:
             name, action, when, source = self._last_key
             ago = int(time.monotonic() - when)
-            self.key_label.setText(f"last press: {name} → {action}" + (f" ({source})" if source else "")
-                                   + (f"  ·  {ago} s ago" if ago else "  ·  just now"))
+            self.key_label.setText(tr("last press: {0} → {1}").format(name, action) + (tr(" ({0})").format(source) if source else "")
+                                   + (tr("  ·  {0} s ago").format(ago) if ago else "  ·  just now"))
             self.key_label.setStyleSheet(f"color: {self.theme['ok']};" if ago < 3 else "")

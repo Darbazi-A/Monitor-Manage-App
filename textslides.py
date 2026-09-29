@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import caps, tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -167,19 +169,19 @@ class TextSlides(QWidget):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("text", CLR_ACCENT, 16).pixmap(16, 16))
         header.addWidget(glyph)
-        title = QLabel("TEXT SLIDES")
+        title = QLabel(tr('TEXT SLIDES'))
         title.setObjectName("sectionTitle")
         header.addWidget(title)
-        hint = QLabel("one line per slide · use “|” for a second, smaller line")
+        hint = QLabel(tr('one line per slide · use “|” for a second, smaller line'))
         hint.setObjectName("keyHint")
         header.addWidget(hint)
         header.addStretch(1)
 
-        header.addWidget(QLabel("Show on"))
+        header.addWidget(QLabel(tr('Show on')))
         self.target = QComboBox()
         for role in STAGE_ROLES:
             self.target.addItem(ROLE_LABELS[role], role)
-        self.target.setToolTip("Which screen the names appear on")
+        self.target.setToolTip(tr('Which screen the names appear on'))
         self.target.currentIndexChanged.connect(
             lambda _i: self.targetChanged.emit(self.target.currentData()))
         header.addWidget(self.target)
@@ -191,22 +193,19 @@ class TextSlides(QWidget):
 
         left = QVBoxLayout()
         left.setSpacing(5)
-        caption = QLabel("RUNNING ORDER")
+        caption = QLabel(tr('RUNNING ORDER'))
         caption.setObjectName("sectionTitle")
         left.addWidget(caption)
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText(
-            "Nino Beridze | Grade 5, Mathematics\n"
-            "Giorgi Kapanadze | Grade 7, Science\n"
-            "\n"
-            "Welcome to the Spring Concert")
+            tr('Nino Beridze | Grade 5, Mathematics\nGiorgi Kapanadze | Grade 7, Science\n\nWelcome to the Spring Concert'))
         self.editor.textChanged.connect(self._rebuild_list)
         left.addWidget(self.editor, 1)
         body.addLayout(left, 1)
 
         right = QVBoxLayout()
         right.setSpacing(5)
-        self.preview_caption = QLabel("PREVIEW")
+        self.preview_caption = QLabel(tr('PREVIEW'))
         self.preview_caption.setObjectName("sectionTitle")
         right.addWidget(self.preview_caption)
         self.preview_label = QLabel()
@@ -214,9 +213,9 @@ class TextSlides(QWidget):
         self.preview_label.setMinimumHeight(140)
         self.preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.preview_label.setStyleSheet("background: #05070b; border-radius: 8px;")
-        self.preview_label.setToolTip("The selected name, as it will look on that screen - over what it shows now")
+        self.preview_label.setToolTip(tr('The selected name, as it will look on that screen - over what it shows now'))
         right.addWidget(self.preview_label)
-        caption2 = QLabel("SLIDES  —  click one to put it on screen")
+        caption2 = QLabel(tr('SLIDES  —  click one to put it on screen'))
         caption2.setObjectName("sectionTitle")
         right.addWidget(caption2)
         self.slides = QListWidget()
@@ -230,12 +229,12 @@ class TextSlides(QWidget):
         look = QHBoxLayout()
         look.setSpacing(7)
         self.look_combo = QComboBox()
-        self.look_combo.setToolTip("Ready-made looks: size, position, colours and shade in one go")
+        self.look_combo.setToolTip(tr('Ready-made looks: size, position, colours and shade in one go'))
         self.look_combo.activated.connect(self._on_look_chosen)
         look.addWidget(self.look_combo)
-        save_look = QPushButton("  Save look…")
+        save_look = QPushButton(tr('  Save look…'))
         save_look.setIcon(Icons.get("save", CLR_TEXT, 15))
-        save_look.setToolTip("Keep the current size, position and colours as a look of your own")
+        save_look.setToolTip(tr('Keep the current size, position and colours as a look of your own'))
         save_look.clicked.connect(self._save_look)
         look.addWidget(save_look)
         look.addSpacing(8)
@@ -245,15 +244,15 @@ class TextSlides(QWidget):
         self.font_combo.currentFontChanged.connect(lambda _f: self.styleChanged.emit())
         look.addWidget(self.font_combo)
 
-        look.addWidget(QLabel("Name"))
+        look.addWidget(QLabel(tr('Name')))
         self.title_size = QSpinBox()
         self.title_size.setRange(12, 400)
         self.title_size.setValue(84)
-        self.title_size.setSuffix(" px")
+        self.title_size.setSuffix(tr(' px'))
         self.title_size.valueChanged.connect(lambda _v: self.styleChanged.emit())
         look.addWidget(self.title_size)
 
-        title_colour = icon_button("palette", "Colour of the big line", CLR_MUTED, 15)
+        title_colour = icon_button("palette", tr('Colour of the big line'), CLR_MUTED, 15)
         title_colour.setObjectName("ghost")
         title_colour.clicked.connect(lambda: self._pick_colour("title"))
         look.addWidget(title_colour)
@@ -262,15 +261,15 @@ class TextSlides(QWidget):
         look.addWidget(self.title_swatch)
 
         look.addSpacing(8)
-        look.addWidget(QLabel("Second line"))
+        look.addWidget(QLabel(tr('Second line')))
         self.subtitle_size = QSpinBox()
         self.subtitle_size.setRange(10, 300)
         self.subtitle_size.setValue(44)
-        self.subtitle_size.setSuffix(" px")
+        self.subtitle_size.setSuffix(tr(' px'))
         self.subtitle_size.valueChanged.connect(lambda _v: self.styleChanged.emit())
         look.addWidget(self.subtitle_size)
 
-        sub_colour = icon_button("palette", "Colour of the small line", CLR_MUTED, 15)
+        sub_colour = icon_button("palette", tr('Colour of the small line'), CLR_MUTED, 15)
         sub_colour.setObjectName("ghost")
         sub_colour.clicked.connect(lambda: self._pick_colour("subtitle"))
         look.addWidget(sub_colour)
@@ -279,16 +278,16 @@ class TextSlides(QWidget):
         look.addWidget(self.subtitle_swatch)
 
         look.addSpacing(8)
-        look.addWidget(QLabel("Position"))
+        look.addWidget(QLabel(tr('Position')))
         self.position = QComboBox()
         for caption_text, value in (("Middle", "middle"), ("Top", "top"), ("Bottom", "bottom")):
-            self.position.addItem(caption_text, value)
+            self.position.addItem(tr(caption_text), value)
         self.position.currentIndexChanged.connect(lambda _i: self.styleChanged.emit())
         look.addWidget(self.position)
 
-        self.scrim = QCheckBox("Shade behind")
+        self.scrim = QCheckBox(tr('Shade behind'))
         self.scrim.setChecked(True)
-        self.scrim.setToolTip("A dark band behind the text so it stays readable over video")
+        self.scrim.setToolTip(tr('A dark band behind the text so it stays readable over video'))
         self.scrim.toggled.connect(lambda _v: self.styleChanged.emit())
         look.addWidget(self.scrim)
         look.addStretch(1)
@@ -305,31 +304,31 @@ class TextSlides(QWidget):
         # --- transport ------------------------------------------------------ #
         transport = QHBoxLayout()
         transport.setSpacing(7)
-        prev_btn = QPushButton("  Previous")
+        prev_btn = QPushButton(tr('  Previous'))
         prev_btn.setIcon(Icons.get("prev", CLR_TEXT, 15))
         prev_btn.clicked.connect(lambda: self.step(-1))
         transport.addWidget(prev_btn)
 
-        self.show_btn = QPushButton("  SHOW THIS NAME")
+        self.show_btn = QPushButton(tr('  SHOW THIS NAME'))
         self.show_btn.setObjectName("primary")
         self.show_btn.setIcon(Icons.get("play", "#0b0e13", 15))
         self.show_btn.setMinimumWidth(210)
         self.show_btn.clicked.connect(self.show_current)
         transport.addWidget(self.show_btn)
 
-        next_btn = QPushButton("  Next")
+        next_btn = QPushButton(tr('  Next'))
         next_btn.setIcon(Icons.get("next", CLR_TEXT, 15))
         next_btn.clicked.connect(lambda: self.step(1))
         transport.addWidget(next_btn)
 
-        hide_btn = QPushButton("  Hide text")
+        hide_btn = QPushButton(tr('  Hide text'))
         hide_btn.setObjectName("danger")
         hide_btn.setIcon(Icons.get("close", CLR_DANGER, 15))
         hide_btn.clicked.connect(self.hideRequested.emit)
         transport.addWidget(hide_btn)
 
         transport.addSpacing(12)
-        keys = QLabel("Ctrl+→ next · Ctrl+← previous · Ctrl+H hide")
+        keys = QLabel(tr('Ctrl+→ next · Ctrl+← previous · Ctrl+H hide'))
         keys.setObjectName("keyHint")
         transport.addWidget(keys)
         transport.addStretch(1)
@@ -342,9 +341,9 @@ class TextSlides(QWidget):
     def _fill_looks(self) -> None:
         self.look_combo.blockSignals(True)
         self.look_combo.clear()
-        self.look_combo.addItem("Look…", "")
+        self.look_combo.addItem(tr('Look…'), "")
         for name in TEXT_LOOKS:
-            self.look_combo.addItem(name, name)
+            self.look_combo.addItem(tr(name), name)
         for name in self.custom_looks:
             self.look_combo.addItem(f"★ {name}", name)
         self.look_combo.blockSignals(False)
@@ -378,7 +377,7 @@ class TextSlides(QWidget):
         self.styleChanged.emit()
 
     def _save_look(self) -> None:
-        name, accepted = QInputDialog.getText(self, "Save look", "Name for this look:")
+        name, accepted = QInputDialog.getText(self, tr('Save look'), tr('Name for this look:'))
         name = name.strip()
         if not accepted or not name:
             return
@@ -421,7 +420,7 @@ class TextSlides(QWidget):
         window.show_slide(title, subtitle, 0)
         self.preview_label.setFixedHeight(max(40, height + 8))
         self.preview_label.setPixmap(window.preview(QSize(max(1, width), max(1, height))))
-        self.preview_caption.setText(f"PREVIEW  ·  {ROLE_LABELS[role].upper()}  ·  {size.width()}×{size.height()}"
+        self.preview_caption.setText(tr('PREVIEW  ·  {0}  ·  {1}×{2}').format(caps(ROLE_LABELS[role]), size.width(), size.height())
                                      + ("" if item is not None else "  ·  sample name"))
 
     # -- running order ------------------------------------------------------ #

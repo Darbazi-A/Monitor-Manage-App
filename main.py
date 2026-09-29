@@ -49,6 +49,8 @@ Run with:      python main.py
 
 from __future__ import annotations
 
+from i18n import LANGUAGES, language as current_language, set_language, tr  # noqa: E402
+
 import argparse
 import ctypes
 from contextlib import contextmanager
@@ -75,6 +77,7 @@ from PySide6.QtCore import (
     QEvent,
     QMimeData,
     QObject,
+    QProcess,
     QPoint,
     QPointF,
     QPropertyAnimation,
@@ -235,7 +238,7 @@ class Autostart:
     def enable(cls, preset: str, delay: int) -> Optional[str]:
         """Returns an error message, or None on success."""
         if not cls.available():
-            return "Autostart is only supported on Windows."
+            return tr('Autostart is only supported on Windows.')
         try:
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
                                     winreg.KEY_SET_VALUE) as key:
@@ -342,7 +345,7 @@ class SlideStage:
             panel._apply_routing()
             window = panel._show_output(role)
         if window is None:
-            return f"{self.label(role)} has no monitor - pick one on Screens & Setup."
+            return tr('{0} has no monitor - pick one on Screens & Setup.').format(self.label(role))
         window.set_scale_mode(ScaleMode.FIT)
         try:
             window.present(path, fade_ms, TRANSITION_CROSSFADE)
@@ -428,7 +431,7 @@ class ControlPanel(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Stage Display Controller")
+        self.setWindowTitle(tr('Stage Display Controller'))
         if os.path.exists(ICON_FILE):
             self.setWindowIcon(QIcon(ICON_FILE))
 
@@ -446,7 +449,7 @@ class ControlPanel(QMainWindow):
         # The look - touch-sized or not - goes on once, before a single widget
         # exists: re-styling the finished window cost over half a second of start-up.
         app = QApplication.instance()
-        sheet = STYLESHEET + (touch_stylesheet() if self.touch_enabled() else "")
+        sheet = STYLESHEET + language_stylesheet() + (touch_stylesheet() if self.touch_enabled() else "")
         if app is not None and app.styleSheet() != sheet:
             app.setStyleSheet(sheet)
         self._freshly_opened: set = set()
@@ -507,21 +510,21 @@ class ControlPanel(QMainWindow):
         root.addWidget(self.preset_bar)
 
         self.tabs = desk_mod.PageTabs()
-        self.tabs.addTab(self._build_live_tab(), "  Live  ")
-        self.tabs.addTab(self._build_show_tab(), "  Show  ")
-        self.tabs.addTab(self._build_presentation_tab(), "  Slides  ")
-        self.tabs.addTab(self._build_library_tab(), "  Library  ")
-        self.tabs.addTab(self._build_text_tab(), "  Text  ")
+        self.tabs.addTab(self._build_live_tab(), tr('  Live  '))
+        self.tabs.addTab(self._build_show_tab(), tr('  Show  '))
+        self.tabs.addTab(self._build_presentation_tab(), tr('  Slides  '))
+        self.tabs.addTab(self._build_library_tab(), tr('  Library  '))
+        self.tabs.addTab(self._build_text_tab(), tr('  Text  '))
         # The DJ desk is built the first time its tab opens: it starts an audio
         # engine, and a show that never uses it should not pay for one.
         self.dj_panel = None
         self.dj_page = QWidget()
         dj_layout = QVBoxLayout(self.dj_page)
         dj_layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs.addTab(self.dj_page, "  DJ  ", scroll=False)   # the DJ desk sizes itself
+        self.tabs.addTab(self.dj_page, tr('  DJ  '), scroll=False)   # the DJ desk sizes itself
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
         self.screens_page = self._build_screens_tab()
-        self.tabs.addTab(self.screens_page, "  Screens && Setup  ")
+        self.tabs.addTab(self.screens_page, tr('  Screens && Setup  '))
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
         # NOW / NEXT follows the operator onto every tab.
@@ -578,8 +581,7 @@ class ControlPanel(QMainWindow):
         self._health_timer.start(2000)
         self._refresh_health()
         self.statusBar().showMessage(
-            "Screens & Setup → assign monitors → OPEN OUTPUTS.   "
-            "Then drop media onto a card, or build a playlist."
+            tr('Screens & Setup → assign monitors → OPEN OUTPUTS.   Then drop media onto a card, or build a playlist.')
         )
 
     # ------------------------------------------------------------------ UI -- #
@@ -603,7 +605,7 @@ class ControlPanel(QMainWindow):
         mark = QLabel()
         mark.setPixmap(Icons.get("monitor", CLR_ACCENT, 19).pixmap(19, 19))
         brand_row.addWidget(mark)
-        title = QLabel("Stage Display")
+        title = QLabel(tr('Stage Display'))
         title.setObjectName("brand")
         brand_row.addWidget(title)
         brand_row.addStretch(1)
@@ -611,7 +613,7 @@ class ControlPanel(QMainWindow):
         # A wall clock the operator can glance at without leaving the app.
         self.clock = QLabel()
         self.clock.setObjectName("clock")
-        self.clock.setToolTip("Current time")
+        self.clock.setToolTip(tr('Current time'))
         left.addWidget(self.clock)
         self.mode_note = QLabel()
         self.mode_note.setObjectName("keyHint")
@@ -654,25 +656,23 @@ class ControlPanel(QMainWindow):
         self.mode_switch = desk_mod.ModeSwitch(THEME)
         self.mode_switch.modeChanged.connect(self._set_mode)
         top_row.addWidget(self.mode_switch)
-        self.preview_btn = QPushButton("  PREVIEW → TAKE")
+        self.preview_btn = QPushButton(tr('  PREVIEW → TAKE'))
         self.preview_btn.setCheckable(True)
         self.preview_btn.setIcon(Icons.get("target", CLR_TEXT, 15))
         self.preview_btn.setToolTip(
-            "On: a file, preset or name chosen by hand waits in PREVIEW until you press TAKE,\n"
-            "so nothing reaches the stage by accident. NEXT in the running order goes straight on.")
+            tr('On: a file, preset or name chosen by hand waits in PREVIEW until you press TAKE,\nso nothing reaches the stage by accident. NEXT in the running order goes straight on.'))
         self.preview_btn.setChecked(self.preview_first)
         self.preview_btn.toggled.connect(self._set_preview_first)
         top_row.addWidget(self.preview_btn)
-        self.rehearse_btn = QPushButton("  Rehearse")
+        self.rehearse_btn = QPushButton(tr('  Rehearse'))
         self.rehearse_btn.setCheckable(True)
         self.rehearse_btn.setIcon(Icons.get("play", CLR_TEXT, 15))
-        self.rehearse_btn.setToolTip("Try the show out in a window on this desk: presets, running order, names and\n"
-                                     "slides go there instead of the stage, and the hall keeps what it has.")
+        self.rehearse_btn.setToolTip(tr('Try the show out in a window on this desk: presets, running order, names and\nslides go there instead of the stage, and the hall keeps what it has.'))
         self.rehearse_btn.clicked.connect(self._toggle_rehearsal)
         top_row.addWidget(self.rehearse_btn)
-        ready = QPushButton("  Ready check")
+        ready = QPushButton(tr('  Ready check'))
         ready.setIcon(Icons.get("list", CLR_TEXT, 15))
-        ready.setToolTip("Screens, sound, clicker, files - everything worth knowing before the doors open")
+        ready.setToolTip(tr('Screens, sound, clicker, files - everything worth knowing before the doors open'))
         ready.clicked.connect(self._open_ready_check)
         top_row.addWidget(ready)
         right.addLayout(top_row)
@@ -680,27 +680,27 @@ class ControlPanel(QMainWindow):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(8)
         bottom_row.addStretch(1)
-        self.open_btn = QPushButton("  Open outputs")
+        self.open_btn = QPushButton(tr('  Open outputs'))
         self.open_btn.setIcon(Icons.get("monitor", CLR_TEXT, 16))
-        self.open_btn.setToolTip("Apply the Screens tab settings and open every stage window  (Ctrl+O)")
+        self.open_btn.setToolTip(tr('Apply the Screens tab settings and open every stage window  (Ctrl+O)'))
         self.open_btn.clicked.connect(self._apply_routing)
         bottom_row.addWidget(self.open_btn)
 
-        blackout = QPushButton("  BLACKOUT")
+        blackout = QPushButton(tr('  BLACKOUT'))
         blackout.setObjectName("danger")
         blackout.setIcon(Icons.get("power", CLR_DANGER, 16))
         blackout.setMinimumWidth(150)
-        blackout.setToolTip("Instantly clear every stage screen to black  (B)")
+        blackout.setToolTip(tr('Instantly clear every stage screen to black  (B)'))
         blackout.clicked.connect(self._blackout_all)
         bottom_row.addWidget(blackout)
 
-        self.dark_btn = icon_button("moon", "Dark room: dim this screen so its light does not spill into the hall",
+        self.dark_btn = icon_button("moon", tr('Dark room: dim this screen so its light does not spill into the hall'),
                                     CLR_DIM, 16)
         self.dark_btn.setObjectName("ghost")
         self.dark_btn.setCheckable(True)
         self.dark_btn.clicked.connect(self._cycle_dark_room)
         bottom_row.addWidget(self.dark_btn)
-        shrink = icon_button("compress", "Shrink to a small bar that stays on top",
+        shrink = icon_button("compress", tr('Shrink to a small bar that stays on top'),
                              CLR_DIM, 16)
         shrink.setObjectName("ghost")
         shrink.clicked.connect(self.shrink_to_bar)
@@ -722,10 +722,10 @@ class ControlPanel(QMainWindow):
         for role, tile in self.multiview.tiles.items():
             window = self._show_output(role)
             if window is None:
-                tile.set_state(desk_mod.STATE_CLOSED, None, "closed - click to open")
+                tile.set_state(desk_mod.STATE_CLOSED, None, tr("closed - click to open"))
                 continue
             if role in self._lost_screens:
-                tile.set_state(desk_mod.STATE_CLOSED, None, "monitor gone - waiting for it")
+                tile.set_state(desk_mod.STATE_CLOSED, None, tr("monitor gone - waiting for it"))
                 continue
             card = self.cards.get(role) if hasattr(self, "cards") else None
             if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
@@ -733,7 +733,7 @@ class ControlPanel(QMainWindow):
                 if presenter.deck is not None and presenter.count() and not presenter.black:
                     pixmap = presenter.deck.thumb(presenter.index, 256)
                 caption = (f"PowerPoint  ·  {presenter.index + 1} / {presenter.count() or '…'}"
-                           + ("  ·  black" if presenter.black else ""))
+                           + ("  ·  " + tr("black") if presenter.black else ""))
                 live = not presenter.black
             else:
                 drawn = getattr(tile, "_drawn", None)
@@ -746,14 +746,14 @@ class ControlPanel(QMainWindow):
                 live = window.has_picture()
                 parts = []
                 if presenter.live and presenter.role == role and presenter.deck is not None:
-                    parts.append(f"slides {presenter.index + 1}/{presenter.count()}")
+                    parts.append(tr("slides {0}/{1}").format(presenter.index + 1, presenter.count()))
                 elif card is not None and card.current_path():
                     parts.append(os.path.basename(card.current_path()))
                 if window.slide_visible():
-                    parts.append("text")
+                    parts.append(tr("text"))
                 if role == ROLE_TOP and window.is_marquee_running():
-                    parts.append("marquee")
-                caption = "  +  ".join(parts) if parts else ("colour" if live else "black")
+                    parts.append(tr("marquee"))
+                caption = "  +  ".join(parts) if parts else (tr("colour") if live else tr("black"))
             state = desk_mod.STATE_REHEARSAL if rehearsing else (
                 desk_mod.STATE_LIVE if live else desk_mod.STATE_BLACK)
             tile.set_state(state, pixmap, caption)
@@ -767,7 +767,7 @@ class ControlPanel(QMainWindow):
             self._apply_routing()
         else:
             self.statusBar().showMessage(
-                f"{ROLE_LABELS[role]} has no monitor - pick one on Screens & Setup.", 6000)
+                tr('{0} has no monitor - pick one on Screens & Setup.').format(ROLE_LABELS[role]), 6000)
 
     @Slot(str, list)
     def _on_tile_files(self, role: str, paths: List[str]) -> None:
@@ -775,7 +775,7 @@ class ControlPanel(QMainWindow):
         media = [os.path.normpath(p) for p in paths
                  if os.path.isfile(p) and os.path.splitext(p)[1].lower() in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS)]
         if not media:
-            self.statusBar().showMessage("Only pictures and videos can go on a screen.", 6000)
+            self.statusBar().showMessage(tr('Only pictures and videos can go on a screen.'), 6000)
             return
         card = self.cards[role]
         card.playlist.add_paths(media, announce=False)
@@ -811,10 +811,10 @@ class ControlPanel(QMainWindow):
             widget.setVisible(not show)
         self.show_tab.set_locked(show)
         if show:
-            self.mode_note.setText("SHOW  ·  editing locked")
+            self.mode_note.setText(tr('SHOW  ·  editing locked'))
             self.mode_note.setStyleSheet(f"color: {CLR_DANGER}; font-weight: 700;")
         else:
-            self.mode_note.setText("SETUP  ·  preparing")
+            self.mode_note.setText(tr('SETUP  ·  preparing'))
             self.mode_note.setStyleSheet("")
         if show and check and any(row["status"] == "fail" for row in self._ready_checks()):
             self._open_ready_check()
@@ -837,11 +837,11 @@ class ControlPanel(QMainWindow):
         self.dark_level = level
         self.settings.setValue("ui/darkroom", level)
         amount, name = self.DARK_LEVELS[level]
+        name = tr(name)
         self.dim_overlay.set_amount(amount)
         self.dark_btn.setChecked(level > 0)
-        following = self.DARK_LEVELS[(level + 1) % len(self.DARK_LEVELS)][1]
-        self.dark_btn.setToolTip(f"Dark room: {name} - click for {following}. "
-                                 "Dims this screen so its light does not spill into the hall.")
+        following = tr(self.DARK_LEVELS[(level + 1) % len(self.DARK_LEVELS)][1])
+        self.dark_btn.setToolTip(tr('Dark room: {0} - click for {1}. Dims this screen so its light does not spill into the hall.').format(name, following))
 
     # -- PREVIEW -> TAKE ------------------------------------------------------- #
 
@@ -852,8 +852,8 @@ class ControlPanel(QMainWindow):
         if not on and self._pending_change is not None:
             self._cancel_take()
         self.statusBar().showMessage(
-            "PREVIEW → TAKE on: choices wait for TAKE." if on else
-            "PREVIEW → TAKE off: choices go straight on stage.", 6000)
+            tr('PREVIEW → TAKE on: choices wait for TAKE.') if on else
+            tr('PREVIEW → TAKE off: choices go straight on stage.'), 6000)
 
     @contextmanager
     def _direct(self):
@@ -913,7 +913,7 @@ class ControlPanel(QMainWindow):
         """Put the stage back to how it was before the last change made by hand."""
         snapshot = self._undo_snapshot
         if snapshot is None or not self.take_bar.undo_available():
-            self.statusBar().showMessage("Nothing to undo.", 3000)
+            self.statusBar().showMessage(tr('Nothing to undo.'), 3000)
             return
         self._undo_snapshot = None
         self.take_bar.forget_undo()
@@ -951,7 +951,7 @@ class ControlPanel(QMainWindow):
                     self._stop_marquee()
         self.loaded_preset, self._preset_dirty = snapshot["preset"]
         self._describe_preset_state()
-        self.statusBar().showMessage("Undone - the stage is back to how it was.", 5000)
+        self.statusBar().showMessage(tr('Undone - the stage is back to how it was.'), 5000)
 
     # -- after a crash ------------------------------------------------------------ #
 
@@ -998,15 +998,15 @@ class ControlPanel(QMainWindow):
             if data.get("path"):
                 lines.append(f"{ROLE_LABELS[role]}: {os.path.basename(data['path'])}")
             if data.get("slide"):
-                lines.append(f"{ROLE_LABELS[role]}: the name “{data['slide'][0]}”")
+                lines.append(tr("{0}: the name “{1}”").format(ROLE_LABELS[role], data['slide'][0]))
         if state.get("marquee", {}).get("running"):
-            lines.append(f"Top Screen: scrolling “{state['marquee']['text'][:40]}”")
+            lines.append(tr("Top Screen: scrolling “{0}”").format(state['marquee']['text'][:40]))
         slides = state.get("slides", {})
         if slides.get("live") and slides.get("path"):
-            lines.append(f"Slides: {os.path.basename(slides['path'])}, slide {slides.get('index', 0) + 1}")
+            lines.append(tr("Slides: {0}, slide {1}").format(os.path.basename(slides['path']), slides.get('index', 0) + 1))
         show = state.get("show", {})
         if show.get("index", -1) >= 0:
-            lines.append(f"Running order “{show.get('name')}”, step {show['index'] + 1}")
+            lines.append(tr("Running order “{0}”, step {1}").format(show.get('name'), show['index'] + 1))
         if not lines:
             return
         dialog = desk_mod.RecoveryDialog(str(self.settings.value("session/time", "") or "earlier"), lines, THEME,
@@ -1070,9 +1070,40 @@ class ControlPanel(QMainWindow):
                 if slides.get("live"):
                     self.presenter.go_live_when_ready(slides.get("role") or ROLE_MAIN)
         self._refresh_mini()
-        self.statusBar().showMessage("The stage is back as it was before the app closed.", 10000)
+        self.statusBar().showMessage(tr('The stage is back as it was before the app closed.'), 10000)
 
     # -- backups -------------------------------------------------------------------- #
+
+    def _add_language_picker(self, box: QHBoxLayout) -> None:
+        heading = QLabel("Language / ენა")        # readable whichever language is on
+        heading.setObjectName("sectionTitle")
+        box.addWidget(heading)
+        self.language_combo = QComboBox()
+        for code, name in LANGUAGES:
+            self.language_combo.addItem(name, code)
+        self.language_combo.setCurrentIndex(max(0, self.language_combo.findData(current_language())))
+        self.language_combo.setToolTip(tr("The interface's language. Names, files and steps stay as you typed them."))
+        self.language_combo.activated.connect(self._on_language_chosen)
+        box.addWidget(self.language_combo)
+
+    @Slot(int)
+    def _on_language_chosen(self, index: int) -> None:
+        code = self.language_combo.itemData(index)
+        if code == current_language():
+            return
+        self.settings.setValue("ui/language", code)
+        answer = QMessageBox.question(
+            self, "Language / ენა",
+            "The new language is used from the next start. Restart the app now?\n\n"
+            "ახალი ენა შემდეგი ჩართვიდან გამოიყენება. გადავტვირთო პროგრამა ახლავე?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            self.restart_app()
+
+    def restart_app(self) -> None:
+        """Close properly (it asks first if screens are live), then start again - without the autostart."""
+        if self.close():
+            QProcess.startDetached(sys.executable, [os.path.abspath(__file__)])
 
     def _build_backups_card(self) -> QWidget:
         card = QFrame()
@@ -1080,20 +1111,19 @@ class ControlPanel(QMainWindow):
         box = QHBoxLayout(card)
         box.setContentsMargins(16, 12, 16, 12)
         box.setSpacing(10)
-        heading = QLabel("Backups")
+        heading = QLabel(tr('Backups'))
         heading.setObjectName("sectionTitle")
         box.addWidget(heading)
         self.backup_combo = QComboBox()
         self.backup_combo.setMinimumWidth(320)
-        self.backup_combo.setToolTip("Copies taken by themselves before the presets or the running orders change")
+        self.backup_combo.setToolTip(tr('Copies taken by themselves before the presets or the running orders change'))
         box.addWidget(self.backup_combo)
-        restore = desk_mod.HoldButton("  Restore", THEME)
+        restore = desk_mod.HoldButton(tr('  Restore'), THEME)
         restore.setIcon(Icons.get("refresh", CLR_TEXT, 15))
-        restore.setToolTip("Put this copy back (what is there now is kept as a copy too) - hold to confirm")
+        restore.setToolTip(tr('Put this copy back (what is there now is kept as a copy too) - hold to confirm'))
         restore.clicked.connect(self._restore_backup)
         box.addWidget(restore)
-        note = QLabel("Taken before presets.json or shows.json change - at most one every two minutes, "
-                      "the newest ten of each.")
+        note = QLabel(tr('Taken before presets.json or shows.json change - at most one every two minutes, the newest ten of each.'))
         note.setObjectName("cardHint")
         note.setWordWrap(True)
         box.addWidget(note, 1)
@@ -1103,13 +1133,13 @@ class ControlPanel(QMainWindow):
         if not hasattr(self, "backup_combo"):
             return
         self.backup_combo.clear()
-        entries = [("presets", "Presets", path, when) for path, when in backups.list_backups(PRESET_FILE)]
-        entries += [("shows", "Running orders", path, when) for path, when in backups.list_backups(SHOW_FILE)]
+        entries = [("presets", tr("Presets"), path, when) for path, when in backups.list_backups(PRESET_FILE)]
+        entries += [("shows", tr("Running orders"), path, when) for path, when in backups.list_backups(SHOW_FILE)]
         entries.sort(key=lambda e: e[3], reverse=True)
         for kind, caption, path, when in entries:
             self.backup_combo.addItem(f"{caption}  ·  {when.strftime('%d.%m  %H:%M:%S')}", f"{kind}|{path}")
         if not entries:
-            self.backup_combo.addItem("no copies yet - they appear once something is saved", None)
+            self.backup_combo.addItem(tr('no copies yet - they appear once something is saved'), None)
         self.backup_combo.setEnabled(bool(entries))
 
     @Slot()
@@ -1134,10 +1164,10 @@ class ControlPanel(QMainWindow):
                 self.show_tab._reload_list()
                 self.show_restart()
         if error:
-            QMessageBox.critical(self, "Could not restore", error)
+            QMessageBox.critical(self, tr('Could not restore'), error)
             return
         self._refresh_backups()
-        self.statusBar().showMessage(f"Restored the copy from {self.backup_combo.currentText().split('·')[-1].strip()}.",
+        self.statusBar().showMessage(tr('Restored the copy from {0}.').format(self.backup_combo.currentText().split('·')[-1].strip()),
                                      8000)
 
     # -- rehearsal --------------------------------------------------------------- #
@@ -1168,8 +1198,7 @@ class ControlPanel(QMainWindow):
             return
         if self.presenter.live:
             self.rehearse_btn.setChecked(False)
-            QMessageBox.information(self, "Rehearsal", "A presentation is on the stage. End it first, "
-                                    "then rehearse - the rehearsal must not take it off the screen.")
+            QMessageBox.information(self, tr('Rehearsal'), tr('A presentation is on the stage. End it first, then rehearse - the rehearsal must not take it off the screen.'))
             return
         if self._pending_change is not None:
             self._cancel_take()
@@ -1208,9 +1237,9 @@ class ControlPanel(QMainWindow):
         self._freshly_opened = set()
         monitor.show()
         self.rehearse_btn.setChecked(True)
-        self.rehearse_btn.setText("  End rehearsal")
+        self.rehearse_btn.setText(tr('  End rehearsal'))
         self._update_output_status()
-        self.statusBar().showMessage("REHEARSAL - everything goes to the rehearsal window; the stage is untouched.",
+        self.statusBar().showMessage(tr('REHEARSAL - everything goes to the rehearsal window; the stage is untouched.'),
                                      10000)
 
     def _set_rehearsal_sound(self, device_name: str) -> None:
@@ -1291,10 +1320,10 @@ class ControlPanel(QMainWindow):
         self._undo_snapshot = None
         self.take_bar.forget_undo()
         self.rehearse_btn.setChecked(False)
-        self.rehearse_btn.setText("  Rehearse")
+        self.rehearse_btn.setText(tr('  Rehearse'))
         self._update_output_status()
         self._refresh_mini()
-        self.statusBar().showMessage("Rehearsal over - the dashboard drives the stage again, as it was.", 8000)
+        self.statusBar().showMessage(tr('Rehearsal over - the dashboard drives the stage again, as it was.'), 8000)
 
     @Slot()
     def _take(self) -> None:
@@ -1309,7 +1338,7 @@ class ControlPanel(QMainWindow):
         self._pending_change = None
         self.take_bar.clear_pending()
         self._sync_take_keys()
-        self.statusBar().showMessage("Preview cancelled - the stage was not changed.", 4000)
+        self.statusBar().showMessage(tr('Preview cancelled - the stage was not changed.'), 4000)
 
     def _sync_take_keys(self) -> None:
         pending = self._pending_change is not None
@@ -1353,14 +1382,14 @@ class ControlPanel(QMainWindow):
         index = self.show_index
         now = steps[index] if 0 <= index < len(steps) else None
         upcoming = steps[index + 1] if index + 1 < len(steps) else None
-        caption = f"NOW  ·  {index + 1} / {len(steps)}" if now else "READY"
-        now_text = (now["title"] or "Untitled") if now else "Press NEXT to start"
-        next_text = (upcoming["title"] or "Untitled") if upcoming else "— end of the show —"
+        caption = tr("NOW  ·  {0} / {1}").format(index + 1, len(steps)) if now else tr("READY")
+        now_text = (now["title"] or tr("Untitled")) if now else tr("Press NEXT to start")
+        next_text = (upcoming["title"] or tr("Untitled")) if upcoming else tr("— end of the show —")
         clock = ""
         if now is not None:
             elapsed = time.monotonic() - self._show_started
             clock = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
-        auto = f"auto in {int(self._show_auto + 0.99)} s" if self._show_auto is not None else ""
+        auto = tr("auto in {0} s").format(int(self._show_auto + 0.99)) if self._show_auto is not None else ""
         self.show_strip.set_state(caption, now_text, next_text, clock, auto, upcoming is not None)
         # Slides, Text and Screens have a gold button of their own; there, the step NEXT steps back
         self.show_strip.set_emphasis(self.tabs.currentWidget() in (self.tabs.widget(0), self.library, self.dj_page))
@@ -1400,77 +1429,75 @@ class ControlPanel(QMainWindow):
             name = self.routing_rows[role].screen_combo.currentData()
             window = self._show_output(role)
             if not name:
-                add("fail", f"{label}: no monitor chosen", "Pick its monitor on Screens & Setup.",
-                    ("Screens & Setup", "screens"))
+                add("fail", tr('{0}: no monitor chosen').format(label), tr('Pick its monitor on Screens & Setup.'),
+                    (tr('Screens & Setup'), "screens"))
             elif self._screen_by_name(name) is None:
-                add("fail", f"{label}: its monitor is not connected",
-                    f"Windows does not report “{name}” - check the cable or the LED processor.")
+                add("fail", tr('{0}: its monitor is not connected').format(label),
+                    tr('Windows does not report “{0}” - check the cable or the LED processor.').format(name))
             elif window is None:
-                add("warn", f"{label}: closed", "The monitor is there; its window is not open.",
-                    ("Open outputs", "open"))
+                add("warn", tr('{0}: closed').format(label), tr('The monitor is there; its window is not open.'),
+                    (tr('Open outputs'), "open"))
             else:
                 card = self.cards[role]
                 what = os.path.basename(card.current_path()) if card.current_path() else "black"
-                add("ok", f"{label}: open", f"on screen: {what}")
+                add("ok", tr('{0}: open').format(label), tr('on screen: {0}').format(what))
         # -- sound -- #
         device = self._audio_device_name()
         hall = str(self.settings.value("ready/hall_audio", "") or "")
         if not device:
-            add("fail", "No sound output device", "Windows reports no speakers or mixer.")
+            add("fail", tr('No sound output device'), tr('Windows reports no speakers or mixer.'))
         elif hall and device != hall:
-            add("warn", f"Sound goes to {device}", f"The hall's device is {hall}.",
-                ("This is the hall's device", "hall_audio"))
+            add("warn", tr('Sound goes to {0}').format(device), tr("The hall's device is {0}.").format(hall),
+                (tr("This is the hall's device"), "hall_audio"))
         elif hall:
-            add("ok", f"Sound: {device}", "the hall's device")
+            add("ok", tr('Sound: {0}').format(device), tr("the hall's device"))
         else:
-            add("info", f"Sound: {device}", "Is this the hall's mixer? Remember it, and the check will "
-                "warn if the sound ever goes somewhere else.", ("Yes, this is the hall's", "hall_audio"))
+            add("info", tr('Sound: {0}').format(device), tr("Is this the hall's mixer? Remember it, and the check will warn if the sound ever goes somewhere else."), (tr("Yes, this is the hall's"), "hall_audio"))
         if self.sound_master.value() == 0:
-            add("warn", "Master volume is at 0", "Sound cues and running-order music will be silent.")
+            add("warn", tr('Master volume is at 0'), tr('Sound cues and running-order music will be silent.'))
         # -- files -- #
         steps = self.show_tab.steps()
         gone = show_missing_files(steps)
         if not steps:
-            add("info", "The running order is empty", "Fine if this event is run by hand.")
+            add("info", tr('The running order is empty'), tr('Fine if this event is run by hand.'))
         elif gone:
-            add("fail", f"Running order: {len(gone)} file(s) missing",
+            add("fail", tr('Running order: {0} file(s) missing').format(len(gone)),
                 ", ".join(os.path.basename(p) for p in gone[:5]) + ("…" if len(gone) > 5 else ""))
         else:
-            add("ok", f"Running order “{self.show_store.current}”: {len(steps)} step(s)", "every file is there")
+            add("ok", tr('Running order “{0}”: {1} step(s)').format(self.show_store.current, len(steps)), tr('every file is there'))
         lost = sorted({os.path.basename(p) for card in self.cards.values()
                        for p in card.playlist.paths() + [card.current_path()] if p and not os.path.isfile(p)}
                       | {os.path.basename(cue.path) for cue in self.sound.cues
                          if cue.path and not os.path.isfile(cue.path)})
         if lost:
-            add("warn", f"{len(lost)} file(s) on the Live tab are missing", ", ".join(lost[:5]))
+            add("warn", tr('{0} file(s) on the Live tab are missing').format(len(lost)), ", ".join(lost[:5]))
         # -- presentation -- #
         deck = self.presenter.deck
         if deck is not None:
             if deck.error:
-                add("fail", f"Presentation “{deck.name}” did not open", deck.error.splitlines()[0])
+                add("fail", tr('Presentation “{0}” did not open').format(deck.name), deck.error.splitlines()[0])
             elif deck.kind == "powerpoint" and self.presenter.in_powerpoint and not pres_mod.powerpoint_available():
-                add("warn", f"Presentation “{deck.name}”", "PowerPoint is not installed: it will show as pictures.")
+                add("warn", tr('Presentation “{0}”').format(deck.name), tr('PowerPoint is not installed: it will show as pictures.'))
             else:
-                add("ok", f"Presentation “{deck.name}”", f"{deck.count or '…'} slides ready")
+                add("ok", tr('Presentation “{0}”').format(deck.name), tr('{0} slides ready').format(deck.count or '…'))
         # -- clicker -- #
         last = self.presentation_tab._last_key
         ago = time.monotonic() - last[2] if last[2] else None
         if ago is not None and ago < 1800:
             minutes = int(ago // 60)
-            add("ok", "Clicker works", f"last press: {last[0]} → {last[1]}, "
-                + (f"{minutes} min ago" if minutes else f"{int(ago)} s ago"))
+            add("ok", tr('Clicker works'), tr('last press: {0} → {1}, ').format(last[0], last[1])
+                + (tr("{0} min ago").format(minutes) if minutes else tr("{0} s ago").format(int(ago))))
         else:
-            add("warn", "Clicker not tested", "Press any clicker button now - this row turns green. "
-                "(Presses here are only a test: nothing moves.)")
+            add("warn", tr('Clicker not tested'), tr('Press any clicker button now - this row turns green. (Presses here are only a test: nothing moves.)'))
         # -- phone remote -- #
         if self.remote.running:
-            guest = "  ·  guest link on" if self.remote.guest else ""
-            add("ok", "Phone remote is on", f"{self.remote.clients()} phone(s) connected{guest}")
+            guest = tr("  ·  guest link on") if self.remote.guest else ""
+            add("ok", tr('Phone remote is on'), tr('{0} phone(s) connected{1}').format(self.remote.clients(), guest))
         else:
-            add("info", "Phone remote is off", "Only needed if someone runs the show from a phone.",
-                ("Phone remote…", "remote"))
+            add("info", tr('Phone remote is off'), tr('Only needed if someone runs the show from a phone.'),
+                (tr('Phone remote…'), "remote"))
         if self.preview_first:
-            add("info", "PREVIEW → TAKE is on", "Files, presets and names chosen by hand wait for TAKE.")
+            add("info", tr('PREVIEW → TAKE is on'), tr('Files, presets and names chosen by hand wait for TAKE.'))
         return rows
 
     def _refresh_health(self) -> None:
@@ -1480,32 +1507,32 @@ class ControlPanel(QMainWindow):
         items = []
         open_count = sum(1 for role in STAGE_ROLES if self._show_output(role) is not None)
         routed = sum(1 for role in STAGE_ROLES if self.routing_rows[role].screen_combo.currentData())
-        items.append((f"Screens {open_count}/{len(STAGE_ROLES)}",
+        items.append((tr('Screens {0}/{1}').format(open_count, len(STAGE_ROLES)),
                       "ok" if open_count == len(STAGE_ROLES) else ("warn" if open_count < routed else "info"),
-                      "Stage windows open"))
+                      tr('Stage windows open')))
         device = self._audio_device_name()
         hall = str(self.settings.value("ready/hall_audio", "") or "")
         short = device if len(device) <= 30 else device[:28] + "…"
         if self.sound_master.value() == 0:
-            items.append((f"Sound muted  ·  {short}", "warn", "Master volume is at 0"))
+            items.append((tr('Sound muted  ·  {0}').format(short), "warn", tr('Master volume is at 0')))
         elif hall and device != hall:
-            items.append((f"Sound: {short}", "warn", f"Not the hall's device ({hall})"))
+            items.append((tr('Sound: {0}').format(short), "warn", tr("Not the hall's device ({0})").format(hall)))
         else:
-            items.append((f"Sound: {short}", "ok" if hall else "info", device))
+            items.append((tr('Sound: {0}').format(short), "ok" if hall else "info", device))
         last = self.presentation_tab._last_key
         ago = time.monotonic() - last[2] if last[2] else None
         if ago is not None and ago < 1800:
-            items.append((f"Clicker {int(ago // 60)} min" if ago >= 60 else "Clicker ✓", "ok",
-                          f"Last press: {last[0]}"))
+            items.append((tr("Clicker {0} min").format(int(ago // 60)) if ago >= 60 else "Clicker ✓", "ok",
+                          tr('Last press: {0}').format(last[0])))
         else:
-            items.append(("Clicker untested", "info", "No clicker press seen yet"))
+            items.append((tr('Clicker untested'), "info", tr('No clicker press seen yet')))
         if self.remote.running:
-            items.append((f"Phones {self.remote.clients()}", "ok", "The phone remote is on"))
+            items.append((tr('Phones {0}').format(self.remote.clients()), "ok", tr('The phone remote is on')))
         gone = show_missing_files(self.show_tab.steps())
         if gone:
-            items.append((f"{len(gone)} file(s) missing", "fail", "\n".join(gone[:8])))
+            items.append((tr('{0} file(s) missing').format(len(gone)), "fail", "\n".join(gone[:8])))
         for role in sorted(self._lost_screens):
-            items.insert(0, (f"{ROLE_LABELS[role]} monitor gone", "fail",
+            items.insert(0, (tr("{0} monitor gone").format(ROLE_LABELS[role]), "fail",
                              "Windows lost this monitor. The picture comes back by itself when it returns."))
         self.health.set_items(items)
 
@@ -1546,9 +1573,9 @@ class ControlPanel(QMainWindow):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("list", CLR_MUTED, 16).pixmap(16, 16))
         caption_row.addWidget(glyph)
-        caption = QLabel("PRESETS")
+        caption = QLabel(tr('PRESETS'))
         caption.setObjectName("sectionTitle")
-        caption.setToolTip(f"Saved in {PRESET_FILE}")
+        caption.setToolTip(tr('Saved in {0}').format(PRESET_FILE))
         caption_row.addWidget(caption)
         caption_row.addStretch(1)
         caption_box.addLayout(caption_row)
@@ -1574,21 +1601,21 @@ class ControlPanel(QMainWindow):
         edit = QGridLayout()
         edit.setHorizontalSpacing(6)
         edit.setVerticalSpacing(6)
-        new_btn = QPushButton("  Save as new…")
+        new_btn = QPushButton(tr('  Save as new…'))
         new_btn.setIcon(Icons.get("plus", CLR_TEXT, 15))
-        new_btn.setToolTip("Store what is set up now under a new name")
+        new_btn.setToolTip(tr('Store what is set up now under a new name'))
         new_btn.clicked.connect(self._save_preset_as)
-        save_btn = QPushButton("  Save")
+        save_btn = QPushButton(tr('  Save'))
         save_btn.setIcon(Icons.get("save", CLR_TEXT, 15))
-        save_btn.setToolTip("Overwrite the chosen preset with what is set up now")
+        save_btn.setToolTip(tr('Overwrite the chosen preset with what is set up now'))
         save_btn.clicked.connect(self._save_preset)
-        new_preset_btn = desk_mod.HoldButton("  Blank", THEME)
+        new_preset_btn = desk_mod.HoldButton(tr('  Blank'), THEME)
         new_preset_btn.setIcon(Icons.get("refresh", CLR_TEXT, 15))
-        new_preset_btn.setToolTip("Clear everything and start a fresh show from blank - hold to confirm")
+        new_preset_btn.setToolTip(tr('Clear everything and start a fresh show from blank - hold to confirm'))
         new_preset_btn.clicked.connect(self._new_preset)
-        delete_btn = desk_mod.HoldButton("  Delete", THEME)
+        delete_btn = desk_mod.HoldButton(tr('  Delete'), THEME)
         delete_btn.setIcon(Icons.get("trash", CLR_TEXT, 15))
-        delete_btn.setToolTip("Remove the chosen preset - hold to confirm")
+        delete_btn.setToolTip(tr('Remove the chosen preset - hold to confirm'))
         delete_btn.clicked.connect(self._delete_preset)
         edit.addWidget(new_btn, 0, 0)
         edit.addWidget(save_btn, 0, 1)
@@ -1656,11 +1683,11 @@ class ControlPanel(QMainWindow):
         self.preset_combo.setCurrentText(name)
         self._mark_preset_strip()
         menu = QMenu(self)
-        menu.addAction(f"Put “{name}” on the screens", self._load_preset)
+        menu.addAction(tr('Put “{0}” on the screens').format(name), self._load_preset)
         if self.ui_mode == "setup":
             menu.addSeparator()
-            menu.addAction(f"Save what is set up now into “{name}”", self._save_preset)
-            menu.addAction(f"Delete “{name}”…", self._delete_preset)
+            menu.addAction(tr('Save what is set up now into “{0}”').format(name), self._save_preset)
+            menu.addAction(tr('Delete “{0}”…').format(name), self._delete_preset)
         menu.exec(position)
 
     def _mark_preset_dirty(self) -> None:
@@ -1671,14 +1698,14 @@ class ControlPanel(QMainWindow):
     def _describe_preset_state(self) -> None:
         self._mark_preset_strip()
         if self.loaded_preset is None:
-            self.preset_state.setText("nothing loaded")
+            self.preset_state.setText(tr('nothing loaded'))
             self.preset_state.setStyleSheet(f"color: {CLR_MUTED};")
             return
         if self._preset_dirty:
-            self.preset_state.setText(f"●  {self.loaded_preset} — changed, not saved")
+            self.preset_state.setText(tr('●  {0} — changed, not saved').format(self.loaded_preset))
             self.preset_state.setStyleSheet(f"color: {CLR_WARN}; font-weight: 600;")
         else:
-            self.preset_state.setText(f"●  {self.loaded_preset} is on the screens")
+            self.preset_state.setText(tr('●  {0} is on the screens').format(self.loaded_preset))
             self.preset_state.setStyleSheet(f"color: {CLR_OK}; font-weight: 600;")
 
     def _build_live_tab(self) -> QWidget:
@@ -1806,7 +1833,7 @@ class ControlPanel(QMainWindow):
         now = steps[self.show_index] if 0 <= self.show_index < len(steps) else None
         upcoming = steps[self.show_index + 1] if self.show_index + 1 < len(steps) else None
         if now is None:
-            text = f"Running order ready · next: {upcoming['title']}" if upcoming else ""
+            text = tr("Running order ready · next: {0}").format(upcoming['title']) if upcoming else ""
         else:
             text = f"{self.show_index + 1}/{len(steps)}  {now['title']}" + (
                 f"   →   {upcoming['title']}" if upcoming else "   ·   last step")
@@ -1874,7 +1901,7 @@ class ControlPanel(QMainWindow):
         if self.show_index + 1 < len(steps):
             self.show_go(self.show_index + 1)
         elif steps:
-            self.statusBar().showMessage("That was the last step of the running order.", 5000)
+            self.statusBar().showMessage(tr('That was the last step of the running order.'), 5000)
 
     @Slot()
     def show_back(self) -> None:
@@ -1925,7 +1952,7 @@ class ControlPanel(QMainWindow):
         self._show_tick()
         self._show_timer.start(250)
         self._refresh_mini()
-        message = f"Step {index + 1} of {len(steps)}: {step['title']}"
+        message = tr("Step {0} of {1}: {2}").format(index + 1, len(steps), step['title'])
         if problems:
             message += "   —   " + "; ".join(problems)
         self.statusBar().showMessage(message, 12000)
@@ -1967,7 +1994,7 @@ class ControlPanel(QMainWindow):
             card = self.cards[role]
             window = self._show_output(role)
             if window is None:
-                problems.append(f"{ROLE_LABELS[role]} is not open")
+                problems.append(tr("{0} is not open").format(ROLE_LABELS[role]))
                 continue
             if explicit and self.presenter.live and self.presenter.role == role:
                 self.presenter.release()     # this step puts something else on that screen
@@ -1978,7 +2005,7 @@ class ControlPanel(QMainWindow):
                 continue
             path = entry["path"]
             if not path or not os.path.isfile(path):
-                problems.append(f"missing file {os.path.basename(path) or '(none chosen)'}")
+                problems.append(tr("missing file {0}").format(os.path.basename(path) or tr('(none chosen)')))
                 continue
             current = card.current_path()
             same = bool(current) and os.path.normcase(os.path.abspath(current)) == \
@@ -2024,7 +2051,7 @@ class ControlPanel(QMainWindow):
                         window.hide_slide(max(120, fade // 2))
                 window = self._show_output(role)
                 if window is None:
-                    problems.append(f"{ROLE_LABELS[role]} is not open for the text")
+                    problems.append(tr("{0} is not open for the text").format(ROLE_LABELS[role]))
                 elif explicit or self._show_text_shown != key or not window.slide_visible():
                     window.set_slide_style(self.text_slides.style_dict())
                     window.show_slide(entry["title"], entry["subtitle"], max(120, fade // 2))
@@ -2059,7 +2086,7 @@ class ControlPanel(QMainWindow):
                 path = entry["path"]
                 role = entry.get("target") or ROLE_MAIN
                 if not path or not os.path.exists(path):
-                    problems.append(f"missing presentation {os.path.basename(path) or '(none chosen)'}")
+                    problems.append(tr("missing presentation {0}").format(os.path.basename(path) or tr('(none chosen)')))
                 else:
                     same = presenter.deck is not None and \
                         os.path.normcase(presenter.deck.path) == os.path.normcase(os.path.normpath(path))
@@ -2079,7 +2106,7 @@ class ControlPanel(QMainWindow):
         """Fade the running order's music over to `entry`, on the other player."""
         path = entry["path"]
         if not path or not os.path.isfile(path):
-            return f"missing sound {os.path.basename(path) or '(none chosen)'}"
+            return tr('missing sound {0}').format(os.path.basename(path) or tr('(none chosen)'))
         old = self._show_players[self._show_active]
         new = self._show_players[1 - self._show_active]
         try:
@@ -2131,7 +2158,7 @@ class ControlPanel(QMainWindow):
     @Slot()
     def _capture_show_step(self) -> None:
         """A new step that recreates what is on stage right now."""
-        step = new_step(f"Step {len(self.show_tab.steps()) + 1}")
+        step = new_step(tr("Step {0}").format(len(self.show_tab.steps()) + 1))
         for role in STAGE_ROLES:
             card = self.cards[role]
             path = card.current_path()
@@ -2148,7 +2175,7 @@ class ControlPanel(QMainWindow):
         if self.presenter.live and self.presenter.deck is not None:
             step["slides"] = {"mode": "start", "path": self.presenter.deck.path, "target": self.presenter.role}
         self.show_tab.add_step(step)
-        self.statusBar().showMessage("Step added from what is on stage now - give it a name.", 6000)
+        self.statusBar().showMessage(tr('Step added from what is on stage now - give it a name.'), 6000)
 
     # ------------------------------------------------------ phone remote --- #
 
@@ -2171,10 +2198,10 @@ class ControlPanel(QMainWindow):
     def _describe_remote(self) -> None:
         if self.remote.running:
             count = self.remote.clients()
-            self.show_tab.remote_btn.setText(f"  Phone remote · ON" + (f" ({count})" if count else ""))
+            self.show_tab.remote_btn.setText(tr('  Phone remote · ON').format() + (f" ({count})" if count else ""))
             self.show_tab.remote_btn.setStyleSheet(f"color: {CLR_OK}; font-weight: 600;")
         else:
-            self.show_tab.remote_btn.setText("  Phone remote")
+            self.show_tab.remote_btn.setText(tr('  Phone remote'))
             self.show_tab.remote_btn.setStyleSheet("")
 
     @Slot()
@@ -2282,12 +2309,12 @@ class ControlPanel(QMainWindow):
         steps = self.show_tab.steps()
         if action == "next":
             if self.show_index + 1 >= len(steps):
-                return False, "That was the last step."
+                return False, tr('That was the last step.')
             self.show_next()
             return True, f"{self.show_index + 1}. {steps[self.show_index]['title']}"
         if action == "back":
             if self.show_index <= 0:
-                return False, "Already at the first step."
+                return False, tr('Already at the first step.')
             self.show_back()
             return True, f"{self.show_index + 1}. {steps[self.show_index]['title']}"
         if action == "goto":
@@ -2296,43 +2323,43 @@ class ControlPanel(QMainWindow):
             except (TypeError, ValueError):
                 index = -1
             if not 0 <= index < len(steps):
-                return False, "No such step."
+                return False, tr('No such step.')
             self.show_go(index)
             return True, f"{index + 1}. {steps[index]['title']}"
         if action == "restart":
             self.show_restart()
-            return True, "Ready - NEXT starts step 1."
+            return True, tr('Ready - NEXT starts step 1.')
         if action == "blackout":
             self._blackout_all()
-            return True, "Blackout."
+            return True, tr('Blackout.')
         if action == "cue":
             try:
                 index = int(data.get("index", -1))
             except (TypeError, ValueError):
                 index = -1
             if not 0 <= index < len(self.sound.cues) or not self.sound.cues[index].path:
-                return False, "That sound pad is empty."
+                return False, tr('That sound pad is empty.')
             self._fire_cue(index)
             return True, ""
         if action == "silence":
             self._stop_all_sound()
-            return True, "Fading out all sound."
+            return True, tr('Fading out all sound.')
         if action == "master":
             try:
                 self.sound_master.setValue(max(0, min(100, int(data.get("value", 90)))))
             except (TypeError, ValueError):
-                return False, "Bad volume."
+                return False, tr('Bad volume.')
             return True, ""
         if action.startswith("slide_"):
             return self._remote_slide_action(action, data)
         if action == "preset":
             name = str(data.get("name", ""))
             if name not in self.presets.names():
-                return False, "No such preset."
+                return False, tr('No such preset.')
             # later, so a dialog about a missing file cannot hold the phone's answer
             QTimer.singleShot(0, lambda: self._mini_load_preset(name))
-            return True, f"Loading {name}."
-        return False, "Unknown action."
+            return True, tr('Loading {0}.').format(name)
+        return False, tr('Unknown action.')
 
     # ------------------------------------------------------ text slides ---- #
 
@@ -2362,10 +2389,8 @@ class ControlPanel(QMainWindow):
         role, window = self._slide_output()
         if window is None:
             QMessageBox.warning(
-                self, "Output not open",
-                f"“{ROLE_LABELS[role]}” has no output window yet.\n\n"
-                "Open the “Screens & Setup” tab, pick a monitor for it, then press "
-                "“OPEN OUTPUTS”.")
+                self, tr('Output not open'),
+                tr('“{0}” has no output window yet.\n\nOpen the “Screens & Setup” tab, pick a monitor for it, then press “OPEN OUTPUTS”.').format(ROLE_LABELS[role]))
             return
 
         def apply() -> None:
@@ -2386,7 +2411,7 @@ class ControlPanel(QMainWindow):
         if window is None:
             return
         window.hide_slide(max(120, self.fade_ms() // 2))
-        self.statusBar().showMessage(f"{ROLE_LABELS[role]}: text hidden.", 5000)
+        self.statusBar().showMessage(tr('{0}: text hidden.').format(ROLE_LABELS[role]), 5000)
 
     @Slot()
     def _on_slide_style_changed(self) -> None:
@@ -2415,7 +2440,7 @@ class ControlPanel(QMainWindow):
         portrait, the rest is 16:9, and the sound is whatever is audio.
         """
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose the folder for this event", self.library.current_folder() or "")
+            self, tr('Choose the folder for this event'), self.library.current_folder() or "")
         if not folder:
             return
         folder = os.path.normpath(folder)
@@ -2423,12 +2448,12 @@ class ControlPanel(QMainWindow):
         files = scan_event_folder(folder)
         if not files:
             QMessageBox.information(
-                self, "Nothing to import",
-                f"No images, videos or sounds were found in\n{folder}")
+                self, tr('Nothing to import'),
+                tr('No images, videos or sounds were found in\n{0}').format(folder))
             return
 
-        progress = QProgressDialog("Looking at the files…", "Cancel", 0, len(files), self)
-        progress.setWindowTitle("Building a show")
+        progress = QProgressDialog(tr('Looking at the files…'), tr('Cancel'), 0, len(files), self)
+        progress.setWindowTitle(tr('Building a show'))
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
 
@@ -2475,7 +2500,7 @@ class ControlPanel(QMainWindow):
             except MediaProblem:
                 pass
         if sounds:
-            placed.append(f"{min(len(sounds), SOUND_SLOTS)} sound cue(s)")
+            placed.append(tr("{0} sound cue(s)").format(min(len(sounds), SOUND_SLOTS)))
         self._refresh_cue_pads()
 
         live_note = ""
@@ -2499,7 +2524,7 @@ class ControlPanel(QMainWindow):
         self.tabs.setCurrentIndex(0)
         message = "Built from " + os.path.basename(folder) + ": " + ", ".join(placed)
         if skipped_sounds:
-            message += f"  ({skipped_sounds} extra sound file(s) left out - only {SOUND_SLOTS} cues)"
+            message += tr("  ({0} extra sound file(s) left out - only {1} cues)").format(skipped_sounds, SOUND_SLOTS)
         message += live_note
         self.statusBar().showMessage(message, 15000)
 
@@ -2545,8 +2570,8 @@ class ControlPanel(QMainWindow):
         added = card.playlist.add_paths(list(paths), announce=False)
         self._mark_preset_dirty()
         self.statusBar().showMessage(
-            f"{ROLE_LABELS[target]}: {len(added)} item(s) added to the playlist"
-            if added else "Already in that playlist.", 6000)
+            tr('{0}: {1} item(s) added to the playlist').format(ROLE_LABELS[target], len(added))
+            if added else tr('Already in that playlist.'), 6000)
 
     # ----------------------------------------------------------- sound ----- #
 
@@ -2569,29 +2594,28 @@ class ControlPanel(QMainWindow):
         glyph = QLabel()
         glyph.setPixmap(Icons.get("volume", CLR_ACCENT, 16).pixmap(16, 16))
         header.addWidget(glyph)
-        title = QLabel("Sound cues")
+        title = QLabel(tr('Sound cues'))
         title.setObjectName("sectionTitle")
         header.addWidget(title)
 
-        hint = QLabel("drop sound files onto a pad · F1–F8 play and pause "
-                      "· Shift+F… stops")
+        hint = QLabel(tr('drop sound files onto a pad · F1–F8 play and pause · Shift+F… stops'))
         hint.setObjectName("keyHint")
         header.addWidget(hint)
         header.addStretch(1)
         self.now_playing = QLabel("")
-        self.now_playing.setToolTip("The sound that ends soonest, and how long it has left")
+        self.now_playing.setToolTip(tr('The sound that ends soonest, and how long it has left'))
         header.addWidget(self.now_playing)
         header.addSpacing(10)
 
-        header.addWidget(QLabel("Output"))
+        header.addWidget(QLabel(tr('Output')))
         self.audio_device_combo = QComboBox()
         self.audio_device_combo.setMinimumWidth(190)
-        self.audio_device_combo.setToolTip("Which sound device every cue and video plays out of")
+        self.audio_device_combo.setToolTip(tr('Which sound device every cue and video plays out of'))
         self.audio_device_combo.currentIndexChanged.connect(self._on_audio_device_changed)
         header.addWidget(self.audio_device_combo)
 
         header.addSpacing(8)
-        header.addWidget(QLabel("Master"))
+        header.addWidget(QLabel(tr('Master')))
         self.sound_master = QSlider(Qt.Horizontal)
         self.sound_master.setRange(0, 100)
         self.sound_master.setValue(self.sound.master)
@@ -2599,15 +2623,15 @@ class ControlPanel(QMainWindow):
         self.sound_master.valueChanged.connect(self._on_master_volume)
         header.addWidget(self.sound_master)
 
-        fade_all = QPushButton("  Fade out")
+        fade_all = QPushButton(tr('  Fade out'))
         fade_all.setIcon(Icons.get("volume", CLR_TEXT, 15))
-        fade_all.setToolTip("Fade every sound out gently, over three seconds")
+        fade_all.setToolTip(tr('Fade every sound out gently, over three seconds'))
         fade_all.clicked.connect(self._fade_all_sound)
         header.addWidget(fade_all)
-        stop_all = QPushButton("  STOP SOUND")
+        stop_all = QPushButton(tr('  STOP SOUND'))
         stop_all.setObjectName("danger")
         stop_all.setIcon(Icons.get("stop", CLR_DANGER, 15))
-        stop_all.setToolTip("Fade out and rewind every cue (Ctrl+Space)")
+        stop_all.setToolTip(tr('Fade out and rewind every cue (Ctrl+Space)'))
         stop_all.clicked.connect(self._stop_all_sound)
         header.addWidget(stop_all)
         layout.addLayout(header)
@@ -2640,7 +2664,7 @@ class ControlPanel(QMainWindow):
         devices = QMediaDevices.audioOutputs()
         self.audio_device_combo.blockSignals(True)
         self.audio_device_combo.clear()
-        self.audio_device_combo.addItem("System default", None)
+        self.audio_device_combo.addItem(tr('System default'), None)
         for device in devices:
             self.audio_device_combo.addItem(device.description(), device.description())
         index = self.audio_device_combo.findData(wanted) if wanted else -1
@@ -2669,7 +2693,7 @@ class ControlPanel(QMainWindow):
         self.settings.setValue("sound/device", self.audio_device_combo.currentData() or "")
         self._apply_audio_device()
         self.statusBar().showMessage(
-            f"Sound output: {self.audio_device_combo.currentText()}", 5000)
+            tr('Sound output: {0}').format(self.audio_device_combo.currentText()), 5000)
 
     @Slot(int)
     def _on_master_volume(self, value: int) -> None:
@@ -2701,9 +2725,9 @@ class ControlPanel(QMainWindow):
         name = cue.label() + ("  (running order)" if cue in self._show_players else "")
         more = f"   +{len(playing) - 1}" if len(playing) > 1 else ""
         if remaining == float("inf"):
-            text, colour = f"♪  {name}  ·  looping{more}", CLR_OK
+            text, colour = tr("♪  {0}  ·  looping{1}").format(name, more), CLR_OK
         else:
-            text = f"♪  {name}  ·  {format_time(int(remaining))} left{more}"
+            text = tr("♪  {0}  ·  {1} left{2}").format(name, format_time(int(remaining)), more)
             colour = CLR_WARN if remaining < 10000 else CLR_OK
         self.now_playing.setText(text)
         self.now_playing.setStyleSheet(f"color: {colour}; font-size: 15px; font-weight: 700;")
@@ -2713,7 +2737,7 @@ class ControlPanel(QMainWindow):
         self.sound.stop_all(3000)
         for player in self._show_players:
             player.stop(3000)
-        self.statusBar().showMessage("Fading every sound out…", 4000)
+        self.statusBar().showMessage(tr('Fading every sound out…'), 4000)
 
     def _assign_cue(self, index: int, path: str) -> None:
         try:
@@ -2722,7 +2746,7 @@ class ControlPanel(QMainWindow):
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
             box.setWindowTitle(problem.title)
-            box.setText(f"<b>{problem.title}</b><br>Cue F{index + 1} was not changed.")
+            box.setText(tr('<b>{0}</b><br>Cue F{1} was not changed.').format(problem.title, index + 1))
             box.setInformativeText(problem.message())
             box.setDetailedText(f"File:\n{path}")
             box.exec()
@@ -2737,7 +2761,7 @@ class ControlPanel(QMainWindow):
         cue = self.sound.cues[index]
         if not cue.path:
             self.statusBar().showMessage(
-                f"F{index + 1} is empty — drop a sound file on it first.", 5000)
+                tr('F{0} is empty — drop a sound file on it first.').format(index + 1), 5000)
             return
         cue.toggle()
         self._refresh_cue_pads()
@@ -2750,7 +2774,7 @@ class ControlPanel(QMainWindow):
             return
         cue.stop()
         self._refresh_cue_pads()
-        self.statusBar().showMessage(f"F{index + 1} stopped: {cue.label()}", 4000)
+        self.statusBar().showMessage(tr('F{0} stopped: {1}').format(index + 1, cue.label()), 4000)
 
     def _clear_cue(self, index: int) -> None:
         self.sound.cues[index].clear()
@@ -2762,18 +2786,16 @@ class ControlPanel(QMainWindow):
         self.sound.stop_all()
         for player in self._show_players:
             player.stop()
-        self.statusBar().showMessage("All sound cues fading out.", 4000)
+        self.statusBar().showMessage(tr('All sound cues fading out.'), 4000)
 
     def _on_cue_failed(self, index: int, message: str) -> None:
         cue = self.sound.cues[index]
-        name = cue.label() or f"cue F{index + 1}"
+        name = cue.label() or tr("cue F{0}").format(index + 1)
         cue.clear()
         self._refresh_cue_pads()
         QMessageBox.warning(
-            self, "Sound will not play",
-            f"<b>{name}</b> could not be played.<br><br>"
-            f"The audio backend said: {message}<br><br>"
-            "Convert it to MP3 or WAV and assign it again.",
+            self, tr('Sound will not play'),
+            tr('<b>{0}</b> could not be played.<br><br>The audio backend said: {1}<br><br>Convert it to MP3 or WAV and assign it again.').format(name, message),
         )
 
     # ------------------------------------------------------- keyboard ------ #
@@ -2815,10 +2837,10 @@ class ControlPanel(QMainWindow):
         self.settings.setValue("playback/fade_ms", milliseconds)
         self.settings.setValue("playback/fade_style", self.fade_style())
         if milliseconds == 0:
-            self.statusBar().showMessage("Transitions off — pictures change instantly.", 5000)
+            self.statusBar().showMessage(tr('Transitions off — pictures change instantly.'), 5000)
         else:
             name = "crossfade" if self.fade_style() == TRANSITION_CROSSFADE else "fade through black"
-            self.statusBar().showMessage(f"Transition: {name} over {milliseconds} ms.", 5000)
+            self.statusBar().showMessage(tr('Transition: {0} over {1} ms.').format(name, milliseconds), 5000)
 
     def set_active_role(self, role: str) -> None:
         """Choose which card the keyboard shortcuts drive."""
@@ -2932,14 +2954,14 @@ class ControlPanel(QMainWindow):
         action = self._slide_action_for(name)
         if self._ready_check_open():
             # the operator is testing the clicker: note it, move nothing
-            self.presentation_tab.show_key(name, "test ✓", source)
+            self.presentation_tab.show_key(name, tr('test ✓'), source)
             return True
         if self.presenter.live and action:
             self._do_slide(action, name, source)
             return True
         learned = any(info.get("name") == name for info in self._learned().values())
         if action in ("next", "back") and (name in ("PgDown", "PgUp") or learned):
-            self.presentation_tab.show_key(name, f"running order {action}", source)
+            self.presentation_tab.show_key(name, tr('running order {0}').format(action), source)
             (self.show_next if action == "next" else self.show_back)()
             return True
         if fallback is not None:
@@ -3028,7 +3050,7 @@ class ControlPanel(QMainWindow):
         if refused:
             self.presentation_tab.show_status(
                 "Another program already uses " + ", ".join(refused)
-                + " - the clicker works while this window is in front.", CLR_WARN)
+                + tr(' - the clicker works while this window is in front.'), CLR_WARN)
 
     def _unregister_hotkeys(self) -> None:
         if sys.platform == "win32":
@@ -3068,7 +3090,7 @@ class ControlPanel(QMainWindow):
             self.settings.setValue("clicker/learned", json.dumps(dialog.learned))
             self._install_learned_keys()
             names = ", ".join(f"{k}: {v['name']}" for k, v in dialog.learned.items())
-            self.presentation_tab.show_status(f"Clicker learned - {names}", CLR_OK)
+            self.presentation_tab.show_status(tr('Clicker learned - {0}').format(names), CLR_OK)
         if had_hotkeys:
             self._update_hotkeys()
 
@@ -3129,45 +3151,45 @@ class ControlPanel(QMainWindow):
             self._was_live = live
             deck = self.presenter.deck
             self.statusBar().showMessage(
-                (f"Slides on {ROLE_LABELS.get(self.presenter.role)}: {deck.name}" if live and deck
-                 else "Presentation ended - background back on screen."), 6000)
+                (tr('Slides on {0}: {1}').format(ROLE_LABELS.get(self.presenter.role), deck.name) if live and deck
+                 else tr('Presentation ended - background back on screen.')), 6000)
 
     def _remote_slide_action(self, action: str, data: dict):
         presenter = self.presenter
         count = presenter.count()
         if not count:
-            return False, "No presentation is open."
+            return False, tr('No presentation is open.')
         if action in ("slide_next", "slide_back") and presenter.playing_in_powerpoint():
             # PowerPoint plays the next animation or slide; the phone sees the result on its next poll
             (presenter.next if action == "slide_next" else presenter.back)()
-            self.presentation_tab.show_key("phone", "next" if action == "slide_next" else "back")
+            self.presentation_tab.show_key("phone", tr('next') if action == "slide_next" else tr('back'))
             return True, "Next." if action == "slide_next" else "Back."
         if action == "slide_next":
             moved = presenter.next()
-            self.presentation_tab.show_key("phone", "next slide")
+            self.presentation_tab.show_key("phone", tr('next slide'))
             return (True, f"{presenter.index + 1} / {count}") if moved else (False, "Last slide.")
         if action == "slide_back":
             moved = presenter.back()
-            self.presentation_tab.show_key("phone", "previous slide")
-            return (True, f"{presenter.index + 1} / {count}") if moved else (False, "First slide.")
+            self.presentation_tab.show_key("phone", tr('previous slide'))
+            return (True, f"{presenter.index + 1} / {count}") if moved else (False, tr("First slide."))
         if action == "slide_goto":
             try:
                 presenter.goto(int(data.get("index", 0)))
             except (TypeError, ValueError):
-                return False, "No such slide."
+                return False, tr('No such slide.')
             return True, f"{presenter.index + 1} / {count}"
         if action == "slide_black":
             if not presenter.live:
-                return False, "The slides are not on screen."
+                return False, tr('The slides are not on screen.')
             presenter.toggle_black()
             return True, "Black." if presenter.black else "Back on screen."
         if action == "slide_live":
             if data.get("on", True):
                 presenter.go_live()
-                return True, f"Slides on {ROLE_LABELS.get(presenter.role)}."
+                return True, tr('Slides on {0}.').format(ROLE_LABELS.get(presenter.role))
             presenter.end()
-            return True, "Presentation ended."
-        return False, "Unknown action."
+            return True, tr('Presentation ended.')
+        return False, tr('Unknown action.')
 
     def _screen_state(self, role: str):
         """(closed | black | live | rehearsal, whether it moves by itself, a number that changes with it)."""
@@ -3234,9 +3256,7 @@ class ControlPanel(QMainWindow):
             import dj
         except ImportError as exc:
             note = QLabel(
-                "The DJ desk needs numpy, which is not installed.\n\n"
-                "Install it with:   python -m pip install numpy\n\n"
-                f"({exc})"
+                tr('The DJ desk needs numpy, which is not installed.\n\nInstall it with:   python -m pip install numpy\n\n({0})').format(exc)
             )
             note.setAlignment(Qt.AlignCenter)
             note.setObjectName("cardHint")
@@ -3272,14 +3292,12 @@ class ControlPanel(QMainWindow):
         card_layout.setContentsMargins(16, 14, 16, 16)
         card_layout.setSpacing(10)
 
-        heading = QLabel("Display routing")
+        heading = QLabel(tr('Display routing'))
         heading.setObjectName("sectionTitle")
         card_layout.addWidget(heading)
 
         note = QLabel(
-            "Assign each role to a monitor. Use “Custom size” when an LED processor's "
-            "mapped canvas differs from the resolution Windows reports — the ceiling strip "
-            f"is driven at {DEFAULT_TOP_WIDTH}×{DEFAULT_TOP_HEIGHT}."
+            tr("Assign each role to a monitor. Use “Custom size” when an LED processor's mapped canvas differs from the resolution Windows reports — the ceiling strip is driven at {0}×{1}.").format(DEFAULT_TOP_WIDTH, DEFAULT_TOP_HEIGHT)
         )
         note.setObjectName("cardHint")
         note.setWordWrap(True)
@@ -3296,55 +3314,53 @@ class ControlPanel(QMainWindow):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(7)
-        apply_btn = QPushButton("  Apply routing / Open outputs")
+        apply_btn = QPushButton(tr('  Apply routing / Open outputs'))
         apply_btn.setObjectName("primary")
         apply_btn.setIcon(Icons.get("monitor", "#0b0e13", 16))
         apply_btn.clicked.connect(self._apply_routing)
         buttons.addWidget(apply_btn)
 
-        identify = QPushButton("  Identify monitors")
+        identify = QPushButton(tr('  Identify monitors'))
         identify.setIcon(Icons.get("target", CLR_TEXT, 16))
-        identify.setToolTip("Flash a big number on every monitor for 3 seconds")
+        identify.setToolTip(tr('Flash a big number on every monitor for 3 seconds'))
         identify.clicked.connect(self._identify_screens)
         buttons.addWidget(identify)
 
-        redetect = QPushButton("  Re-detect")
+        redetect = QPushButton(tr('  Re-detect'))
         redetect.setIcon(Icons.get("refresh", CLR_TEXT, 16))
         redetect.clicked.connect(lambda: self._refresh_screen_combos())
         buttons.addWidget(redetect)
 
-        use_reported = QPushButton("  Copy reported size")
+        use_reported = QPushButton(tr('  Copy reported size'))
         use_reported.setIcon(Icons.get("open", CLR_TEXT, 16))
-        use_reported.setToolTip("Fill the W/H boxes with what Windows reports for each monitor")
+        use_reported.setToolTip(tr('Fill the W/H boxes with what Windows reports for each monitor'))
         use_reported.clicked.connect(self._copy_reported_sizes)
         buttons.addWidget(use_reported)
 
-        close_outputs = desk_mod.HoldButton("  Close outputs", THEME)
+        close_outputs = desk_mod.HoldButton(tr('  Close outputs'), THEME)
         close_outputs.setIcon(Icons.get("close", CLR_TEXT, 16))
-        close_outputs.setToolTip("Close every stage output window (the app keeps running) - hold to confirm")
+        close_outputs.setToolTip(tr('Close every stage output window (the app keeps running) - hold to confirm'))
         close_outputs.clicked.connect(self._close_all_outputs)
         buttons.addWidget(close_outputs)
 
         buttons.addSpacing(14)
-        fade_label = QLabel("Transition")
+        fade_label = QLabel(tr('Transition'))
         fade_label.setObjectName("cardHint")
         buttons.addWidget(fade_label)
         self.fade_combo = QComboBox()
         for caption, milliseconds in FADE_PRESETS:
-            self.fade_combo.addItem(caption, milliseconds)
+            self.fade_combo.addItem(tr(caption), milliseconds)
         self.fade_combo.setToolTip(
-            "How long a change of picture takes.\n"
-            "Applies to every screen, to playlist steps and to blackouts."
+            tr('How long a change of picture takes.\nApplies to every screen, to playlist steps and to blackouts.')
         )
         self.fade_combo.currentIndexChanged.connect(self._on_fade_changed)
         buttons.addWidget(self.fade_combo)
 
         self.style_combo = QComboBox()
         for caption, value in TRANSITION_STYLES:
-            self.style_combo.addItem(caption, value)
+            self.style_combo.addItem(tr(caption), value)
         self.style_combo.setToolTip(
-            "Crossfade dissolves the old picture into the new one - the hall never "
-            "goes dark.\nThrough black fades out, swaps, then fades in."
+            tr('Crossfade dissolves the old picture into the new one - the hall never goes dark.\nThrough black fades out, swaps, then fades in.')
         )
         self.style_combo.currentIndexChanged.connect(self._on_fade_changed)
         buttons.addWidget(self.style_combo)
@@ -3361,22 +3377,24 @@ class ControlPanel(QMainWindow):
         tips_layout = QVBoxLayout(tips)
         tips_layout.setContentsMargins(16, 14, 16, 16)
         tips_layout.setSpacing(8)
-        tip_title = QLabel("Running a show")
+        tip_title = QLabel(tr('Running a show'))
         tip_title.setObjectName("sectionTitle")
         tips_layout.addWidget(tip_title)
         tip_text = QLabel(
-            "Prepare the event by dropping several backgrounds onto a card — they land in "
-            "that screen's playlist.\n"
-            "During the show, click a playlist entry, or use the ‹ › arrows, to switch "
-            "instantly.\n"
-            "Repeat is on by default, so videos loop; switch it off per screen to play once.\n"
-            "“On top” is off for the Main Stage, so a PowerPoint deck or a browser can be "
-            "shown over its background — the side and ceiling screens stay above everything.\n"
-            "Save everything as a preset, and the next assembly is one click away.\n"
-            "Stage windows stay out of the taskbar, so only this dashboard appears there."
+            tr("Prepare the event by dropping several backgrounds onto a card — they land in that screen's playlist.\nDuring the show, click a playlist entry, or use the ‹ › arrows, to switch instantly.\nRepeat is on by default, so videos loop; switch it off per screen to play once.\n“On top” is off for the Main Stage, so a PowerPoint deck or a browser can be shown over its background — the side and ceiling screens stay above everything.\nSave everything as a preset, and the next assembly is one click away.\nStage windows stay out of the taskbar, so only this dashboard appears there.")
         )
+        lines = tip_text.text().split("\n")
+        tip_text.setText("\n".join(lines[:len(lines) // 2]))
         tip_text.setObjectName("cardHint")
-        tips_layout.addWidget(tip_text)
+        tip_text.setWordWrap(True)
+        tip_more = QLabel("\n".join(lines[len(lines) // 2:]))
+        tip_more.setObjectName("cardHint")
+        tip_more.setWordWrap(True)
+        columns = QHBoxLayout()
+        columns.setSpacing(28)
+        columns.addWidget(tip_text, 1, Qt.AlignTop)
+        columns.addWidget(tip_more, 1, Qt.AlignTop)
+        tips_layout.addLayout(columns)
         layout.addWidget(tips)
 
         layout.addStretch(1)
@@ -3388,22 +3406,22 @@ class ControlPanel(QMainWindow):
         box = QHBoxLayout(card)
         box.setContentsMargins(16, 12, 16, 12)
         box.setSpacing(10)
-        heading = QLabel("Touch screen")
+        heading = QLabel(tr('Touch screen'))
         heading.setObjectName("sectionTitle")
         box.addWidget(heading)
         self.touch_combo = QComboBox()
         for caption, value in TOUCH_MODES:
-            self.touch_combo.addItem(caption, value)
+            self.touch_combo.addItem(tr(caption), value)
         wanted = self.settings.value("ui/touch", "auto")
         self.touch_combo.setCurrentIndex(max(0, self.touch_combo.findData(wanted)))
         self.touch_combo.setToolTip(
-            "Larger buttons, sliders and lists for fingers, and lists that scroll with a flick.\n"
-            "Automatic switches them on when Windows reports a touch screen.")
+            tr('Larger buttons, sliders and lists for fingers, and lists that scroll with a flick.\nAutomatic switches them on when Windows reports a touch screen.'))
         self.touch_combo.currentIndexChanged.connect(self._on_touch_changed)
         box.addWidget(self.touch_combo)
         self.touch_note = QLabel()
         self.touch_note.setObjectName("cardHint")
         box.addWidget(self.touch_note, 1)
+        self._add_language_picker(box)
         return card
 
     def touch_enabled(self) -> bool:
@@ -3417,7 +3435,7 @@ class ControlPanel(QMainWindow):
     def _apply_touch_mode(self) -> None:
         touch = self.touch_enabled()
         app = QApplication.instance()
-        sheet = STYLESHEET + (touch_stylesheet() if touch else "")
+        sheet = STYLESHEET + language_stylesheet() + (touch_stylesheet() if touch else "")
         if app.styleSheet() != sheet:
             app.setStyleSheet(sheet)
         # A finger flicks a list rather than rubber-banding a selection; the
@@ -3428,10 +3446,10 @@ class ControlPanel(QMainWindow):
                 QScroller.grabGesture(area.viewport(), QScroller.TouchGesture)
             else:
                 QScroller.ungrabGesture(area.viewport())
-        detected = "a touch screen is connected" if touch_screen_present() else "no touch screen found"
+        detected = tr("a touch screen is connected") if touch_screen_present() else tr("no touch screen found")
         self.touch_note.setText(
-            f"{'On' if touch else 'Off'} — {detected}."
-            + ("  The DJ tab picks up the change the next time the app starts."
+            (tr("On — {0}.") if touch else tr("Off — {0}.")).format(detected)
+            + (tr("  The DJ tab picks up the change the next time the app starts.")
                if self.dj_panel else ""))
 
     @Slot()
@@ -3446,14 +3464,12 @@ class ControlPanel(QMainWindow):
         box.setContentsMargins(16, 14, 16, 16)
         box.setSpacing(9)
 
-        heading = QLabel("Start with Windows")
+        heading = QLabel(tr('Start with Windows'))
         heading.setObjectName("sectionTitle")
         box.addWidget(heading)
 
         note = QLabel(
-            "Open the app and put a preset on the screens automatically when this PC starts. "
-            "The delay gives LED processors and video walls time to come up first — without it "
-            "the outputs can land on the wrong monitors."
+            tr('Open the app and put a preset on the screens automatically when this PC starts. The delay gives LED processors and video walls time to come up first — without it the outputs can land on the wrong monitors.')
         )
         note.setObjectName("cardHint")
         note.setWordWrap(True)
@@ -3462,32 +3478,31 @@ class ControlPanel(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(9)
 
-        self.autostart_check = QCheckBox("Start automatically")
+        self.autostart_check = QCheckBox(tr('Start automatically'))
         self.autostart_check.toggled.connect(self._on_autostart_toggled)
         row.addWidget(self.autostart_check)
 
-        row.addWidget(QLabel("Preset"))
+        row.addWidget(QLabel(tr('Preset')))
         self.autostart_preset = QComboBox()
         self.autostart_preset.setMinimumWidth(200)
         self.autostart_preset.currentIndexChanged.connect(self._refresh_autostart_entry)
         row.addWidget(self.autostart_preset)
 
-        row.addWidget(QLabel("Wait"))
+        row.addWidget(QLabel(tr('Wait')))
         self.autostart_delay = QSpinBox()
         self.autostart_delay.setRange(0, 600)
         self.autostart_delay.setValue(DEFAULT_STARTUP_DELAY)
         self.autostart_delay.setSuffix(" s")
-        self.autostart_delay.setToolTip("Seconds to wait for the monitors before applying the preset")
+        self.autostart_delay.setToolTip(tr('Seconds to wait for the monitors before applying the preset'))
         self.autostart_delay.valueChanged.connect(self._refresh_autostart_entry)
         row.addWidget(self.autostart_delay)
-
-        row.addStretch(1)
-        box.addLayout(row)
 
         self.autostart_status = QLabel()
         self.autostart_status.setObjectName("cardHint")
         self.autostart_status.setWordWrap(True)
-        box.addWidget(self.autostart_status)
+        row.addSpacing(12)
+        row.addWidget(self.autostart_status, 1)
+        box.addLayout(row)
 
         if not Autostart.available():
             self.autostart_check.setEnabled(False)
@@ -3516,15 +3531,15 @@ class ControlPanel(QMainWindow):
 
     def _describe_autostart(self) -> None:
         if not Autostart.available():
-            self.autostart_status.setText("Autostart is only available on Windows.")
+            self.autostart_status.setText(tr('Autostart is only available on Windows.'))
             return
         if not self.autostart_check.isChecked():
-            self.autostart_status.setText("Currently off — nothing runs at login.")
+            self.autostart_status.setText(tr('Currently off — nothing runs at login.'))
             return
         preset = self.autostart_preset.currentText()
         delay = self.autostart_delay.value()
         self.autostart_status.setText(
-            f"On: at login the app opens and applies “{preset}” after {delay} seconds."
+            tr('On: at login the app opens and applies “{0}” after {1} seconds.').format(preset, delay)
         )
         self.autostart_status.setStyleSheet(f"color: {CLR_OK};")
 
@@ -3533,14 +3548,14 @@ class ControlPanel(QMainWindow):
         if enabled and not self.autostart_preset.isEnabled():
             # No presets saved yet, so there would be nothing to apply.
             QMessageBox.information(
-                self, "No preset",
-                "Save a preset first — autostart needs to know what to put on the screens.",
+                self, tr('No preset'),
+                tr('Save a preset first — autostart needs to know what to put on the screens.'),
             )
             self.autostart_check.setChecked(False)
             return
         error = self._refresh_autostart_entry()
         if error:
-            QMessageBox.critical(self, "Could not change autostart", error)
+            QMessageBox.critical(self, tr('Could not change autostart'), error)
             self.autostart_check.blockSignals(True)
             self.autostart_check.setChecked(not enabled)
             self.autostart_check.blockSignals(False)
@@ -3580,8 +3595,7 @@ class ControlPanel(QMainWindow):
                 self._fire_autostart(preset)
                 return
             self.statusBar().showMessage(
-                f"Autostart: applying “{preset}” in {remaining['seconds']}s "
-                "(waiting for the monitors)…"
+                tr('Autostart: applying “{0}” in {1}s (waiting for the monitors)…').format(preset, remaining['seconds'])
             )
             remaining["seconds"] -= 1
 
@@ -3594,11 +3608,11 @@ class ControlPanel(QMainWindow):
         payload = self.presets.get(preset)
         if not payload:
             self.statusBar().showMessage(
-                f"Autostart: preset “{preset}” not found — nothing applied.", 0
+                tr('Autostart: preset “{0}” not found — nothing applied.').format(preset), 0
             )
             return
         self._apply_preset(payload)
-        self.statusBar().showMessage(f"Autostart: “{preset}” applied.", 10000)
+        self.statusBar().showMessage(tr('Autostart: “{0}” applied.').format(preset), 10000)
 
     def _wire_card(self, card: OutputCard, role: str) -> None:
         """Connect a card's signals to whichever output window that role owns."""
@@ -3618,10 +3632,8 @@ class ControlPanel(QMainWindow):
             if window is None:
                 QMessageBox.warning(
                     self,
-                    "Output not open",
-                    f"“{ROLE_LABELS[role]}” has no output window yet.\n\n"
-                    "Open the “Screens & Setup” tab, pick a monitor for it, then press "
-                    "“OPEN OUTPUTS” and try again.",
+                    tr('Output not open'),
+                    tr('“{0}” has no output window yet.\n\nOpen the “Screens & Setup” tab, pick a monitor for it, then press “OPEN OUTPUTS” and try again.').format(ROLE_LABELS[role]),
                 )
                 return
             try:
@@ -3634,7 +3646,7 @@ class ControlPanel(QMainWindow):
             except Exception as exc:  # never let one bad file take the app down
                 self._report_media_problem(
                     role, path,
-                    MediaProblem("Could not show this file",
+                    MediaProblem(tr('Could not show this file'),
                                  f"{os.path.basename(path)}\n\n{type(exc).__name__}: {exc}"),
                 )
                 return
@@ -3648,7 +3660,7 @@ class ControlPanel(QMainWindow):
         card.loadRequested.connect(on_load)
         card.queueRequested.connect(
             lambda paths: self.statusBar().showMessage(
-                f"{ROLE_LABELS[role]}: {len(paths)} item(s) added to the playlist", 5000
+                tr('{0}: {1} item(s) added to the playlist').format(ROLE_LABELS[role], len(paths)), 5000
             )
         )
         card.scaleModeChanged.connect(lambda mode: output() and output().set_scale_mode(mode))
@@ -3659,7 +3671,7 @@ class ControlPanel(QMainWindow):
         card.pauseRequested.connect(lambda: output() and output().engine.pause())
         card.stopRequested.connect(lambda: output() and output().engine.stop())
         card.clearRequested.connect(lambda: self._record_change(
-            f"{ROLE_LABELS[role]}  →  black", lambda: output() and output().fade_clear(self.fade_ms())))
+            tr('{0}  →  black').format(ROLE_LABELS[role]), lambda: output() and output().fade_clear(self.fade_ms())))
         card.volumeChanged.connect(lambda value: output() and output().engine.set_volume(value))
         card.muteChanged.connect(lambda muted: output() and output().engine.set_muted(muted))
         card.repeatChanged.connect(lambda on: output() and output().engine.set_loop(on))
@@ -3671,13 +3683,13 @@ class ControlPanel(QMainWindow):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle(problem.title)
-        box.setText(f"<b>{problem.title}</b><br>{ROLE_LABELS[role]} was not changed.")
+        box.setText(tr('<b>{0}</b><br>{1} was not changed.').format(problem.title, ROLE_LABELS[role]))
         box.setInformativeText(problem.message())
         box.setDetailedText(f"File:\n{path}")
         box.setStandardButtons(QMessageBox.Ok)
         box.exec()
         self.statusBar().showMessage(
-            f"{ROLE_LABELS[role]}: {os.path.basename(path)} refused — {problem.title}", 12000
+            tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title), 12000
         )
 
     def _on_engine_error(self, role: str, message: str) -> None:
@@ -3696,10 +3708,8 @@ class ControlPanel(QMainWindow):
             role,
             card.current_path() if card else "",
             MediaProblem(
-                "This video will not play on this PC",
-                f"{name}\n\nThe video backend reported:\n{message}\n\n"
-                "The container opened, so this is almost certainly the codec inside it - "
-                "H.265/HEVC, VP9 and AV1 are not supported here.",
+                tr('This video will not play on this PC'),
+                tr('{0}\n\nThe video backend reported:\n{1}\n\nThe container opened, so this is almost certainly the codec inside it - H.265/HEVC, VP9 and AV1 are not supported here.').format(name, message),
                 CONVERT_ADVICE,
             ),
         )
@@ -3758,7 +3768,7 @@ class ControlPanel(QMainWindow):
                     self._lost_screens.add(role)
                     window.hide()
                     self.statusBar().showMessage(
-                        f"{ROLE_LABELS[role]}: its monitor went away - the picture waits, and comes back with it.",
+                        tr('{0}: its monitor went away - the picture waits, and comes back with it.').format(ROLE_LABELS[role]),
                         20000)
                 continue
             screen = self._screen_by_name(routed)
@@ -3767,7 +3777,7 @@ class ControlPanel(QMainWindow):
             if role in self._lost_screens:
                 self._lost_screens.discard(role)
                 window.show_with_geometry(screen, self._rect_for(role, screen))
-                self.statusBar().showMessage(f"{ROLE_LABELS[role]} is back.", 8000)
+                self.statusBar().showMessage(tr('{0} is back.').format(ROLE_LABELS[role]), 8000)
             elif window.isVisible() and not screen.geometry().contains(window.geometry().center()):
                 window.show_with_geometry(screen, self._rect_for(role, screen))   # Windows moved it: back
 
@@ -3780,7 +3790,7 @@ class ControlPanel(QMainWindow):
             combo = row.screen_combo
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem("— None (disabled) —", None)
+            combo.addItem(tr('— None (disabled) —'), None)
             for index, screen in enumerate(screens):
                 combo.addItem(self._screen_caption(index, screen), screen.name())
             combo.blockSignals(False)
@@ -3795,11 +3805,11 @@ class ControlPanel(QMainWindow):
                 elif wanted:
                     combo = row.screen_combo
                     combo.blockSignals(True)
-                    combo.addItem(f"— {wanted}  (not connected) —", wanted)
+                    combo.addItem(tr('— {0}  (not connected) —').format(wanted), wanted)
                     combo.setCurrentIndex(combo.count() - 1)
                     combo.blockSignals(False)
 
-        self.statusBar().showMessage(f"{len(screens)} monitor(s) detected.", 4000)
+        self.statusBar().showMessage(tr('{0} monitor(s) detected.').format(len(screens)), 4000)
 
     def _apply_default_assignment(self, screens) -> None:
         """
@@ -3859,7 +3869,7 @@ class ControlPanel(QMainWindow):
             if screen is not None:
                 geo = screen.geometry()
                 row.set_size(geo.width(), geo.height())
-        self.statusBar().showMessage("Custom sizes filled from the monitors' reported resolutions.", 5000)
+        self.statusBar().showMessage(tr("Custom sizes filled from the monitors' reported resolutions."), 5000)
 
     def _rect_for(self, role: str, screen: QScreen) -> Optional[QRect]:
         """Absolute rectangle for an output, or None for plain fullscreen."""
@@ -3892,9 +3902,8 @@ class ControlPanel(QMainWindow):
         if len(used) != len(set(used)):
             QMessageBox.information(
                 self,
-                "Duplicate monitors",
-                "Two or more outputs are assigned to the same monitor.\n"
-                "They will overlap — fine for testing, but check this before the show.",
+                tr('Duplicate monitors'),
+                tr('Two or more outputs are assigned to the same monitor.\nThey will overlap — fine for testing, but check this before the show.'),
             )
 
         control_screen = assignments[ROLE_CONTROL]
@@ -3924,7 +3933,7 @@ class ControlPanel(QMainWindow):
 
         active = [ROLE_LABELS[role] for role in STAGE_ROLES if assignments[role] is not None]
         self.statusBar().showMessage(
-            "Outputs open: " + (", ".join(active) if active else "none"), 8000
+            tr('Outputs open: ') + (", ".join(active) if active else "none"), 8000
         )
 
     def _ensure_output(self, role: str, window, screen: Optional[QScreen], cls, title: str,
@@ -3995,7 +4004,7 @@ class ControlPanel(QMainWindow):
         setattr(self, self.OUTPUT_ATTRS[role], None)
         self._update_output_status()
         self.statusBar().showMessage(
-            f"{title} closed with Escape — press OPEN OUTPUTS to bring it back.", 8000
+            tr('{0} closed with Escape — press OPEN OUTPUTS to bring it back.').format(title), 8000
         )
 
     def _move_self_to(self, screen: QScreen) -> None:
@@ -4030,7 +4039,7 @@ class ControlPanel(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.statusBar().showMessage(
-            f"{ROLE_LABELS[role]}: always-on-top {'ON' if on_top else 'OFF'}"
+            tr('{0}: always-on-top {1}').format(ROLE_LABELS[role], 'ON' if on_top else 'OFF')
             + ("" if on_top else " — other windows can now cover this screen."),
             6000,
         )
@@ -4038,7 +4047,7 @@ class ControlPanel(QMainWindow):
     @Slot()
     def _close_all_outputs(self) -> None:
         if self._rehearsal is not None:
-            self.statusBar().showMessage("End the rehearsal first.", 5000)
+            self.statusBar().showMessage(tr('End the rehearsal first.'), 5000)
             return
         for window in self._outputs():
             window.clear_output()
@@ -4046,7 +4055,7 @@ class ControlPanel(QMainWindow):
             window.deleteLater()
         self.main_output = self.sides_output = self.top_output = None
         self._update_output_status()
-        self.statusBar().showMessage("All stage outputs closed.", 5000)
+        self.statusBar().showMessage(tr('All stage outputs closed.'), 5000)
 
     @Slot()
     def _blackout_all(self) -> None:
@@ -4058,8 +4067,8 @@ class ControlPanel(QMainWindow):
                 self.top_output.stop_marquee()
             for card in self.cards.values():
                 card.reset_file()
-        self._record_change("BLACKOUT  -  every screen to black", black)
-        self.statusBar().showMessage("BLACKOUT — every stage screen cleared.  (Ctrl+Z puts it back)", 6000)
+        self._record_change(tr('BLACKOUT  -  every screen to black'), black)
+        self.statusBar().showMessage(tr('BLACKOUT — every stage screen cleared.  (Ctrl+Z puts it back)'), 6000)
 
     def _outputs(self):
         return [w for w in (self.main_output, self.sides_output, self.top_output) if w is not None]
@@ -4104,13 +4113,13 @@ class ControlPanel(QMainWindow):
     @Slot(QColor)
     def _on_top_colour(self, colour: QColor) -> None:
         if self.top_output is None:
-            QMessageBox.warning(self, "Output not open", "The Top Screen output window is not open yet.")
+            QMessageBox.warning(self, tr('Output not open'), tr('The Top Screen output window is not open yet.'))
             return
         fade = self.fade_ms()
         self.top_output.transition(
             lambda: self.top_output.set_background_color(colour), fade, self.fade_style()
         )
-        self.statusBar().showMessage(f"Top Screen: solid background {colour.name()}", 5000)
+        self.statusBar().showMessage(tr('Top Screen: solid background {0}').format(colour.name()), 5000)
 
     def _push_top_settings(self) -> None:
         """Send every marquee/background setting to a (possibly new) Top window."""
@@ -4128,10 +4137,10 @@ class ControlPanel(QMainWindow):
     @Slot()
     def _start_marquee(self) -> None:
         if self.top_output is None:
-            QMessageBox.warning(self, "Output not open", "The Top Screen output window is not open yet.")
+            QMessageBox.warning(self, tr('Output not open'), tr('The Top Screen output window is not open yet.'))
             return
         if not self.top_card.text_edit.text().strip():
-            QMessageBox.information(self, "No text", "Type the marquee text first.")
+            QMessageBox.information(self, tr('No text'), tr('Type the marquee text first.'))
             return
         state = self.top_card.marquee_state()
         self.top_output.set_marquee_family(state["family"])
@@ -4140,13 +4149,13 @@ class ControlPanel(QMainWindow):
         self.top_output.set_marquee_speed(state["speed"])
         self.top_output.set_marquee_text(state["text"])
         self.top_output.start_marquee()
-        self.statusBar().showMessage("Marquee scrolling.", 4000)
+        self.statusBar().showMessage(tr('Marquee scrolling.'), 4000)
 
     @Slot()
     def _stop_marquee(self) -> None:
         if self.top_output is not None:
             self.top_output.stop_marquee()
-            self.statusBar().showMessage("Marquee stopped.", 4000)
+            self.statusBar().showMessage(tr('Marquee stopped.'), 4000)
 
     # ------------------------------------------------------------- presets -- #
 
@@ -4158,7 +4167,7 @@ class ControlPanel(QMainWindow):
             self.preset_combo.addItems(names)
             self.preset_combo.setEnabled(True)
         else:
-            self.preset_combo.addItem("no presets yet")
+            self.preset_combo.addItem(tr('no presets yet'))
             self.preset_combo.setEnabled(False)
         if select:
             index = self.preset_combo.findText(select)
@@ -4179,7 +4188,7 @@ class ControlPanel(QMainWindow):
             index = self.autostart_preset.findText(target) if target else -1
             self.autostart_preset.setCurrentIndex(max(0, index))
         else:
-            self.autostart_preset.addItem("no presets yet")
+            self.autostart_preset.addItem(tr('no presets yet'))
             self.autostart_preset.setEnabled(False)
         self.autostart_preset.blockSignals(False)
         # Keep the registered command in step with a renamed or deleted preset.
@@ -4268,8 +4277,8 @@ class ControlPanel(QMainWindow):
         if missing:
             QMessageBox.warning(
                 self,
-                "Missing files",
-                "These files from the preset were not found and were skipped:\n\n"
+                tr('Missing files'),
+                tr('These files from the preset were not found and were skipped:\n\n')
                 + "\n".join(sorted(set(missing))),
             )
 
@@ -4284,9 +4293,8 @@ class ControlPanel(QMainWindow):
         if self._preset_dirty and self.loaded_preset:
             answer = QMessageBox.question(
                 self,
-                "Unsaved changes",
-                f"“{self.loaded_preset}” has changes that are not saved.\n\n"
-                "Save them before starting a new show?",
+                tr('Unsaved changes'),
+                tr('“{0}” has changes that are not saved.\n\nSave them before starting a new show?').format(self.loaded_preset),
                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
                 QMessageBox.Save,
             )
@@ -4324,17 +4332,17 @@ class ControlPanel(QMainWindow):
         self.loaded_preset = None
         self._preset_dirty = False
         self._describe_preset_state()
-        self.preset_state.setText("blank — build the show, then “Save as new…”")
+        self.preset_state.setText(tr('blank — build the show, then “Save as new…”'))
         self.preset_state.setStyleSheet(f"color: {CLR_ACCENT}; font-weight: 600;")
         self.statusBar().showMessage(
-            "Cleared. Screens are black, cues are empty, monitor routing kept.", 8000)
+            tr('Cleared. Screens are black, cues are empty, monitor routing kept.'), 8000)
 
     @Slot()
     def _load_preset(self) -> None:
         name = self.preset_combo.currentText()
         payload = self.presets.get(name) if self.preset_combo.isEnabled() else None
         if not payload:
-            QMessageBox.information(self, "No preset", "Save a preset first, then it can be loaded.")
+            QMessageBox.information(self, tr('No preset'), tr('Save a preset first, then it can be loaded.'))
             return
 
         def apply() -> None:
@@ -4342,12 +4350,12 @@ class ControlPanel(QMainWindow):
             self.loaded_preset = name
             self._preset_dirty = False
             self._describe_preset_state()
-            self.statusBar().showMessage(f"Preset loaded: {name}", 6000)
+            self.statusBar().showMessage(tr('Preset loaded: {0}').format(name), 6000)
 
         main_file = payload.get("outputs", {}).get(ROLE_MAIN, {}).get("file", "")
-        self._change_stage(f"Preset  “{name}”", apply,
+        self._change_stage(tr('Preset  “{0}”').format(name), apply,
                            self._thumb_for_path(main_file) if main_file else None,
-                           "every screen, the sound cues and the marquee")
+                           tr('every screen, the sound cues and the marquee'))
 
     @Slot()
     def _save_preset(self) -> None:
@@ -4360,13 +4368,13 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _save_preset_as(self) -> None:
-        name, accepted = QInputDialog.getText(self, "Save preset", "Preset name:")
+        name, accepted = QInputDialog.getText(self, tr('Save preset'), tr('Preset name:'))
         name = name.strip()
         if not accepted or not name:
             return
         if name in self.presets.names():
             answer = QMessageBox.question(
-                self, "Overwrite?", f"A preset called “{name}” already exists. Replace it?"
+                self, tr('Overwrite?'), tr('A preset called “{0}” already exists. Replace it?').format(name)
             )
             if answer != QMessageBox.Yes:
                 return
@@ -4380,7 +4388,7 @@ class ControlPanel(QMainWindow):
             return
         if self.sender() is not None and not isinstance(self.sender(), desk_mod.HoldButton):
             # from the right-click menu: no hold there, so ask
-            answer = QMessageBox.question(self, "Delete preset", f"Delete “{name}”?")
+            answer = QMessageBox.question(self, tr('Delete preset'), tr('Delete “{0}”?').format(name))
             if answer != QMessageBox.Yes:
                 return
         self.presets.remove(name)
@@ -4389,14 +4397,14 @@ class ControlPanel(QMainWindow):
     def _write_presets(self, select: Optional[str] = None) -> None:
         error = self.presets.save()
         if error:
-            QMessageBox.critical(self, "Could not save presets", error)
+            QMessageBox.critical(self, tr('Could not save presets'), error)
             return
         if select:
             self.loaded_preset = select
             self._preset_dirty = False
         self._refresh_preset_combo(select)
         self._describe_preset_state()
-        self.statusBar().showMessage(f"Presets saved to {PRESET_FILE}", 6000)
+        self.statusBar().showMessage(tr('Presets saved to {0}').format(PRESET_FILE), 6000)
 
     # ------------------------------------------------------------ shutdown -- #
 
@@ -4438,9 +4446,8 @@ class ControlPanel(QMainWindow):
             # Quitting mid-show blacks out the hall; make it a deliberate act.
             answer = QMessageBox.question(
                 self,
-                "Stage outputs are live",
-                f"{len(live)} stage screen(s) are still showing content.\n\n"
-                "Quitting closes them and blacks out the stage. Quit anyway?",
+                tr('Stage outputs are live'),
+                tr('{0} stage screen(s) are still showing content.\n\nQuitting closes them and blacks out the stage. Quit anyway?').format(len(live)),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -4503,8 +4510,10 @@ def main() -> int:
     options = parse_args(sys.argv[1:])
     app = QApplication(sys.argv)
     app.setApplicationName("Stage Display Controller")
+    # the interface's language, before a single window is built
+    set_language(str(QSettings(SETTINGS_ORG, SETTINGS_APP).value("ui/language", "en") or "en"))
     app.setStyle("Fusion")
-    app.setStyleSheet(STYLESHEET)
+    app.setStyleSheet(STYLESHEET + language_stylesheet())
     if os.path.exists(ICON_FILE):
         app.setWindowIcon(QIcon(ICON_FILE))
     # Output windows must never keep the app alive on their own;

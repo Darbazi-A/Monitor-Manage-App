@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -166,7 +168,7 @@ class DropZone(QFrame):
     def _show_empty(self) -> None:
         self._path = ""
         self.thumb.setPixmap(Icons.get("plus", CLR_LINE, 28).pixmap(28, 28))
-        self.caption.setText("drop media here  ·  or click to browse")
+        self.caption.setText(tr('drop media here  ·  or click to browse'))
         self.setProperty("loaded", "false")
         self._restyle()
 
@@ -280,7 +282,7 @@ class Playlist(QListWidget):
         self.setMinimumHeight(56)
         self.setMaximumHeight(150)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.setToolTip("Click an entry to put it on the screen · drag to reorder")
+        self.setToolTip(tr('Click an entry to put it on the screen · drag to reorder'))
         self.itemClicked.connect(self._on_item_clicked)
         self.model().rowsMoved.connect(lambda *_a: self._renumber())
         thumbnailer().ready.connect(self._on_poster_ready)
@@ -354,8 +356,7 @@ class Playlist(QListWidget):
                 item.setIcon(Icons.get("warning", CLR_DANGER, 16))
                 item.setForeground(QColor(CLR_DANGER))
                 item.setToolTip(
-                    f"{path}\n\nNo frame could be read from this clip, so it will most "
-                    "likely not play on stage.\nConvert it to H.264 MP4 before the show."
+                    tr('{0}\n\nNo frame could be read from this clip, so it will most likely not play on stage.\nConvert it to H.264 MP4 before the show.').format(path)
                 )
 
     def _renumber(self) -> None:
@@ -474,16 +475,16 @@ class OutputCard(QFrame):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
-        name = QLabel(title)
+        name = QLabel(tr(title))
         name.setObjectName("cardTitle")
-        hint = QLabel(subtitle)
+        hint = QLabel(tr(subtitle))
         hint.setObjectName("cardSub")
         title_box.addWidget(name)
         title_box.addWidget(hint)
         header.addLayout(title_box)
         header.addStretch(1)
 
-        self.state_badge = QLabel("CLOSED")
+        self.state_badge = QLabel(tr('CLOSED'))
         self.state_badge.setObjectName("badgeOff")
         header.addWidget(self.state_badge)
         self.root.addLayout(header)
@@ -501,7 +502,7 @@ class OutputCard(QFrame):
         self.scrub.setObjectName("scrub")
         self.scrub.setRange(0, 0)
         self.scrub.setEnabled(False)
-        self.scrub.setToolTip("Playback position — drag to seek")
+        self.scrub.setToolTip(tr('Playback position — drag to seek'))
         self.scrub.sliderPressed.connect(lambda: setattr(self, "_scrubbing", True))
         self.scrub.sliderReleased.connect(self._on_scrub_released)
         scrub_row.addWidget(self.scrub, 1)
@@ -510,7 +511,7 @@ class OutputCard(QFrame):
         self.timecode.setObjectName("timecode")
         self.timecode.setMinimumWidth(78)
         self.timecode.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.timecode.setToolTip("Elapsed / total")
+        self.timecode.setToolTip(tr('Elapsed / total'))
         scrub_row.addWidget(self.timecode)
         self.root.addLayout(scrub_row)
 
@@ -519,21 +520,21 @@ class OutputCard(QFrame):
         options.setSpacing(6)
         self.scale_combo = QComboBox()
         for mode in ScaleMode:
-            self.scale_combo.addItem(mode.value, mode)
+            self.scale_combo.addItem(tr(mode.value), mode)
         self.scale_combo.setCurrentIndex(list(ScaleMode).index(default_mode))
-        self.scale_combo.setToolTip("How media is fitted to this screen")
+        self.scale_combo.setToolTip(tr('How media is fitted to this screen'))
         self.scale_combo.currentIndexChanged.connect(
             lambda _i: self.scaleModeChanged.emit(self.scale_combo.currentData())
         )
         options.addWidget(self.scale_combo, 1)
 
-        self.repeat_btn = icon_button("repeat", "Repeat / loop video", CLR_TEXT)
+        self.repeat_btn = icon_button("repeat", tr('Repeat / loop video'), CLR_TEXT)
         self.repeat_btn.setCheckable(True)
         self.repeat_btn.setChecked(True)  # repeat is ON by default
         self.repeat_btn.toggled.connect(self._on_repeat_toggled)
         options.addWidget(self.repeat_btn)
 
-        self.mute_btn = icon_button("volume", "Mute audio", CLR_TEXT)
+        self.mute_btn = icon_button("volume", tr('Mute audio'), CLR_TEXT)
         self.mute_btn.setCheckable(True)
         self.mute_btn.toggled.connect(self._on_mute_toggled)
         options.addWidget(self.mute_btn)
@@ -549,7 +550,7 @@ class OutputCard(QFrame):
             ("stop", "Stop (rewind to first frame)", self.stopRequested),
             ("next", "Next item in the playlist", None),
         ):
-            button = icon_button(icon_name, tip)
+            button = icon_button(icon_name, tr(tip))
             button.setMinimumHeight(32)
             if signal is not None:
                 button.clicked.connect(signal.emit)
@@ -566,11 +567,11 @@ class OutputCard(QFrame):
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(80)
-        self.volume_slider.setToolTip("Playback volume")
+        self.volume_slider.setToolTip(tr('Playback volume'))
         self.volume_slider.valueChanged.connect(self.volumeChanged.emit)
         bottom.addWidget(self.volume_slider, 1)
 
-        black = icon_button("power", "Blackout this screen", CLR_DANGER)
+        black = icon_button("power", tr('Blackout this screen'), CLR_DANGER)
         black.setObjectName("ghost")
         black.clicked.connect(self._on_clear)
         bottom.addWidget(black)
@@ -579,22 +580,22 @@ class OutputCard(QFrame):
         # --- playlist ------------------------------------------------------ #
         queue_header = QHBoxLayout()
         queue_header.setSpacing(4)
-        queue_title = QLabel("Playlist")
+        queue_title = QLabel(tr('Playlist'))
         queue_title.setObjectName("sectionTitle")
         queue_header.addWidget(queue_title)
         queue_header.addStretch(1)
 
-        add_btn = icon_button("plus", "Add files to the playlist", CLR_MUTED, 15)
+        add_btn = icon_button("plus", tr('Add files to the playlist'), CLR_MUTED, 15)
         add_btn.setObjectName("ghost")
         add_btn.clicked.connect(self._on_add_to_queue)
         queue_header.addWidget(add_btn)
 
-        remove_btn = icon_button("minus", "Remove the selected entry", CLR_MUTED, 15)
+        remove_btn = icon_button("minus", tr('Remove the selected entry'), CLR_MUTED, 15)
         remove_btn.setObjectName("ghost")
         remove_btn.clicked.connect(lambda: self.playlist.remove_current())
         queue_header.addWidget(remove_btn)
 
-        clear_btn = icon_button("trash", "Empty the playlist", CLR_MUTED, 15)
+        clear_btn = icon_button("trash", tr('Empty the playlist'), CLR_MUTED, 15)
         clear_btn.setObjectName("ghost")
         clear_btn.clicked.connect(self._on_clear_queue)
         queue_header.addWidget(clear_btn)
@@ -616,11 +617,11 @@ class OutputCard(QFrame):
     # -- state -------------------------------------------------------------- #
 
     def set_output_open(self, is_open: bool) -> None:
-        self.state_badge.setText("OPEN" if is_open else "CLOSED")
+        self.state_badge.setText(tr('OPEN') if is_open else tr('CLOSED'))
         self.state_badge.setObjectName("badgeLive" if is_open else "badgeOff")
         self.state_badge.setToolTip(
-            "This screen's output window is open" if is_open else
-            "No output window — press OPEN OUTPUTS"
+            tr("This screen's output window is open") if is_open else
+            tr('No output window — press OPEN OUTPUTS')
         )
         self.state_badge.style().unpolish(self.state_badge)
         self.state_badge.style().polish(self.state_badge)
@@ -695,7 +696,7 @@ class OutputCard(QFrame):
     @Slot()
     def _on_browse(self) -> None:
         start = self._last_dir or os.path.dirname(self._path)
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select images or videos", start, MEDIA_FILTER)
+        paths, _ = QFileDialog.getOpenFileNames(self, tr('Select images or videos'), start, MEDIA_FILTER)
         if paths:
             self._on_files_chosen([os.path.normpath(p) for p in paths])
 
@@ -715,7 +716,7 @@ class OutputCard(QFrame):
     @Slot()
     def _on_add_to_queue(self) -> None:
         start = self._last_dir or os.path.dirname(self._path)
-        paths, _ = QFileDialog.getOpenFileNames(self, "Add to playlist", start, MEDIA_FILTER)
+        paths, _ = QFileDialog.getOpenFileNames(self, tr('Add to playlist'), start, MEDIA_FILTER)
         if paths:
             self._last_dir = os.path.dirname(paths[0])
             self.playlist.add_paths([os.path.normpath(p) for p in paths])
@@ -724,7 +725,7 @@ class OutputCard(QFrame):
     def _on_clear_queue(self) -> None:
         if self.playlist.count() == 0:
             return
-        answer = QMessageBox.question(self, "Empty playlist", "Remove every entry from this playlist?")
+        answer = QMessageBox.question(self, tr('Empty playlist'), tr('Remove every entry from this playlist?'))
         if answer == QMessageBox.Yes:
             self.playlist.clear_all()
 
@@ -736,14 +737,14 @@ class OutputCard(QFrame):
     @Slot(bool)
     def _on_repeat_toggled(self, enabled: bool) -> None:
         self.repeat_btn.setIcon(Icons.get("repeat", CLR_ACCENT if enabled else CLR_MUTED))
-        self.repeat_btn.setToolTip("Repeat is ON" if enabled else "Repeat is OFF - plays once")
+        self.repeat_btn.setToolTip(tr('Repeat is ON') if enabled else tr('Repeat is OFF - plays once'))
         self.repeatChanged.emit(enabled)
 
     @Slot(bool)
     def _on_mute_toggled(self, muted: bool) -> None:
         self.mute_btn.setIcon(Icons.get("mute" if muted else "volume",
                                         CLR_DANGER if muted else CLR_TEXT))
-        self.mute_btn.setToolTip("Audio muted" if muted else "Mute audio")
+        self.mute_btn.setToolTip(tr('Audio muted') if muted else tr('Mute audio'))
         self.muteChanged.emit(muted)
 
 
@@ -776,14 +777,14 @@ class TopCard(OutputCard):
         font_row.setSpacing(6)
         glyph = QLabel()
         glyph.setPixmap(Icons.get("text", CLR_MUTED, 14).pixmap(14, 14))
-        glyph.setToolTip("Marquee")
+        glyph.setToolTip(tr('Marquee'))
         font_row.addWidget(glyph)
-        label = QLabel("Marquee")
+        label = QLabel(tr('Marquee'))
         label.setObjectName("sectionTitle")
         font_row.addWidget(label)
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(QFont("Segoe UI"))
-        self.font_combo.setToolTip("Marquee typeface")
+        self.font_combo.setToolTip(tr('Marquee typeface'))
         self.font_combo.currentFontChanged.connect(
             lambda font: self.marqueeFamilyChanged.emit(font.family())
         )
@@ -792,34 +793,34 @@ class TopCard(OutputCard):
         self.size_spin = QSpinBox()
         self.size_spin.setRange(8, 400)
         self.size_spin.setValue(96)
-        self.size_spin.setSuffix(" px")
-        self.size_spin.setToolTip("Text height in pixels - match it to the strip height")
+        self.size_spin.setSuffix(tr(' px'))
+        self.size_spin.setToolTip(tr('Text height in pixels - match it to the strip height'))
         self.size_spin.valueChanged.connect(self.marqueeFontSizeChanged.emit)
         font_row.addWidget(self.size_spin)
 
-        colour_btn = icon_button("palette", "Marquee text colour", CLR_MUTED, 15)
+        colour_btn = icon_button("palette", tr('Marquee text colour'), CLR_MUTED, 15)
         colour_btn.setObjectName("ghost")
         colour_btn.clicked.connect(self._pick_text_colour)
         font_row.addWidget(colour_btn)
         self.text_preview = QLabel()
         self.text_preview.setFixedSize(16, 16)
-        self.text_preview.setToolTip("Text colour")
+        self.text_preview.setToolTip(tr('Text colour'))
         font_row.addWidget(self.text_preview)
         font_row.addSpacing(4)
-        bg_btn = icon_button("palette", "Solid colour background for this screen", CLR_MUTED, 15)
+        bg_btn = icon_button("palette", tr('Solid colour background for this screen'), CLR_MUTED, 15)
         bg_btn.setObjectName("ghost")
         bg_btn.clicked.connect(self._pick_background)
         font_row.addWidget(bg_btn)
         self.bg_preview = QLabel()
         self.bg_preview.setFixedSize(16, 16)
-        self.bg_preview.setToolTip("Background colour")
+        self.bg_preview.setToolTip(tr('Background colour'))
         font_row.addWidget(self.bg_preview)
         self.root.addLayout(font_row)
         self._update_swatch(self.text_preview, self._text_color)
         self._update_swatch(self.bg_preview, self._bg_color)
 
         self.text_edit = QLineEdit()
-        self.text_edit.setPlaceholderText("Text to scroll across the strip…")
+        self.text_edit.setPlaceholderText(tr('Text to scroll across the strip…'))
         self.text_edit.textChanged.connect(self.marqueeTextChanged.emit)
 
         # the text, its speed and Start / Stop share one row: the card is the
@@ -827,7 +828,7 @@ class TopCard(OutputCard):
         speed_row = QHBoxLayout()
         speed_row.setSpacing(8)
         speed_row.addWidget(self.text_edit, 3)
-        speed_caption = QLabel("Speed")
+        speed_caption = QLabel(tr('Speed'))
         speed_caption.setObjectName("cardHint")
         speed_row.addWidget(speed_caption)
         self.speed_slider = QSlider(Qt.Horizontal)
@@ -836,15 +837,15 @@ class TopCard(OutputCard):
         self.speed_slider.valueChanged.connect(self._on_speed)
         self.speed_slider.setMinimumWidth(70)
         speed_row.addWidget(self.speed_slider, 1)
-        self.speed_label = QLabel("180 px/s")
+        self.speed_label = QLabel(tr('180 px/s'))
         self.speed_label.setObjectName("cardHint")
         self.speed_label.setMinimumWidth(58)
         speed_row.addWidget(self.speed_label)
-        start = QPushButton("  Start")
+        start = QPushButton(tr('  Start'))
         start.setIcon(Icons.get("play", CLR_TEXT))
-        start.setToolTip("Start scrolling the text across the strip")
+        start.setToolTip(tr('Start scrolling the text across the strip'))
         start.clicked.connect(self.marqueeStart.emit)
-        stop = QPushButton("  Stop")
+        stop = QPushButton(tr('  Stop'))
         stop.setIcon(Icons.get("stop", CLR_TEXT))
         stop.clicked.connect(self.marqueeStop.emit)
         speed_row.addWidget(start)
@@ -862,7 +863,7 @@ class TopCard(OutputCard):
 
     @Slot()
     def _pick_background(self) -> None:
-        colour = QColorDialog.getColor(self._bg_color, self, "Top screen background colour")
+        colour = QColorDialog.getColor(self._bg_color, self, tr("Top screen background colour"))
         if colour.isValid():
             self._bg_color = colour
             self._update_swatch(self.bg_preview, colour)
@@ -879,7 +880,7 @@ class TopCard(OutputCard):
 
     @Slot(int)
     def _on_speed(self, value: int) -> None:
-        self.speed_label.setText(f"{value} px/s")
+        self.speed_label.setText(tr('{0} px/s').format(value))
         self.marqueeSpeedChanged.emit(value)
 
     # -- preset access ------------------------------------------------------ #

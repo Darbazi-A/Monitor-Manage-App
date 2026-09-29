@@ -32,6 +32,8 @@ import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 BLOCK = 512                 # frames rendered per step of the engine
 HOP = 256                   # spectral EQ hop; BLOCK must be a multiple of it
 FFT = 1024                  # spectral EQ / analysis frame
@@ -448,7 +450,7 @@ class DecoderClient(QObject):
                 pcm_handle, pcm = self._attach(message["pcm"], (message["capacity"], 2), np.int16)
                 lev_handle, levels = self._attach(message["levels"], (message["cols_capacity"], 3), np.float32)
             except (FileNotFoundError, OSError, ValueError) as exc:
-                job.failed.emit(f"Could not share the decoded audio: {exc}")
+                job.failed.emit(tr("Could not share the decoded audio: {0}").format(exc))
                 return
             self._send({"cmd": "release", "names": [message["pcm"], message["levels"]]})
             if job.cancelled:
@@ -1247,14 +1249,14 @@ class Engine(QObject):
         self._sink = QAudioSink(device, fmt)
         self._sink.setBufferSize(size)
         self._io = self._sink.start()
-        note = f"Playing out of {device.description()}"
+        note = tr("Playing out of {0}").format(device.description())
         if self._cue_name:
             cue = self._device(self._cue_name)
             if cue is not None and not cue.isNull() and cue.isFormatSupported(fmt):
                 self._cue_sink = QAudioSink(cue, fmt)
                 self._cue_sink.setBufferSize(size)
                 self._cue_io = self._cue_sink.start()
-                note += f" · headphones on {cue.description()}"
+                note += tr(" · headphones on {0}").format(cue.description())
             else:
                 note += " · headphone device unavailable"
         self.status.emit(note)
@@ -1264,7 +1266,7 @@ class Engine(QObject):
             try:
                 self.commands.popleft()()
             except Exception as exc:  # a bad command must never kill the audio
-                self.status.emit(f"DJ engine: {exc}")
+                self.status.emit(tr("DJ engine: {0}").format(exc))
         if self._sink is None or self._io is None:
             return
         if self._sink.error() != QAudio.Error.NoError and self._sink.state() == QAudio.State.StoppedState:

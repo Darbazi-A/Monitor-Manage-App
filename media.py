@@ -6,6 +6,8 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 # noqa: F401 - one import block for every module of the app
 import argparse
 import ctypes
@@ -159,33 +161,33 @@ def describe_media(path: str) -> str:
     screen. Returns "image" or "video"; raises MediaProblem otherwise.
     """
     if not path:
-        raise MediaProblem("No file", "No file was given.")
+        raise MediaProblem(tr('No file'), tr('No file was given.'))
 
     if not os.path.exists(path):
         raise MediaProblem(
-            "File not found",
-            f"{path}\n\nThe file is not there any more.",
-            "If it lives on a USB stick or a network drive, check that it is still connected.",
+            tr('File not found'),
+            tr('{0}\n\nThe file is not there any more.').format(path),
+            tr('If it lives on a USB stick or a network drive, check that it is still connected.'),
         )
     if not os.path.isfile(path):
-        raise MediaProblem("Not a file", f"{path}\n\nThat is a folder, not a media file.")
+        raise MediaProblem(tr('Not a file'), tr('{0}\n\nThat is a folder, not a media file.').format(path))
 
     try:
         size = os.path.getsize(path)
     except OSError as exc:
-        raise MediaProblem("Cannot read the file", f"{path}\n\nWindows said: {exc}") from exc
+        raise MediaProblem(tr('Cannot read the file'), tr('{0}\n\nWindows said: {1}').format(path, exc)) from exc
     if size == 0:
         raise MediaProblem(
-            "Empty file", f"{os.path.basename(path)} is 0 bytes.",
-            "The copy probably failed - copy it again from the original.",
+            tr('Empty file'), tr('{0} is 0 bytes.').format(os.path.basename(path)),
+            tr('The copy probably failed - copy it again from the original.'),
         )
 
     extension = os.path.splitext(path)[1].lower()
     if not extension:
         raise MediaProblem(
-            "No file extension",
-            f"{os.path.basename(path)} has no extension, so its type is unknown.",
-            "Rename it with the right ending, for example .jpg or .mp4.",
+            tr('No file extension'),
+            tr('{0} has no extension, so its type is unknown.').format(os.path.basename(path)),
+            tr('Rename it with the right ending, for example .jpg or .mp4.'),
         )
 
     if extension in IMAGE_EXTENSIONS:
@@ -201,8 +203,8 @@ def describe_media(path: str) -> str:
         return "audio"
 
     raise MediaProblem(
-        "Unsupported file type",
-        f"{os.path.basename(path)}\n\n“{extension}” is not a type this app can use.",
+        tr('Unsupported file type'),
+        tr('{0}\n\n“{1}” is not a type this app can use.').format(os.path.basename(path), extension),
         "Supported images: " + ", ".join(sorted(e[1:] for e in IMAGE_EXTENSIONS)) + "\n"
         "Supported video: " + ", ".join(sorted(e[1:] for e in VIDEO_EXTENSIONS)) + "\n"
         "Supported sound: " + ", ".join(sorted(e[1:] for e in AUDIO_EXTENSIONS)),
@@ -216,19 +218,16 @@ def _check_image(path: str, extension: str) -> None:
     reader.setDecideFormatFromContent(True)  # a .jpg that is really a .png still works
     if not reader.canRead():
         raise MediaProblem(
-            "Damaged or mislabelled image",
-            f"{os.path.basename(path)}\n\nQt could not read it: {reader.errorString()}",
-            "The file may be corrupt, or it may be a different type wearing the wrong "
-            "extension (a Photoshop .psd renamed to .jpg, for instance).\n"
-            "Open it in Paint and re-save it as PNG or JPG.",
+            tr('Damaged or mislabelled image'),
+            tr('{0}\n\nQt could not read it: {1}').format(os.path.basename(path), reader.errorString()),
+            tr('The file may be corrupt, or it may be a different type wearing the wrong extension (a Photoshop .psd renamed to .jpg, for instance).\nOpen it in Paint and re-save it as PNG or JPG.'),
         )
     size = reader.size()
     if size.isValid() and size.width() * size.height() > MAX_IMAGE_PIXELS * 4:
         raise MediaProblem(
-            "Image is enormous",
-            f"{os.path.basename(path)} is {size.width()}×{size.height()} pixels.",
-            "Resize it to something near the screen resolution before the show - "
-            "decoding it would stall the app.",
+            tr('Image is enormous'),
+            tr('{0} is {1}×{2} pixels.').format(os.path.basename(path), size.width(), size.height()),
+            tr('Resize it to something near the screen resolution before the show - decoding it would stall the app.'),
         )
 
     # canRead() only sniffs the header, so a truncated or half-copied file still
@@ -239,11 +238,9 @@ def _check_image(path: str, extension: str) -> None:
     probe.setScaledSize(QSize(32, 32))
     if probe.read().isNull():
         raise MediaProblem(
-            "Damaged image file",
-            f"{os.path.basename(path)}\n\nThe file starts like an image but could not be "
-            f"decoded: {probe.errorString() or 'unexpected end of file'}",
-            "It was most likely copied incompletely. Copy it again from the original, "
-            "or re-save it as PNG or JPG.",
+            tr('Damaged image file'),
+            tr('{0}\n\nThe file starts like an image but could not be decoded: {1}').format(os.path.basename(path), probe.errorString() or 'unexpected end of file'),
+            tr('It was most likely copied incompletely. Copy it again from the original, or re-save it as PNG or JPG.'),
         )
 
 
@@ -252,9 +249,8 @@ def _check_video(path: str, extension: str) -> None:
     available = supported_video_containers()
     if available and container and container not in available:
         raise MediaProblem(
-            "Container not supported on this PC",
-            f"{os.path.basename(path)}\n\nThis machine's video backend cannot open "
-            f"{container} files.\nIt can open: " + ", ".join(sorted(available)) + ".",
+            tr('Container not supported on this PC'),
+            tr("{0}\n\nThis machine's video backend cannot open {1} files.\nIt can open: ").format(os.path.basename(path), container) + ", ".join(sorted(available)) + ".",
             CONVERT_ADVICE,
         )
 
@@ -393,16 +389,15 @@ def load_pixmap(path: str) -> QPixmap:
     image = reader.read()
     if image.isNull():
         raise MediaProblem(
-            "Could not open the image",
-            f"{os.path.basename(path)}\n\nQt said: {reader.errorString() or 'unknown error'}",
-            "The file may be corrupt or only partly copied. Re-save it as PNG or JPG.",
+            tr('Could not open the image'),
+            tr('{0}\n\nQt said: {1}').format(os.path.basename(path), reader.errorString() or 'unknown error'),
+            tr('The file may be corrupt or only partly copied. Re-save it as PNG or JPG.'),
         )
     pixmap = QPixmap.fromImage(image)
     if pixmap.isNull():
         raise MediaProblem(
-            "Could not open the image",
-            f"{os.path.basename(path)}\n\nThe image decoded but could not be prepared "
-            "for display.",
+            tr('Could not open the image'),
+            tr('{0}\n\nThe image decoded but could not be prepared for display.').format(os.path.basename(path)),
         )
     return pixmap
 
@@ -412,10 +407,9 @@ def _check_audio(path: str, extension: str) -> None:
     available = supported_video_containers()   # one list covers audio and video
     if available and container and container not in available:
         raise MediaProblem(
-            "Sound format not supported on this PC",
-            f"{os.path.basename(path)}\n\nThis machine's audio backend cannot open "
-            f"{container} files.\nIt can open: " + ", ".join(sorted(available)) + ".",
-            "Convert it to MP3 or WAV and it will play.",
+            tr('Sound format not supported on this PC'),
+            tr("{0}\n\nThis machine's audio backend cannot open {1} files.\nIt can open: ").format(os.path.basename(path), container) + ", ".join(sorted(available)) + ".",
+            tr('Convert it to MP3 or WAV and it will play.'),
         )
 
 

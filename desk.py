@@ -13,6 +13,8 @@ the colours and icons are handed in.
 """
 from __future__ import annotations
 
+from i18n import caps, tr  # noqa: E402 - the interface's language
+
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -65,7 +67,7 @@ class ScreenTile(QWidget):
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(width, self.PREVIEW_H + 34)
-        self.setToolTip(f"{label} - click to make it the screen the keys act on; drop a file to show it here")
+        self.setToolTip(tr('{0} - click to make it the screen the keys act on; drop a file to show it here').format(label))
 
     def preview_rect(self) -> QRectF:
         """Where the picture goes: the screen's own shape, fitted in the tile."""
@@ -97,12 +99,16 @@ class ScreenTile(QWidget):
                   STATE_CLOSED: theme["muted"]}[self.state]
         # name + state
         p.setFont(_font(10, QFont.Bold))
-        p.setPen(QColor(theme["dim"]))
-        p.drawText(QRectF(2, 0, self.width() - 4, 13), Qt.AlignLeft | Qt.AlignVCenter, self.label.upper())
-        tag = {STATE_LIVE: "ON AIR", STATE_BLACK: "BLACK", STATE_REHEARSAL: "REHEARSAL",
-               STATE_CLOSED: "CLOSED"}[self.state]
+        tag = tr({STATE_LIVE: "ON AIR", STATE_BLACK: "BLACK", STATE_REHEARSAL: "REHEARSAL",
+                  STATE_CLOSED: "CLOSED"}[self.state])
         p.setPen(QColor(colour))
         p.drawText(QRectF(2, 0, self.width() - 4, 13), Qt.AlignRight | Qt.AlignVCenter, tag)
+        # the name gets what the tag leaves; Georgian has no capitals to shout with
+        room = self.width() - 4 - p.fontMetrics().horizontalAdvance(tag) - 6
+        name = caps(self.label)
+        p.setPen(QColor(theme["dim"]))
+        p.drawText(QRectF(2, 0, room, 13), Qt.AlignLeft | Qt.AlignVCenter,
+                   p.fontMetrics().elidedText(name, Qt.ElideRight, int(room)))
         # picture
         rect = self.preview_rect()
         p.setPen(Qt.NoPen)
@@ -118,7 +124,7 @@ class ScreenTile(QWidget):
         elif self.state == STATE_CLOSED:
             p.setPen(QColor(theme["muted"]))
             p.setFont(_font(10))
-            p.drawText(rect, Qt.AlignCenter, "click to open")
+            p.drawText(rect, Qt.AlignCenter, tr("click to open"))
         pen = QPen(QColor(colour), 2 if self.state in (STATE_LIVE, STATE_REHEARSAL) else 1)
         if self.state == STATE_CLOSED:
             pen.setStyle(Qt.DashLine)
@@ -244,10 +250,10 @@ class ModeSwitch(QFrame):
         for mode, text, tip in (
                 ("setup", "SETUP", "Prepare: presets, running order, library, screens - everything can be edited"),
                 ("show", "SHOW", "Run the event: the controls you need, editing and deleting locked")):
-            button = QPushButton(text)
+            button = QPushButton(tr(text))
             button.setObjectName("modeButton")
             button.setCheckable(True)
-            button.setToolTip(tip)
+            button.setToolTip(tr(tip))
             button.clicked.connect(lambda _c=False, m=mode: self.modeChanged.emit(m))
             self.group.addButton(button)
             row.addWidget(button)
@@ -301,21 +307,21 @@ class TakeBar(QFrame):
         self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         texts.addWidget(self.detail)
         row.addLayout(texts, 1)
-        self.take_btn = QPushButton("  TAKE")
+        self.take_btn = QPushButton(tr('  TAKE'))
         self.take_btn.setObjectName("primary")
         self.take_btn.setIcon(icons.get("play", theme["ink"], 16))
         self.take_btn.setMinimumSize(120, 40)
         self.take_btn.setStyleSheet("font-size: 15px; font-weight: 700;")
-        self.take_btn.setToolTip("Put it on stage now  (Ctrl+Enter)")
+        self.take_btn.setToolTip(tr('Put it on stage now  (Ctrl+Enter)'))
         self.take_btn.clicked.connect(self.takeRequested.emit)
         row.addWidget(self.take_btn)
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setToolTip("Leave the stage as it is  (Esc)")
+        self.cancel_btn = QPushButton(tr('Cancel'))
+        self.cancel_btn.setToolTip(tr('Leave the stage as it is  (Esc)'))
         self.cancel_btn.clicked.connect(self.cancelRequested.emit)
         row.addWidget(self.cancel_btn)
-        self.undo_btn = QPushButton("  Undo")
+        self.undo_btn = QPushButton(tr('  Undo'))
         self.undo_btn.setIcon(icons.get("prev", theme["text"], 15))
-        self.undo_btn.setToolTip("Put back what was on stage before  (Ctrl+Z)")
+        self.undo_btn.setToolTip(tr('Put back what was on stage before  (Ctrl+Z)'))
         self.undo_btn.clicked.connect(self.undoRequested.emit)
         row.addWidget(self.undo_btn)
         self.pending = False
@@ -330,7 +336,7 @@ class TakeBar(QFrame):
         self._set_tag("PREVIEW", self.theme["accent"])
         self._set_thumb(thumb)
         self.title.setText(title)
-        self.detail.setText(detail or "not on stage yet - TAKE puts it there")
+        self.detail.setText(detail or tr("not on stage yet - TAKE puts it there"))
         self.take_btn.show()
         self.cancel_btn.show()
         self.undo_btn.hide()
@@ -376,11 +382,11 @@ class TakeBar(QFrame):
         if left <= 0:
             self.forget_undo()
             return
-        self.detail.setText(f"undo for {int(left + 0.99)} more s")
-        self.undo_btn.setText(f"  Undo  ({int(left + 0.99)})")
+        self.detail.setText(tr('undo for {0} more s').format(int(left + 0.99)))
+        self.undo_btn.setText(tr('  Undo  ({0})').format(int(left + 0.99)))
 
     def _set_tag(self, text: str, colour: str) -> None:
-        self.tag.setText(text)
+        self.tag.setText(tr(text))
         self.tag.setStyleSheet(
             f"color: {colour}; font-size: 10px; font-weight: 800; letter-spacing: 1px;"
             f"border: 1px solid {colour}; border-radius: 7px; padding: 0px 7px;")
@@ -436,22 +442,22 @@ class ShowStrip(QFrame):
         self.auto = QLabel()
         self.auto.setStyleSheet(f"color: {theme['accent']}; font-weight: 600;")
         row.addWidget(self.auto)
-        open_btn = QPushButton("Running order")
+        open_btn = QPushButton(tr('Running order'))
         open_btn.setObjectName("ghost")
-        open_btn.setToolTip("Open the Show tab")
+        open_btn.setToolTip(tr('Open the Show tab'))
         open_btn.clicked.connect(self.openRequested.emit)
         row.addWidget(open_btn)
-        back = QPushButton("  Back")
+        back = QPushButton(tr('  Back'))
         back.setIcon(icons.get("prev", theme["text"], 14))
-        back.setToolTip("Previous step  (Page Up)")
+        back.setToolTip(tr('Previous step  (Page Up)'))
         back.clicked.connect(self.backRequested.emit)
         row.addWidget(back)
-        self.next_btn = QPushButton("  NEXT STEP")
+        self.next_btn = QPushButton(tr('  NEXT STEP'))
         self.next_btn.setObjectName("primary")
         self.next_btn.setIcon(icons.get("next", theme["ink"], 18))
         self.next_btn.setMinimumSize(160, 38)
         self.next_btn.setStyleSheet("font-size: 15px; font-weight: 700;")
-        self.next_btn.setToolTip("Run the next step  (Page Down)")
+        self.next_btn.setToolTip(tr('Run the next step  (Page Down)'))
         self.next_btn.clicked.connect(self.nextRequested.emit)
         row.addWidget(self.next_btn)
 
@@ -494,7 +500,7 @@ class ReadyCheckDialog(QDialog):
         self.checks = checks
         self.act = act
         self.theme = theme
-        self.setWindowTitle("Ready check")
+        self.setWindowTitle(tr('Ready check'))
         self.setMinimumSize(640, 560)
         box = QVBoxLayout(self)
         box.setContentsMargins(22, 18, 22, 18)
@@ -502,7 +508,7 @@ class ReadyCheckDialog(QDialog):
         self.summary = QLabel()
         self.summary.setStyleSheet("font-size: 20px; font-weight: 700;")
         box.addWidget(self.summary)
-        hint = QLabel("Re-checked every second - press the clicker or open a screen and its row turns green.")
+        hint = QLabel(tr('Re-checked every second - press the clicker or open a screen and its row turns green.'))
         hint.setObjectName("cardHint")
         hint.setWordWrap(True)
         box.addWidget(hint)
@@ -518,13 +524,13 @@ class ReadyCheckDialog(QDialog):
         scroll.setWidget(self.rows_host)
         box.addWidget(scroll, 1)
         buttons = QHBoxLayout()
-        identify = QPushButton("  Identify screens")
+        identify = QPushButton(tr('  Identify screens'))
         identify.setIcon(icons.get("monitor", theme["text"], 15))
-        identify.setToolTip("A big number on every monitor, for three seconds")
+        identify.setToolTip(tr('A big number on every monitor, for three seconds'))
         identify.clicked.connect(lambda: self.act("identify"))
         buttons.addWidget(identify)
         buttons.addStretch(1)
-        close = QPushButton("Close")
+        close = QPushButton(tr('Close'))
         close.clicked.connect(self.accept)
         buttons.addWidget(close)
         box.addLayout(buttons)
@@ -553,11 +559,11 @@ class ReadyCheckDialog(QDialog):
         fails = sum(1 for r in rows if r["status"] == "fail")
         warns = sum(1 for r in rows if r["status"] == "warn")
         if fails:
-            text, colour = f"{fails} problem(s) to fix before the show", self.theme["danger"]
+            text, colour = tr("{0} problem(s) to fix before the show").format(fails), self.theme["danger"]
         elif warns:
-            text, colour = f"Almost ready - {warns} thing(s) to look at", self.theme["warn"]
+            text, colour = tr("Almost ready - {0} thing(s) to look at").format(warns), self.theme["warn"]
         else:
-            text, colour = "Ready for the show  ✓", self.theme["ok"]
+            text, colour = tr("Ready for the show  ✓"), self.theme["ok"]
         self.summary.setText(text)
         self.summary.setStyleSheet(f"font-size: 20px; font-weight: 700; color: {colour};")
 
@@ -622,7 +628,7 @@ class PresetTile(QWidget):
         self.selected = False
         self.setFixedSize(self.SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(f"{name} - click to put it on the screens; right-click for more")
+        self.setToolTip(tr('{0} - click to put it on the screens; right-click for more').format(name))
 
     def set_state(self, state: str, selected: bool) -> None:
         self.state, self.selected = state, selected
@@ -652,7 +658,7 @@ class PresetTile(QWidget):
         else:
             p.setPen(QColor(theme["muted"]))
             p.setFont(_font(10))
-            p.drawText(frame, Qt.AlignCenter, "black")
+            p.drawText(frame, Qt.AlignCenter, tr("black"))
         colour = {"on": theme["ok"], "changed": theme["warn"]}.get(self.state)
         if colour:
             pen = QPen(QColor(colour), 2)
@@ -664,7 +670,7 @@ class PresetTile(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(frame, 7, 7)
         if colour:
-            tag = "ON SCREEN" if self.state == "on" else "CHANGED"
+            tag = tr("ON SCREEN") if self.state == "on" else tr("CHANGED")
             p.setFont(_font(9, QFont.Bold))
             width = p.fontMetrics().horizontalAdvance(tag) + 12
             box = QRectF(frame.right() - width - 4, frame.top() + 4, width, 15)
@@ -711,7 +717,7 @@ class PresetStrip(QScrollArea):
         self.row.addStretch(1)
         self.setWidget(host)
         self.tiles: Dict[str, PresetTile] = {}
-        self.empty = QLabel("No presets yet - set the screens up, then “Save as new…”")
+        self.empty = QLabel(tr('No presets yet - set the screens up, then “Save as new…”'))
         self.empty.setObjectName("cardHint")
         self.row.insertWidget(0, self.empty)
 
@@ -757,7 +763,7 @@ class HealthBar(QWidget):
         self.chips: List[QPushButton] = []
         self.help = QPushButton("?")
         self.help.setObjectName("healthChip")
-        self.help.setToolTip("Keyboard shortcuts")
+        self.help.setToolTip(tr('Keyboard shortcuts'))
         self.help.setFixedWidth(30)
         self.help.clicked.connect(self.helpRequested.emit)
         self.row.addWidget(self.help)
@@ -774,7 +780,7 @@ class HealthBar(QWidget):
             colour = {"ok": self.theme["ok"], "warn": self.theme["warn"], "fail": self.theme["danger"],
                       "info": self.theme["muted"]}[status]
             chip.setText(f"●  {text}")
-            chip.setToolTip(tip + "\n\nClick for the ready check.")
+            chip.setToolTip(tip + tr('\n\nClick for the ready check.'))
             chip.setStyleSheet(f"color: {colour};")
             chip.setProperty("status", status)
             chip.show()
@@ -800,7 +806,7 @@ SHORTCUTS = (
                          ("Ctrl+H", "hide the text"))),
     ("Slides (while on screen)", (("Page Down  →  Space", "next slide or animation"),
                                   ("Page Up  ←", "back"),
-                                  ("B  or  .", "black the slides"),
+                                  ("B  /  .", "black the slides"),
                                   ("Esc", "end the presentation"))),
 )
 
@@ -810,13 +816,13 @@ class ShortcutsDialog(QDialog):
 
     def __init__(self, theme: dict, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Keyboard shortcuts")
+        self.setWindowTitle(tr('Keyboard shortcuts'))
         self.setMinimumWidth(560)
         box = QVBoxLayout(self)
         box.setContentsMargins(22, 18, 22, 18)
         box.setSpacing(4)
         for section, keys in SHORTCUTS:
-            title = QLabel(section.upper())
+            title = QLabel(caps(tr(section)))
             title.setObjectName("sectionTitle")
             title.setContentsMargins(0, 10, 0, 2)
             box.addWidget(title)
@@ -826,11 +832,11 @@ class ShortcutsDialog(QDialog):
                 label.setFixedWidth(170)
                 label.setStyleSheet(f"color: {theme['accent']}; font-weight: 600;")
                 row.addWidget(label)
-                text = QLabel(meaning)
+                text = QLabel(tr(meaning))
                 text.setObjectName("cardHint")
                 row.addWidget(text, 1)
                 box.addLayout(row)
-        close = QPushButton("Close")
+        close = QPushButton(tr('Close'))
         close.clicked.connect(self.accept)
         box.addSpacing(10)
         box.addWidget(close, 0, Qt.AlignRight)
@@ -930,17 +936,17 @@ class RecoveryDialog(QDialog):
 
     def __init__(self, when: str, lines: List[str], theme: dict, seconds: int = 20, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Put the stage back?")
+        self.setWindowTitle(tr('Put the stage back?'))
         self.setMinimumWidth(520)
         self.theme = theme
         self._left = seconds
         box = QVBoxLayout(self)
         box.setContentsMargins(22, 18, 22, 18)
         box.setSpacing(10)
-        title = QLabel("The app closed unexpectedly")
+        title = QLabel(tr('The app closed unexpectedly'))
         title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {theme['warn']};")
         box.addWidget(title)
-        intro = QLabel(f"It stopped at {when}. This was on the stage then:")
+        intro = QLabel(tr('It stopped at {0}. This was on the stage then:').format(when))
         intro.setObjectName("cardHint")
         intro.setWordWrap(True)
         box.addWidget(intro)
@@ -953,10 +959,10 @@ class RecoveryDialog(QDialog):
         box.addWidget(self.countdown)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        fresh = QPushButton("Start fresh")
+        fresh = QPushButton(tr('Start fresh'))
         fresh.clicked.connect(self.reject)
         buttons.addWidget(fresh)
-        back = QPushButton("  Put it back")
+        back = QPushButton(tr('  Put it back'))
         back.setObjectName("primary")
         back.setDefault(True)
         back.clicked.connect(self.accept)
@@ -972,7 +978,7 @@ class RecoveryDialog(QDialog):
             self._timer.stop()
             self.accept()
             return
-        self.countdown.setText(f"Putting it back by itself in {self._left} s…")
+        self.countdown.setText(tr('Putting it back by itself in {0} s…').format(self._left))
         self._left -= 1
 
 

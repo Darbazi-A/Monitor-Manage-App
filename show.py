@@ -11,6 +11,8 @@ colours are handed in.
 """
 from __future__ import annotations
 
+from i18n import tr  # noqa: E402 - the interface's language
+
 import copy
 import json
 import os
@@ -110,39 +112,39 @@ def summary(step: dict) -> str:
     for role, short in (("main", "Main"), ("sides", "Sides"), ("top", "Top")):
         screen = step["screens"][role]
         if screen["mode"] == "file":
-            parts.append(f"{short}: {os.path.basename(screen['path']) or '?'}")
+            parts.append(f"{tr(short)}: {os.path.basename(screen['path']) or '?'}")
         elif screen["mode"] == "black":
-            parts.append(f"{short}: black")
+            parts.append(f"{tr(short)}: {tr('black')}")
     sound = step["sound"]
     if sound["mode"] == "play":
         parts.append("♪ " + (os.path.basename(sound["path"]) or "?"))
     elif sound["mode"] == "fade":
-        parts.append("♪ fade out")
+        parts.append("♪ " + tr("fade out"))
     elif sound["mode"] == "silence":
-        parts.append("♪ all quiet")
+        parts.append("♪ " + tr("all quiet"))
     text = step["text"]
     if text["mode"] == "show":
         parts.append(f"T “{text['title']}”")
     elif text["mode"] == "hide":
-        parts.append("T hidden")
+        parts.append("T " + tr("hidden"))
     marquee = step["marquee"]
     if marquee["mode"] == "start":
         parts.append("⇢ " + marquee["text"][:24])
     elif marquee["mode"] == "stop":
-        parts.append("⇢ stop")
+        parts.append("⇢ " + tr("stop"))
     slides = step["slides"]
     if slides["mode"] == "start":
         parts.append("▣ " + (os.path.basename(slides["path"]) or "?"))
     elif slides["mode"] == "end":
-        parts.append("▣ end")
+        parts.append("▣ " + tr("end"))
     advance = step["advance"]
     if advance["mode"] == "after":
-        parts.append(f"auto {advance['seconds']} s")
+        parts.append(tr("auto {0} s").format(advance['seconds']))
     elif advance["mode"] == "video":
-        parts.append("auto at video end")
+        parts.append(tr("auto at video end"))
     elif advance["mode"] == "sound":
-        parts.append("auto at sound end")
-    return "   ·   ".join(parts) if parts else "changes nothing"
+        parts.append(tr("auto at sound end"))
+    return "   ·   ".join(parts) if parts else tr("changes nothing")
 
 
 def missing_files(steps: List[dict]) -> List[str]:
@@ -250,12 +252,12 @@ class StepDelegate(QStyledItemDelegate):
             painter.setPen(QColor(theme["muted"]))
             painter.setFont(_font(8.5))
             painter.drawText(QRectF(text_rect.right() + 4, text_rect.top(), minutes_w - 18, text_rect.height()),
-                             Qt.AlignRight | Qt.AlignVCenter, f"{minutes:g} min")
+                             Qt.AlignRight | Qt.AlignVCenter, tr("{0} min").format(f"{minutes:g}"))
         painter.setPen(QColor(theme["text"]))
         painter.setFont(_font(10.5, QFont.DemiBold))
         metrics = painter.fontMetrics()
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter,
-                         metrics.elidedText(step["title"] or "Untitled", Qt.ElideRight, int(text_rect.width())))
+                         metrics.elidedText(step["title"] or tr("Untitled"), Qt.ElideRight, int(text_rect.width())))
         sub_rect = QRectF(left, rect.center().y() + 1, text_rect.width() + minutes_w, rect.height() / 2 - 8)
         painter.setPen(QColor(theme["muted"]))
         painter.setFont(_font(8.5))
@@ -272,7 +274,7 @@ class StepDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(tag, 11, 11)
             painter.setPen(colour)
             painter.setFont(_font(7.5, QFont.Bold))
-            painter.drawText(tag, Qt.AlignCenter, "NOW" if now else "NEXT")
+            painter.drawText(tag, Qt.AlignCenter, tr("NOW") if now else tr("NEXT"))
         painter.restore()
 
     def _paint_pictures(self, painter: QPainter, step: dict, right: float, rect: QRectF) -> float:
@@ -308,7 +310,7 @@ class StepDelegate(QStyledItemDelegate):
                 painter.setPen(QColor(self.tab.theme["danger"] if screen["path"] and not os.path.isfile(screen["path"])
                                       else self.tab.theme["muted"]))
                 painter.setFont(_font(7))
-                painter.drawText(box, Qt.AlignCenter, "missing" if screen["path"] else "?")
+                painter.drawText(box, Qt.AlignCenter, tr("missing") if screen["path"] else "?")
             painter.setPen(QPen(QColor(self.tab.theme["edge"]), 1))
             painter.setBrush(Qt.NoBrush)
             painter.drawRoundedRect(box, 4, 4)
@@ -318,7 +320,7 @@ class StepDelegate(QStyledItemDelegate):
 
 def _duration(seconds: float) -> str:
     minutes = int(round(seconds / 60))
-    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
+    return tr("{0} h {1:02d} min").format(minutes // 60, minutes % 60) if minutes >= 60 else tr("{0} min").format(minutes)
 
 
 def _font(size: float, weight: int = QFont.Normal) -> QFont:
@@ -348,12 +350,12 @@ class FileField(QWidget):
         layout.setSpacing(4)
         self.label = QLineEdit()
         self.label.setReadOnly(True)
-        self.label.setPlaceholderText("drop a file here or press …")
+        self.label.setPlaceholderText(tr('drop a file here or press …'))
         self.label.setMinimumWidth(120)
         layout.addWidget(self.label, 1)
         browse = QPushButton()
         browse.setIcon(icons.get("folder", theme["text"], 15))
-        browse.setToolTip("Choose a file")
+        browse.setToolTip(tr('Choose a file'))
         browse.clicked.connect(self._browse)
         layout.addWidget(browse)
 
@@ -367,11 +369,11 @@ class FileField(QWidget):
         missing = bool(self._path) and not os.path.isfile(self._path)
         self.label.setStyleSheet("color: #e0605c;" if missing else "")
         if missing:
-            self.label.setToolTip(self._path + "\n\nThis file is missing.")
+            self.label.setToolTip(self._path + tr('\n\nThis file is missing.'))
 
     def _browse(self) -> None:
         start = os.path.dirname(self._path) if self._path else self.start_dir()
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a file", start, self.filter_text + ";;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, tr('Choose a file'), start, self.filter_text + ";;All files (*)")
         if path:
             self.set_path(os.path.normpath(path))
             self.changed.emit(self._path)
@@ -390,7 +392,7 @@ class FileField(QWidget):
 def _combo(options) -> QComboBox:
     combo = QComboBox()
     for value, caption in options:
-        combo.addItem(caption, value)
+        combo.addItem(tr(caption), value)
     return combo
 
 
@@ -401,7 +403,7 @@ def _set_combo(combo: QComboBox, value: str) -> None:
 
 
 def _caption(text: str, width: int = 96) -> QLabel:
-    label = QLabel(text)
+    label = QLabel(tr(text))
     label.setObjectName("cardHint")
     label.setFixedWidth(width)
     return label
@@ -466,10 +468,10 @@ class ShowTab(QWidget):
 
         now = QVBoxLayout()
         now.setSpacing(2)
-        self.now_caption = QLabel("READY")
+        self.now_caption = QLabel(tr('READY'))
         self.now_caption.setObjectName("sectionTitle")
         now.addWidget(self.now_caption)
-        self.now_title = QLabel("Press NEXT to start")
+        self.now_title = QLabel(tr('Press NEXT to start'))
         self.now_title.setStyleSheet("font-size: 22px; font-weight: 700;")
         self.now_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         now.addWidget(self.now_title)
@@ -492,7 +494,7 @@ class ShowTab(QWidget):
 
         upcoming = QVBoxLayout()
         upcoming.setSpacing(2)
-        caption = QLabel("NEXT")
+        caption = QLabel(tr('NEXT'))
         caption.setObjectName("sectionTitle")
         upcoming.addWidget(caption)
         self.next_title = QLabel("—")
@@ -511,25 +513,25 @@ class ShowTab(QWidget):
 
         buttons = QVBoxLayout()
         buttons.setSpacing(8)
-        self.next_btn = QPushButton("  NEXT")
+        self.next_btn = QPushButton(tr('  NEXT'))
         self.next_btn.setObjectName("primary")
         self.next_btn.setIcon(self.icons.get("next", "#0b0e13", 22))
         self.next_btn.setIconSize(QSize(22, 22))
         self.next_btn.setMinimumSize(210, 64)
         self.next_btn.setStyleSheet("font-size: 18px; font-weight: 700;")
-        self.next_btn.setToolTip("Run the next step  (Page Down - a presenter clicker works too)")
+        self.next_btn.setToolTip(tr('Run the next step  (Page Down - a presenter clicker works too)'))
         self.next_btn.clicked.connect(self.nextRequested.emit)
         buttons.addWidget(self.next_btn)
         small = QHBoxLayout()
         small.setSpacing(6)
-        back = QPushButton("  Back")
+        back = QPushButton(tr('  Back'))
         back.setIcon(self.icons.get("prev", self.theme["text"], 15))
-        back.setToolTip("Go back one step  (Page Up)")
+        back.setToolTip(tr('Go back one step  (Page Up)'))
         back.clicked.connect(self.backRequested.emit)
         small.addWidget(back, 1)
-        restart = QPushButton("  Start over")
+        restart = QPushButton(tr('  Start over'))
         restart.setIcon(self.icons.get("refresh", self.theme["text"], 15))
-        restart.setToolTip("Back to before step 1. Nothing on stage changes until NEXT.")
+        restart.setToolTip(tr('Back to before step 1. Nothing on stage changes until NEXT.'))
         restart.clicked.connect(self.restartRequested.emit)
         small.addWidget(restart, 1)
         buttons.addLayout(small)
@@ -545,7 +547,7 @@ class ShowTab(QWidget):
         glyph = QLabel()
         glyph.setPixmap(self.icons.get("list", self.theme["muted"], 16).pixmap(16, 16))
         row.addWidget(glyph)
-        caption = QLabel("Running order")
+        caption = QLabel(tr('Running order'))
         caption.setObjectName("sectionTitle")
         row.addWidget(caption)
         self.show_combo = QComboBox()
@@ -558,9 +560,9 @@ class ShowTab(QWidget):
                 ("  Rename", "text", "Rename this running order", self._rename_show),
                 ("  Copy", "save", "Make a copy to change for another event", self._copy_show),
                 ("  Delete", "trash", "Delete this running order", self._delete_show)):
-            button = QPushButton(text)
+            button = QPushButton(tr(text))
             button.setIcon(self.icons.get(icon, self.theme["text"], 15))
-            button.setToolTip(tip)
+            button.setToolTip(tr(tip))
             button.clicked.connect(handler)
             row.addWidget(button)
             self._edit_widgets.append(button)
@@ -568,12 +570,12 @@ class ShowTab(QWidget):
         self.missing_label.setStyleSheet(f"color: {self.theme['warn']}; font-weight: 600;")
         row.addWidget(self.missing_label)
         row.addStretch(1)
-        saved = QLabel("saved as you edit")
+        saved = QLabel(tr('saved as you edit'))
         saved.setObjectName("keyHint")
         row.addWidget(saved)
-        self.remote_btn = QPushButton("  Phone remote")
+        self.remote_btn = QPushButton(tr('  Phone remote'))
         self.remote_btn.setIcon(self.icons.get("phone", self.theme["text"], 15))
-        self.remote_btn.setToolTip("Run the show from a phone or tablet on the same Wi-Fi")
+        self.remote_btn.setToolTip(tr('Run the show from a phone or tablet on the same Wi-Fi'))
         self.remote_btn.clicked.connect(self.remoteRequested.emit)
         row.addWidget(self.remote_btn)
         return bar
@@ -609,22 +611,22 @@ class ShowTab(QWidget):
                  self.captureRequested.emit),
                 ("", "save", "Duplicate the selected step", self._duplicate_step),
                 ("", "trash", "Delete the selected step", self._delete_step)):
-            button = QPushButton(text)
+            button = QPushButton(tr(text))
             button.setIcon(self.icons.get(icon, self.theme["text"], 15))
-            button.setToolTip(tip)
+            button.setToolTip(tr(tip))
             button.clicked.connect(handler)
             buttons.addWidget(button)
             self._edit_widgets.append(button)
         buttons.addStretch(1)
-        self.lock_note = QLabel("SHOW mode - the running order is locked. Switch to SETUP to edit it.")
+        self.lock_note = QLabel(tr('SHOW mode - the running order is locked. Switch to SETUP to edit it.'))
         self.lock_note.setObjectName("keyHint")
         self.lock_note.hide()
         buttons.addWidget(self.lock_note)
         up = QPushButton("▲")
-        up.setToolTip("Move the step up")
+        up.setToolTip(tr('Move the step up'))
         up.clicked.connect(lambda: self._move_step(-1))
         down = QPushButton("▼")
-        down.setToolTip("Move the step down")
+        down.setToolTip(tr('Move the step down'))
         down.clicked.connect(lambda: self._move_step(1))
         buttons.addWidget(up)
         buttons.addWidget(down)
@@ -652,18 +654,18 @@ class ShowTab(QWidget):
 
         head = QHBoxLayout()
         self.title_edit = QLineEdit()
-        self.title_edit.setPlaceholderText("Step name - e.g. Anthem, Welcome speech, Awards")
+        self.title_edit.setPlaceholderText(tr('Step name - e.g. Anthem, Welcome speech, Awards'))
         self.title_edit.setStyleSheet("font-size: 14px; font-weight: 600;")
         self.title_edit.textEdited.connect(lambda text: self._edit(lambda s: s.__setitem__("title", text)))
         head.addWidget(self.title_edit, 1)
-        self.go_btn = QPushButton("  Go to this step")
+        self.go_btn = QPushButton(tr('  Go to this step'))
         self.go_btn.setIcon(self.icons.get("play", self.theme["text"], 14))
-        self.go_btn.setToolTip("Put this step on stage now (double-click a step does the same)")
+        self.go_btn.setToolTip(tr('Put this step on stage now (double-click a step does the same)'))
         self.go_btn.clicked.connect(lambda: self.goRequested.emit(self.list.currentRow()))
         head.addWidget(self.go_btn)
         form.addLayout(head)
         self.notes_edit = QPlainTextEdit()
-        self.notes_edit.setPlaceholderText("Notes for whoever runs the show: who speaks, what to wait for…")
+        self.notes_edit.setPlaceholderText(tr('Notes for whoever runs the show: who speaks, what to wait for…'))
         self.notes_edit.setFixedHeight(54)
         self.notes_edit.textChanged.connect(self._on_notes)
         form.addWidget(self.notes_edit)
@@ -683,8 +685,8 @@ class ShowTab(QWidget):
         self.sound_file = FileField(AUDIO_FILTER, self.icons, self.theme, lambda: self._last_dir)
         self.sound_file.changed.connect(lambda path: self._on_file_chosen(path, self._on_sound))
         row.addWidget(self.sound_file, 1)
-        self.sound_loop = QCheckBox("Repeat")
-        self.sound_loop.setToolTip("Loop it - for background music under a scene")
+        self.sound_loop = QCheckBox(tr('Repeat'))
+        self.sound_loop.setToolTip(tr('Loop it - for background music under a scene'))
         self.sound_loop.toggled.connect(self._on_sound)
         row.addWidget(self.sound_loop)
         form.addLayout(row)
@@ -697,17 +699,17 @@ class ShowTab(QWidget):
         self.text_mode.currentIndexChanged.connect(self._on_text)
         row.addWidget(self.text_mode)
         self.text_title = QLineEdit()
-        self.text_title.setPlaceholderText("Name")
+        self.text_title.setPlaceholderText(tr('Name'))
         self.text_title.textEdited.connect(self._on_text)
         row.addWidget(self.text_title, 2)
         self.text_sub = QLineEdit()
-        self.text_sub.setPlaceholderText("Second line (optional)")
+        self.text_sub.setPlaceholderText(tr('Second line (optional)'))
         self.text_sub.textEdited.connect(self._on_text)
         row.addWidget(self.text_sub, 2)
         self.text_target = QComboBox()
         for role in ROLES:
-            self.text_target.addItem(ROLE_NAMES[role], role)
-        self.text_target.setToolTip("Which screen the text appears on (styled on the Text tab)")
+            self.text_target.addItem(tr(ROLE_NAMES[role]), role)
+        self.text_target.setToolTip(tr('Which screen the text appears on (styled on the Text tab)'))
         self.text_target.currentIndexChanged.connect(self._on_text)
         row.addWidget(self.text_target)
         form.addLayout(row)
@@ -719,7 +721,7 @@ class ShowTab(QWidget):
         self.marquee_mode.currentIndexChanged.connect(self._on_marquee)
         row.addWidget(self.marquee_mode)
         self.marquee_text = QLineEdit()
-        self.marquee_text.setPlaceholderText("Text to scroll across the ceiling strip")
+        self.marquee_text.setPlaceholderText(tr('Text to scroll across the ceiling strip'))
         self.marquee_text.textEdited.connect(self._on_marquee)
         row.addWidget(self.marquee_text, 1)
         form.addLayout(row)
@@ -735,8 +737,8 @@ class ShowTab(QWidget):
         row.addWidget(self.slides_file, 1)
         self.slides_target = QComboBox()
         for role in ROLES:
-            self.slides_target.addItem(ROLE_NAMES[role], role)
-        self.slides_target.setToolTip("Which screen the slides appear on")
+            self.slides_target.addItem(tr(ROLE_NAMES[role]), role)
+        self.slides_target.setToolTip(tr('Which screen the slides appear on'))
         self.slides_target.currentIndexChanged.connect(self._on_slides)
         row.addWidget(self.slides_target)
         form.addLayout(row)
@@ -759,25 +761,23 @@ class ShowTab(QWidget):
         row.addWidget(_caption("Takes about"))
         self.minutes_spin = QSpinBox()
         self.minutes_spin.setRange(0, 240)
-        self.minutes_spin.setSuffix(" min")
-        self.minutes_spin.setSpecialValueText("not said")
-        self.minutes_spin.setToolTip("Roughly how long this part of the event lasts - adds up to the show's length\n"
-                                     "and when it should end")
+        self.minutes_spin.setSuffix(tr(' min'))
+        self.minutes_spin.setSpecialValueText(tr('not said'))
+        self.minutes_spin.setToolTip(tr("Roughly how long this part of the event lasts - adds up to the show's length\nand when it should end"))
         self.minutes_spin.valueChanged.connect(
             lambda value: self._edit(lambda s: s.__setitem__("minutes", value)))
         row.addWidget(self.minutes_spin)
         row.addStretch(1)
         form.addLayout(row)
         form.addStretch(1)
-        self.empty_note = QLabel("Add a step with “+ Step”, or set the screens up on the Live tab and "
-                                 "press “From stage”.")
+        self.empty_note = QLabel(tr('Add a step with “+ Step”, or set the screens up on the Live tab and press “From stage”.'))
         self.empty_note.setObjectName("cardHint")
         self.empty_note.setWordWrap(True)
         form.addWidget(self.empty_note)
         return card
 
     def _section(self, text: str) -> QLabel:
-        label = QLabel(text)
+        label = QLabel(tr(text))
         label.setObjectName("sectionTitle")
         label.setContentsMargins(0, 6, 0, 0)
         return label
@@ -785,19 +785,19 @@ class ShowTab(QWidget):
     def _screen_row(self, role: str) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(6)
-        row.addWidget(_caption(ROLE_NAMES[role]))
+        row.addWidget(_caption(tr(ROLE_NAMES[role])))
         mode = _combo(SCREEN_MODES)
         mode.currentIndexChanged.connect(lambda _i, r=role: self._on_screen(r))
         row.addWidget(mode)
         field = FileField(MEDIA_FILTER, self.icons, self.theme, lambda: self._last_dir)
         field.changed.connect(lambda path, r=role: self._on_file_chosen(path, lambda: self._on_screen(r), r))
         row.addWidget(field, 1)
-        loop = QCheckBox("Repeat")
-        loop.setToolTip("Loop the video - off to play a clip once (and to use “when the video ends”)")
+        loop = QCheckBox(tr('Repeat'))
+        loop.setToolTip(tr('Loop the video - off to play a clip once (and to use “when the video ends”)'))
         loop.toggled.connect(lambda _on, r=role: self._on_screen(r))
         row.addWidget(loop)
-        audio = QCheckBox("Sound")
-        audio.setToolTip("Play the video's own sound")
+        audio = QCheckBox(tr('Sound'))
+        audio.setToolTip(tr("Play the video's own sound"))
         audio.toggled.connect(lambda _on, r=role: self._on_screen(r))
         row.addWidget(audio)
         self.screen_rows[role] = {"mode": mode, "file": field, "loop": loop, "audio": audio}
@@ -833,12 +833,12 @@ class ShowTab(QWidget):
             self.showSwitched.emit()
 
     def _ask_name(self, title: str, default: str) -> Optional[str]:
-        name, ok = QInputDialog.getText(self, title, "Name:", text=default)
+        name, ok = QInputDialog.getText(self, title, tr('Name:'), text=default)
         name = name.strip()
         if not ok or not name:
             return None
         if name in self.store.shows and name != self.store.current:
-            QMessageBox.information(self, title, f"There is already a running order called “{name}”.")
+            QMessageBox.information(self, title, tr('There is already a running order called “{0}”.').format(name))
             return None
         return name
 
@@ -866,7 +866,7 @@ class ShowTab(QWidget):
 
     def _delete_show(self) -> None:
         name = self.store.current
-        if QMessageBox.question(self, "Delete", f"Delete the running order “{name}”?") != QMessageBox.Yes:
+        if QMessageBox.question(self, tr('Delete'), tr('Delete the running order “{0}”?').format(name)) != QMessageBox.Yes:
             return
         del self.store.shows[name]
         if not self.store.shows:
@@ -928,7 +928,7 @@ class ShowTab(QWidget):
         self.title_edit.selectAll()
 
     def _add_step(self) -> None:
-        self.add_step(new_step(f"Step {len(self.steps()) + 1}"))
+        self.add_step(new_step(tr("Step {0}").format(len(self.steps()) + 1)))
 
     def _duplicate_step(self) -> None:
         step = self.step_at(self.list.currentRow())
@@ -943,7 +943,7 @@ class ShowTab(QWidget):
         step = self.step_at(row)
         if step is None:
             return
-        if QMessageBox.question(self, "Delete step", f"Delete “{step['title']}”?") != QMessageBox.Yes:
+        if QMessageBox.question(self, tr('Delete step'), tr('Delete “{0}”?').format(step['title'])) != QMessageBox.Yes:
             return
         del self.steps()[row]
         self._reload_list(max(0, row - 1))
@@ -1095,23 +1095,23 @@ class ShowTab(QWidget):
         timed = [s.get("minutes") or 0 for s in steps]
         total = sum(timed)
         unsaid = sum(1 for m in timed if not m)
-        text = f"{len(steps)} step(s)"
+        text = tr("{0} step(s)").format(len(steps))
         if total:
-            text += f"  ·  about {_duration(total * 60)}"
+            text += tr("  ·  about {0}").format(_duration(total * 60))
             if unsaid:
-                text += f"  ({unsaid} without a time)"
+                text += tr("  ({0} without a time)").format(unsaid)
         index = self.running_index
         if total and 0 <= index < len(steps) and self._elapsed is not None:
             current = (steps[index].get("minutes") or 0) * 60
             left = max(0.0, current - self._elapsed) + sum(timed[index + 1:]) * 60
             end = QTime.currentTime().addSecs(int(left))
-            text += f"  ·  ends about {end.toString('HH:mm')}"
+            text += tr("  ·  ends about {0}").format(end.toString('HH:mm'))
         self.total_label.setText(text)
 
     def _refresh_missing(self) -> None:
         self._refresh_total()
         gone = missing_files(self.steps())
-        self.missing_label.setText(f"⚠ {len(gone)} file(s) missing" if gone else "")
+        self.missing_label.setText(tr('⚠ {0} file(s) missing').format(len(gone)) if gone else "")
         self.missing_label.setToolTip("\n".join(gone))
 
     # -- running ------------------------------------------------------------- #
@@ -1121,19 +1121,19 @@ class ShowTab(QWidget):
         now = self.step_at(index)
         upcoming = self.step_at(index + 1)
         if now is None:
-            self.now_caption.setText("READY" if steps else "NO STEPS YET")
-            self.now_title.setText("Press NEXT to start" if steps else "Build the running order below")
+            self.now_caption.setText(tr('READY') if steps else tr('NO STEPS YET'))
+            self.now_title.setText(tr('Press NEXT to start') if steps else tr('Build the running order below'))
             self.now_notes.setText("")
             self.now_clock.setText("")
         else:
-            self.now_caption.setText(f"NOW  ·  STEP {index + 1} OF {len(steps)}")
+            self.now_caption.setText(tr('NOW  ·  STEP {0} OF {1}').format(index + 1, len(steps)))
             self.now_title.setText(now["title"] or "Untitled")
             self.now_notes.setText(now["notes"])
         if upcoming is not None:
             self.next_title.setText(upcoming["title"] or "Untitled")
             self.next_summary.setText(summary(upcoming))
         else:
-            self.next_title.setText("— end of the show —" if now is not None else "—")
+            self.next_title.setText(tr('— end of the show —') if now is not None else "—")
             self.next_summary.setText("")
         self.next_btn.setEnabled(upcoming is not None)
         self.list.viewport().update()
@@ -1151,16 +1151,16 @@ class ShowTab(QWidget):
             self.now_clock.setText("")
             self.now_clock.setStyleSheet("")
         else:
-            text = f"running {int(elapsed // 60)}:{int(elapsed % 60):02d}"
+            text = tr("running {0}:{1:02d}").format(int(elapsed // 60), int(elapsed % 60))
             step = self.step_at(self.running_index)
             planned = (step.get("minutes") or 0) * 60 if step else 0
             if planned:
-                text += f"  of about {_duration(planned)}"
+                text += tr("  of about {0}").format(_duration(planned))
             self.now_clock.setText(text)
             self.now_clock.setStyleSheet(f"color: {self.theme['warn']};" if planned and elapsed > planned else "")
         if changed_minute:
             self._refresh_total()
         if auto_remaining is not None:
-            self.next_auto.setText(f"goes on by itself in {int(auto_remaining + 0.99)} s")
+            self.next_auto.setText(tr('goes on by itself in {0} s').format(int(auto_remaining + 0.99)))
         else:
             self.next_auto.setText(auto_text)
