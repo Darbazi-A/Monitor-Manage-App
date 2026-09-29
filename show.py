@@ -15,6 +15,8 @@ import copy
 import json
 import os
 import uuid
+
+import backups
 from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTime, QTimer, Signal
@@ -184,6 +186,7 @@ class ShowStore:
         return self.shows[name or self.current]["steps"]
 
     def save(self) -> Optional[str]:
+        backups.backup(self.path)       # the version on disk, before it is replaced
         try:
             with open(self.path, "w", encoding="utf-8") as handle:
                 json.dump({"current": self.current, "shows": self.shows}, handle, indent=1,

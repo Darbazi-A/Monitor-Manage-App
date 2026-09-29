@@ -916,3 +916,61 @@ class HoldButton(QPushButton):
         colour.setAlpha(110)
         p.fillRect(QRectF(0, 0, self.width() * self._progress, self.height()), colour)
         p.end()
+
+
+# --------------------------------------------------------------------------- #
+# After a crash
+# --------------------------------------------------------------------------- #
+
+class RecoveryDialog(QDialog):
+    """
+    The app stopped without being closed: offer to put the stage back as it was.
+    Nobody at the desk (an unattended restart)? It puts it back by itself.
+    """
+
+    def __init__(self, when: str, lines: List[str], theme: dict, seconds: int = 20, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Put the stage back?")
+        self.setMinimumWidth(520)
+        self.theme = theme
+        self._left = seconds
+        box = QVBoxLayout(self)
+        box.setContentsMargins(22, 18, 22, 18)
+        box.setSpacing(10)
+        title = QLabel("The app closed unexpectedly")
+        title.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {theme['warn']};")
+        box.addWidget(title)
+        intro = QLabel(f"It stopped at {when}. This was on the stage then:")
+        intro.setObjectName("cardHint")
+        intro.setWordWrap(True)
+        box.addWidget(intro)
+        for line in lines:
+            label = QLabel("•  " + line)
+            label.setWordWrap(True)
+            box.addWidget(label)
+        self.countdown = QLabel()
+        self.countdown.setObjectName("cardHint")
+        box.addWidget(self.countdown)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        fresh = QPushButton("Start fresh")
+        fresh.clicked.connect(self.reject)
+        buttons.addWidget(fresh)
+        back = QPushButton("  Put it back")
+        back.setObjectName("primary")
+        back.setDefault(True)
+        back.clicked.connect(self.accept)
+        buttons.addWidget(back)
+        box.addLayout(buttons)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
+        self._tick()
+
+    def _tick(self) -> None:
+        if self._left <= 0:
+            self._timer.stop()
+            self.accept()
+            return
+        self.countdown.setText(f"Putting it back by itself in {self._left} s…")
+        self._left -= 1

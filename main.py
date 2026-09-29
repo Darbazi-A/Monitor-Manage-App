@@ -158,6 +158,7 @@ from library import *  # noqa: F401,F403,E402
 from textslides import *  # noqa: F401,F403,E402
 from routing import *  # noqa: F401,F403,E402
 from minibar import *  # noqa: F401,F403,E402
+import backups  # noqa: E402 - copies of presets.json and shows.json before each change
 import desk as desk_mod  # noqa: E402 - multiview, SETUP / SHOW, TAKE, ready check
 import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
@@ -294,6 +295,7 @@ class PresetStore:
 
     def save(self) -> Optional[str]:
         """Write to disk; returns an error message on failure, None on success."""
+        backups.backup(self.path)       # the version on disk, before it is replaced
         try:
             with open(self.path, "w", encoding="utf-8") as handle:
                 json.dump({"presets": self.data}, handle, indent=2, ensure_ascii=False)
@@ -493,6 +495,8 @@ class ControlPanel(QMainWindow):
         self._undo_snapshot: Optional[dict] = None
         self._rehearsal: Optional[RehearsalMonitor] = None
         self._thumb_cache: Dict[tuple, QPixmap] = {}
+        self._lost_screens: set = set()      # stage screens whose monitor has gone away
+        self._session_written = ""
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -529,8 +533,12 @@ class ControlPanel(QMainWindow):
         self.setCentralWidget(central)
 
         app = QGuiApplication.instance()
-        app.screenAdded.connect(lambda _s: self._refresh_screen_combos())
-        app.screenRemoved.connect(lambda _s: self._refresh_screen_combos())
+        app.screenAdded.connect(lambda _s: self._on_screens_changed())
+        app.screenRemoved.connect(lambda _s: self._on_screens_changed())
+        # A monitor can also come back without Windows saying so in time; look every two seconds.
+        self._screen_watch = QTimer(self)
+        self._screen_watch.timeout.connect(self._check_stage_screens)
+        self._screen_watch.start(2000)
 
         self._refresh_screen_combos(initial=True)
         self._refresh_preset_combo()
@@ -551,6 +559,10 @@ class ControlPanel(QMainWindow):
         self._multiview_timer.start(500)
         self._set_mode(str(self.settings.value("ui/mode", "setup")), check=False)
         self._refresh_show_strip()
+        # What is on stage is written down every few seconds; after a crash it is offered back.
+        self._session_timer = QTimer(self)
+        self._session_timer.timeout.connect(self._save_session)
+        QTimer.singleShot(0, self._offer_recovery)
 
         self.health = desk_mod.HealthBar(THEME)
         self.health.checkRequested.connect(self._open_ready_check)
@@ -700,6 +712,9 @@ class ControlPanel(QMainWindow):
             window = self._show_output(role)
             if window is None:
                 tile.set_state(desk_mod.STATE_CLOSED, None, "closed - click to open")
+                continue
+            if role in self._lost_screens:
+                tile.set_state(desk_mod.STATE_CLOSED, None, "monitor gone - waiting for it")
                 continue
             card = self.cards.get(role) if hasattr(self, "cards") else None
             if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
@@ -902,6 +917,193 @@ class ControlPanel(QMainWindow):
         self.loaded_preset, self._preset_dirty = snapshot["preset"]
         self._describe_preset_state()
         self.statusBar().showMessage("Undone - the stage is back to how it was.", 5000)
+
+    # -- after a crash ------------------------------------------------------------ #
+
+    def _session_state(self) -> dict:
+        snapshot = self._stage_snapshot()
+        presenter = self.presenter
+        return {
+            "routing": {role: row.config().to_dict() for role, row in self.routing_rows.items()},
+            "open": [role for role in STAGE_ROLES if self._show_output(role) is not None],
+            "screens": {role: {"path": data["path"], "loop": data["loop"], "muted": data["muted"],
+                               "scale": data["scale"].name, "slide": data["slide"], "colour": data["colour"]}
+                        for role, data in snapshot["screens"].items()},
+            "marquee": snapshot["marquee"],
+            "preset": list(snapshot["preset"]),
+            "show": {"name": self.show_store.current, "index": self.show_index},
+            "slides": {"path": presenter.deck.path if presenter.deck is not None else "",
+                       "index": presenter.index, "live": presenter.live, "role": presenter.role},
+        }
+
+    def _save_session(self) -> None:
+        """Write down what is on stage, when it changed. Not while rehearsing: that is not the stage."""
+        if self._rehearsal is not None:
+            return
+        text = json.dumps(self._session_state(), sort_keys=True)
+        if text != self._session_written:
+            self._session_written = text
+            self.settings.setValue("session/state", text)
+            self.settings.setValue("session/time", QTime.currentTime().toString("HH:mm"))
+
+    def _offer_recovery(self) -> None:
+        raw = str(self.settings.value("session/state", "") or "")
+        clean = str(self.settings.value("session/clean", "true")).lower() == "true"
+        self.settings.setValue("session/clean", "false")     # until this run closes properly
+        self._session_timer.start(3000)
+        if clean or not raw:
+            return
+        try:
+            state = json.loads(raw)
+        except ValueError:
+            return
+        lines = []
+        for role in STAGE_ROLES:
+            data = state.get("screens", {}).get(role, {})
+            if data.get("path"):
+                lines.append(f"{ROLE_LABELS[role]}: {os.path.basename(data['path'])}")
+            if data.get("slide"):
+                lines.append(f"{ROLE_LABELS[role]}: the name “{data['slide'][0]}”")
+        if state.get("marquee", {}).get("running"):
+            lines.append(f"Top Screen: scrolling “{state['marquee']['text'][:40]}”")
+        slides = state.get("slides", {})
+        if slides.get("live") and slides.get("path"):
+            lines.append(f"Slides: {os.path.basename(slides['path'])}, slide {slides.get('index', 0) + 1}")
+        show = state.get("show", {})
+        if show.get("index", -1) >= 0:
+            lines.append(f"Running order “{show.get('name')}”, step {show['index'] + 1}")
+        if not lines:
+            return
+        dialog = desk_mod.RecoveryDialog(str(self.settings.value("session/time", "") or "earlier"), lines, THEME,
+                                         20, self)
+        if dialog.exec() == QDialog.Accepted:
+            self._restore_session(state)
+
+    def _restore_session(self, state: dict) -> None:
+        """Put back what was on stage: the screens, their files and names, the marquee, slides, the step."""
+        names = self._screen_names()
+        for role, data in state.get("routing", {}).items():
+            if role in self.routing_rows and data:
+                self.routing_rows[role].apply_config(RouteConfig.from_dict(data, role != ROLE_MAIN), names)
+        with self._direct():
+            if state.get("open"):
+                self._apply_routing()
+            for role in STAGE_ROLES:
+                data = state.get("screens", {}).get(role, {})
+                card = self.cards[role]
+                try:
+                    card.set_scale_mode(ScaleMode[data.get("scale", "FIT")])
+                except KeyError:
+                    pass
+                self._set_checked(card.repeat_btn, bool(data.get("loop", True)))
+                self._set_checked(card.mute_btn, bool(data.get("muted", False)))
+                window = self._show_output(role)
+                if window is None:
+                    continue
+                if data.get("colour") and data["colour"] != "#000000":
+                    window.set_background_color(QColor(data["colour"]))
+                path = data.get("path", "")
+                if path and os.path.isfile(path):
+                    card.playlist.add_paths([path], announce=False)
+                    card.loadRequested.emit(path)
+                if data.get("slide"):
+                    window.set_slide_style(self.text_slides.style_dict())
+                    window.show_slide(data["slide"][0], data["slide"][1], 0)
+            marquee = state.get("marquee", {})
+            if marquee.get("text"):
+                self.top_card.text_edit.setText(marquee["text"])
+            if marquee.get("running") and self.top_output is not None:
+                self._start_marquee()
+        preset = state.get("preset") or [None, False]
+        self.loaded_preset, self._preset_dirty = preset[0], bool(preset[1])
+        self._describe_preset_state()
+        show = state.get("show", {})
+        if show.get("name") in self.show_store.shows and show.get("name") != self.show_store.current:
+            self.show_tab._switch_to(show["name"])
+        steps = self.show_tab.steps()
+        index = show.get("index", -1)
+        if 0 <= index < len(steps):
+            self.show_index = index
+            self._show_step_id = steps[index]["id"]
+            self._show_started = time.monotonic()
+            self.show_tab.set_running(index)
+            self._show_timer.start(250)
+        slides = state.get("slides", {})
+        if slides.get("path") and os.path.exists(slides["path"]):
+            if self.presenter.open(slides["path"]) is None:
+                self.presenter.index = max(0, int(slides.get("index", 0)))
+                if slides.get("live"):
+                    self.presenter.go_live_when_ready(slides.get("role") or ROLE_MAIN)
+        self._refresh_mini()
+        self.statusBar().showMessage("The stage is back as it was before the app closed.", 10000)
+
+    # -- backups -------------------------------------------------------------------- #
+
+    def _build_backups_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        box = QHBoxLayout(card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(10)
+        heading = QLabel("Backups")
+        heading.setObjectName("sectionTitle")
+        box.addWidget(heading)
+        self.backup_combo = QComboBox()
+        self.backup_combo.setMinimumWidth(320)
+        self.backup_combo.setToolTip("Copies taken by themselves before the presets or the running orders change")
+        box.addWidget(self.backup_combo)
+        restore = desk_mod.HoldButton("  Restore", THEME)
+        restore.setIcon(Icons.get("refresh", CLR_TEXT, 15))
+        restore.setToolTip("Put this copy back (what is there now is kept as a copy too) - hold to confirm")
+        restore.clicked.connect(self._restore_backup)
+        box.addWidget(restore)
+        note = QLabel("Taken before presets.json or shows.json change - at most one every two minutes, "
+                      "the newest ten of each.")
+        note.setObjectName("cardHint")
+        note.setWordWrap(True)
+        box.addWidget(note, 1)
+        return card
+
+    def _refresh_backups(self) -> None:
+        if not hasattr(self, "backup_combo"):
+            return
+        self.backup_combo.clear()
+        entries = [("presets", "Presets", path, when) for path, when in backups.list_backups(PRESET_FILE)]
+        entries += [("shows", "Running orders", path, when) for path, when in backups.list_backups(SHOW_FILE)]
+        entries.sort(key=lambda e: e[3], reverse=True)
+        for kind, caption, path, when in entries:
+            self.backup_combo.addItem(f"{caption}  ·  {when.strftime('%d.%m  %H:%M:%S')}", f"{kind}|{path}")
+        if not entries:
+            self.backup_combo.addItem("no copies yet - they appear once something is saved", None)
+        self.backup_combo.setEnabled(bool(entries))
+
+    @Slot()
+    def _restore_backup(self) -> None:
+        chosen = self.backup_combo.currentData()
+        if not chosen:
+            return
+        kind, path = str(chosen).split("|", 1)
+        if kind == "presets":
+            error = backups.restore(PRESET_FILE, path)
+            if error is None:
+                self.presets.load()
+                self._refresh_preset_combo(self.loaded_preset)
+        else:
+            self.show_tab._save_timer.stop()
+            error = backups.restore(SHOW_FILE, path)
+            if error is None:
+                restored = ShowStore(SHOW_FILE)
+                self.show_store.shows = restored.shows
+                self.show_store.current = restored.current
+                self.show_tab._fill_show_combo()
+                self.show_tab._reload_list()
+                self.show_restart()
+        if error:
+            QMessageBox.critical(self, "Could not restore", error)
+            return
+        self._refresh_backups()
+        self.statusBar().showMessage(f"Restored the copy from {self.backup_combo.currentText().split('·')[-1].strip()}.",
+                                     8000)
 
     # -- rehearsal --------------------------------------------------------------- #
 
@@ -1267,6 +1469,9 @@ class ControlPanel(QMainWindow):
         gone = show_missing_files(self.show_tab.steps())
         if gone:
             items.append((f"{len(gone)} file(s) missing", "fail", "\n".join(gone[:8])))
+        for role in sorted(self._lost_screens):
+            items.insert(0, (f"{ROLE_LABELS[role]} monitor gone", "fail",
+                             "Windows lost this monitor. The picture comes back by itself when it returns."))
         self.health.set_items(items)
 
     @Slot()
@@ -2983,6 +3188,8 @@ class ControlPanel(QMainWindow):
         # Presets describe the stage screens; the DJ desk wants the height.
         # The header, with BLACKOUT, stays.
         self.preset_bar.setVisible(self.tabs.widget(index) in (self.tabs.widget(0), self.library))
+        if self.tabs.widget(index) is self.screens_page:
+            self._refresh_backups()
         if on_dj and self.dj_panel is None:
             self._build_dj_panel()
         self._refresh_show_strip()
@@ -3112,6 +3319,7 @@ class ControlPanel(QMainWindow):
         layout.addWidget(card)
         layout.addWidget(self._build_autostart_card())
         layout.addWidget(self._build_touch_card())
+        layout.addWidget(self._build_backups_card())
 
         tips = QFrame()
         tips.setObjectName("card")
@@ -3486,6 +3694,48 @@ class ControlPanel(QMainWindow):
                 return screen
         return None
 
+    def _screen_names(self) -> List[str]:
+        return [screen.name() for screen in QGuiApplication.screens()]
+
+    def _on_screens_changed(self) -> None:
+        self._refresh_screen_combos()
+        QTimer.singleShot(300, self._check_stage_screens)
+
+    def _check_stage_screens(self) -> None:
+        """
+        An LED processor that restarts, or a cable that slips, takes its monitor
+        away from Windows - and Windows pushes the stage window onto another
+        screen, the desk's included. The window is hidden the moment its monitor
+        goes (it keeps playing, unseen) and put back exactly where it belongs
+        the moment the monitor returns. Nobody has to press anything.
+        """
+        if self._rehearsal is not None:
+            return
+        names = self._screen_names()
+        for role in STAGE_ROLES:
+            window = self._show_output(role)
+            routed = self.routing_rows[role].screen_combo.currentData()
+            if window is None or not routed:
+                self._lost_screens.discard(role)
+                continue
+            if routed not in names:
+                if role not in self._lost_screens:
+                    self._lost_screens.add(role)
+                    window.hide()
+                    self.statusBar().showMessage(
+                        f"{ROLE_LABELS[role]}: its monitor went away - the picture waits, and comes back with it.",
+                        20000)
+                continue
+            screen = self._screen_by_name(routed)
+            if screen is None:
+                continue
+            if role in self._lost_screens:
+                self._lost_screens.discard(role)
+                window.show_with_geometry(screen, self._rect_for(role, screen))
+                self.statusBar().showMessage(f"{ROLE_LABELS[role]} is back.", 8000)
+            elif window.isVisible() and not screen.geometry().contains(window.geometry().center()):
+                window.show_with_geometry(screen, self._rect_for(role, screen))   # Windows moved it: back
+
     def _refresh_screen_combos(self, initial: bool = False) -> None:
         screens = QGuiApplication.screens()
         names = [screen.name() for screen in screens]
@@ -3507,6 +3757,12 @@ class ControlPanel(QMainWindow):
                 wanted = previous.get(role)
                 if wanted in names:
                     row.screen_combo.setCurrentIndex(names.index(wanted) + 1)
+                elif wanted:
+                    combo = row.screen_combo
+                    combo.blockSignals(True)
+                    combo.addItem(f"— {wanted}  (not connected) —", wanted)
+                    combo.setCurrentIndex(combo.count() - 1)
+                    combo.blockSignals(False)
 
         self.statusBar().showMessage(f"{len(screens)} monitor(s) detected.", 4000)
 
@@ -4161,6 +4417,8 @@ class ControlPanel(QMainWindow):
         for player in self._show_players:
             player.stop(0)
         self._unregister_hotkeys()
+        self._session_timer.stop()
+        self.settings.setValue("session/clean", "true")    # closed on purpose: nothing to offer back
         self.presenter.release()             # a PowerPoint slide show closes with the app
         if self.presenter.deck is not None:
             self.presenter.deck.stop()
