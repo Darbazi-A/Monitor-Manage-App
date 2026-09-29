@@ -19,7 +19,7 @@ from typing import Callable, Dict, List, Optional
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSizePolicy, QToolTip, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QTabWidget, QToolTip, QVBoxLayout, QWidget)
 
 STATE_CLOSED = "closed"        # no window on that screen
 STATE_BLACK = "black"          # window open, nothing on it
@@ -50,7 +50,7 @@ class ScreenTile(QWidget):
     clicked = Signal(str)
     filesDropped = Signal(str, list)
 
-    PREVIEW_H = 66
+    PREVIEW_H = 52
 
     def __init__(self, role: str, label: str, aspect: float, theme: dict, width: int) -> None:
         super().__init__()
@@ -64,7 +64,7 @@ class ScreenTile(QWidget):
         self._drag = False
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(width, self.PREVIEW_H + 36)
+        self.setFixedSize(width, self.PREVIEW_H + 34)
         self.setToolTip(f"{label} - click to make it the screen the keys act on; drop a file to show it here")
 
     def preview_rect(self) -> QRectF:
@@ -174,6 +174,53 @@ class MultiView(QWidget):
             tile = ScreenTile(role, label, aspect, theme, width)
             row.addWidget(tile)
             self.tiles[role] = tile
+
+
+# --------------------------------------------------------------------------- #
+# Tabs that never push the window off the screen
+# --------------------------------------------------------------------------- #
+
+class _PageScroll(QScrollArea):
+    pass
+
+
+class PageTabs(QTabWidget):
+    """
+    A tab widget whose pages scroll when the screen is short, instead of the
+    tallest page making the whole window taller than the monitor. Code asks for
+    pages as before - widget(), currentWidget(), indexOf(), setCurrentWidget()
+    all speak of the page itself, not of the scroll area around it.
+    """
+
+    def addTab(self, page, label, scroll: bool = True):  # noqa: N802
+        if not scroll:
+            return super().addTab(page, label)
+        holder = _PageScroll()
+        holder.setWidgetResizable(True)
+        holder.setFrameShape(QFrame.NoFrame)
+        holder.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        holder.setStyleSheet("QScrollArea { background: transparent; } "
+                             "QScrollArea > QWidget > QWidget { background: transparent; }")
+        holder.setWidget(page)
+        return super().addTab(holder, label)
+
+    def widget(self, index):
+        holder = super().widget(index)
+        return holder.widget() if isinstance(holder, _PageScroll) else holder
+
+    def currentWidget(self):  # noqa: N802
+        return self.widget(self.currentIndex())
+
+    def indexOf(self, page):  # noqa: N802
+        for index in range(self.count()):
+            if self.widget(index) is page or super().widget(index) is page:
+                return index
+        return -1
+
+    def setCurrentWidget(self, page) -> None:  # noqa: N802
+        index = self.indexOf(page)
+        if index >= 0:
+            self.setCurrentIndex(index)
 
 
 # --------------------------------------------------------------------------- #
@@ -562,7 +609,7 @@ class PresetTile(QWidget):
     clicked = Signal(str)
     menuRequested = Signal(str, object)     # name, global position
 
-    SIZE = QSize(132, 92)
+    SIZE = QSize(116, 72)
 
     def __init__(self, name: str, picture: Optional[QPixmap], theme: dict) -> None:
         super().__init__()
@@ -584,7 +631,7 @@ class PresetTile(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        frame = QRectF(1, 1, self.width() - 2, 66)
+        frame = QRectF(1, 1, self.width() - 2, self.height() - 22)
         clip = QPainterPath()
         clip.addRoundedRect(frame, 7, 7)
         p.setPen(Qt.NoPen)
@@ -628,7 +675,7 @@ class PresetTile(QWidget):
             p.drawText(box, Qt.AlignCenter, tag)
         p.setFont(_font(12, QFont.DemiBold))
         p.setPen(QColor(theme["text"]))
-        name_rect = QRectF(2, 70, self.width() - 4, 20)
+        name_rect = QRectF(2, self.height() - 20, self.width() - 4, 20)
         p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
                    p.fontMetrics().elidedText(self.name, Qt.ElideRight, int(name_rect.width())))
         p.end()
@@ -652,7 +699,7 @@ class PresetStrip(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.NoFrame)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setFixedHeight(PresetTile.SIZE.height() + 14)
+        self.setFixedHeight(PresetTile.SIZE.height() + 10)
         self.setStyleSheet("QScrollArea { background: transparent; } "
                            "QScrollArea > QWidget > QWidget { background: transparent; }")
         host = QWidget()

@@ -31,7 +31,7 @@ from desk import HoldButton
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFrame, QHBoxLayout, QLabel, QListView, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
-                               QVBoxLayout, QWidget)
+                               QSpinBox, QVBoxLayout, QWidget)
 
 try:
     from PySide6.QtPdf import QPdfDocument
@@ -981,6 +981,9 @@ class PresentationTab(QWidget):
     guestRequested = Signal()
     globalToggled = Signal(bool)
     powerpointToggled = Signal(bool)
+    limitChanged = Signal(int)              # minutes, 0 = no limit
+    countdownTargetChanged = Signal(str)    # a screen, or "" for none
+    countdown = Signal(str, str, str)       # screen, text ("" = take it away), colour
 
     def __init__(self, presenter: Presenter, icons, theme: dict, role_labels: Dict[str, str],
                  touch: bool = False) -> None:
@@ -989,7 +992,7 @@ class PresentationTab(QWidget):
         self.icons = icons
         self.theme = theme
         self.role_labels = role_labels
-        self._thumb_width = 176
+        self._thumb_width = 156
         self._last_key = ("", "", 0.0)
         self._deck_shown = None
 
@@ -1017,13 +1020,38 @@ class PresentationTab(QWidget):
         self.clock = QLabel("")
         self.clock.setObjectName("timecode")
         self.clock.setStyleSheet("font-size: 15px;")
-        top.addWidget(self.clock)
         column.addLayout(top)
+        limit_row = top                      # one row: counter, limit, countdown, clock
+        limit_row.setSpacing(6)
+        caption = QLabel("Limit")
+        caption.setObjectName("cardHint")
+        limit_row.addWidget(caption)
+        self.limit_spin = QSpinBox()
+        self.limit_spin.setRange(0, 240)
+        self.limit_spin.setSuffix(" min")
+        self.limit_spin.setSpecialValueText("none")
+        self.limit_spin.setToolTip("How long the speaker has. The clock above counts down, amber in the last\n"
+                                   "two minutes, red once over.")
+        self.limit_spin.valueChanged.connect(self._on_limit)
+        limit_row.addWidget(self.limit_spin)
+        self.countdown_combo = QComboBox()
+        self.countdown_combo.addItem("countdown: desk only", "")
+        for role, label in role_labels.items():
+            self.countdown_combo.addItem(f"countdown on {label}", role)
+        self.countdown_combo.setToolTip("Also show the time left, small in the corner of a stage screen\n"
+                                        "the speaker can see (not the one a PowerPoint show covers)")
+        self.countdown_combo.currentIndexChanged.connect(self._on_countdown_target)
+        limit_row.addWidget(self.countdown_combo)
+        limit_row.addSpacing(10)
+        limit_row.addWidget(self.clock)
+        self.limit_minutes = 0
+        self.countdown_role = ""
+        self._countdown_shown = ("", "", "")
         caption = QLabel("NEXT SLIDE")
         caption.setObjectName("sectionTitle")
         column.addWidget(caption)
         self.upcoming = SlideView(theme, "—")
-        self.upcoming.setMinimumHeight(150)
+        self.upcoming.setMinimumHeight(110)
         self.upcoming.setMaximumHeight(230)
         column.addWidget(self.upcoming, 2)
         caption = QLabel("NOTES")
@@ -1330,9 +1358,49 @@ class PresentationTab(QWidget):
             self.thumbs.setCurrentRow(self.presenter.index)
             self.thumbs.scrollToItem(self.thumbs.item(self.presenter.index), QAbstractItemView.PositionAtCenter)
 
+    def _on_limit(self, minutes: int) -> None:
+        self.limit_minutes = minutes
+        self.limitChanged.emit(minutes)
+        self._tick()
+
+    def _on_countdown_target(self) -> None:
+        old = self.countdown_role
+        self.countdown_role = self.countdown_combo.currentData() or ""
+        if old and old != self.countdown_role:
+            self.countdown.emit(old, "", "")
+            self._countdown_shown = ("", "", "")
+        self.countdownTargetChanged.emit(self.countdown_role)
+        self._tick()
+
+    def time_text(self, elapsed: float):
+        """The desk clock: time on screen, or time left of the limit - and its colour."""
+        clock = lambda seconds: f"{int(seconds // 60)}:{int(seconds % 60):02d}"  # noqa: E731
+        if not self.limit_minutes:
+            return f"on screen {clock(elapsed)}", ""
+        left = self.limit_minutes * 60 - elapsed
+        if left < 0:
+            return f"{clock(-left)} OVER the {self.limit_minutes} min", self.theme["danger"]
+        return f"{clock(left)} left of {self.limit_minutes} min", self.theme["warn"] if left <= 120 else ""
+
     def _tick(self) -> None:
         elapsed = self.presenter.elapsed()
-        self.clock.setText(f"on screen {int(elapsed // 60)}:{int(elapsed % 60):02d}" if self.presenter.live else "")
+        text, colour = self.time_text(elapsed)
+        self.clock.setText(text if self.presenter.live else "")
+        self.clock.setStyleSheet(f"font-size: 15px; color: {colour}; font-weight: 700;" if colour and self.presenter.live
+                                 else "font-size: 15px;")
+        stage = ("", "", "")
+        if self.presenter.live and self.limit_minutes and self.countdown_role:
+            left = self.limit_minutes * 60 - elapsed
+            shown = abs(left)
+            stage = (self.countdown_role,
+                     ("+" if left < 0 else "") + f"{int(shown // 60)}:{int(shown % 60):02d}",
+                     self.theme["danger"] if left < 0 else self.theme["warn"] if left <= 120 else "#ffffff")
+        if stage != self._countdown_shown:
+            if not stage[0] and self._countdown_shown[0]:
+                self.countdown.emit(self._countdown_shown[0], "", "")
+            elif stage[0]:
+                self.countdown.emit(*stage)
+            self._countdown_shown = stage
         if len(self._last_key) == 4 and self._last_key[0]:
             name, action, when, source = self._last_key
             ago = int(time.monotonic() - when)

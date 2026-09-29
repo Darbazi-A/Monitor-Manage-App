@@ -68,6 +68,7 @@ except ImportError:  # pragma: no cover - non-Windows
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
+    QMimeData,
     QObject,
     QPoint,
     QPointF,
@@ -133,6 +134,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScroller,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QTableWidget,
@@ -2382,6 +2384,15 @@ class SceneOutputWindow(BaseOutputWindow):
         # the view down, so text and marquee sizes look exactly as on stage.
         self._virtual: Optional[QSize] = None
 
+        # --- corner: the speaker's countdown, small, over everything else ------ #
+        self._corner_scrim = self._scene.addRect(QRectF(), QPen(Qt.NoPen), QBrush(QColor(0, 0, 0, 160)))
+        self._corner_scrim.setZValue(29)
+        self._corner_scrim.setVisible(False)
+        self._corner_text = QGraphicsSimpleTextItem("")
+        self._corner_text.setZValue(30)
+        self._corner_text.setVisible(False)
+        self._scene.addItem(self._corner_text)
+
         self._slide_style = {
             "family": "", "title_px": 84, "subtitle_px": 44,
             "colour": "#ffffff", "subtitle_colour": "#cfd8e6",
@@ -2558,6 +2569,7 @@ class SceneOutputWindow(BaseOutputWindow):
         self._layout_video()
         self._position_marquee_vertically()
         self._layout_slide()
+        self._layout_corner()
 
     def _layout_pixmap(self) -> None:
         pixmap = self._pixmap_item.pixmap()
@@ -2765,6 +2777,44 @@ class SceneOutputWindow(BaseOutputWindow):
         except Exception:
             return QPixmap()
 
+    def set_corner_text(self, text: str, colour: str = "#ffffff") -> None:
+        """Small text in the bottom-right corner - the speaker's time left. "" takes it away."""
+        self._corner_text.setText(text)
+        self._corner_text.setBrush(QBrush(QColor(colour or "#ffffff")))
+        self._corner_text.setPen(QPen(Qt.NoPen))
+        shown = bool(text)
+        self._corner_text.setVisible(shown)
+        self._corner_scrim.setVisible(shown)
+        self._layout_corner()
+
+    def corner_text(self) -> str:
+        return self._corner_text.text() if self._corner_text.isVisible() else ""
+
+    def _layout_corner(self) -> None:
+        rect = self._scene.sceneRect()
+        if rect.isEmpty() or not self._corner_text.text():
+            return
+        wide = rect.width() / max(1.0, rect.height()) > 4
+        font = QFont("Segoe UI")
+        font.setBold(True)
+        font.setPixelSize(max(14, int(rect.height() * (0.62 if wide else 0.075))))
+        self._corner_text.setFont(font)
+        box = self._corner_text.boundingRect()
+        pad = font.pixelSize() * 0.3
+        x = rect.width() - box.width() - pad * 2
+        y = rect.height() - box.height() - (pad * 0.2 if wide else pad * 1.5)
+        self._corner_text.setPos(x, y)
+        self._corner_scrim.setRect(QRectF(x - pad, y - pad * 0.2, box.width() + pad * 2, box.height() + pad * 0.4))
+
+    def set_backdrop(self, pixmap: Optional[QPixmap]) -> None:
+        """A still picture as the background, stretched to the screen - for previews."""
+        self.engine.clear()
+        self._video_item.setVisible(False)
+        self._scale_mode = ScaleMode.STRETCH
+        self._pixmap_item.setPixmap(pixmap if pixmap is not None else QPixmap())
+        self._pixmap_item.setVisible(pixmap is not None and not pixmap.isNull())
+        self._layout_pixmap()
+
     def slide_state(self) -> Optional[tuple]:
         """The name on screen (title, subtitle), or None."""
         if not self._slide_wanted:
@@ -2934,7 +2984,7 @@ class DropZone(QFrame):
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(100)
+        self.setMinimumHeight(76)
         self.setMaximumHeight(156)
         self.setProperty("dragActive", "false")
         self.setProperty("loaded", "false")
@@ -3080,7 +3130,7 @@ class Playlist(QListWidget):
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setIconSize(self.ICON)
         self.setUniformItemSizes(True)
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(56)
         self.setMaximumHeight(150)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setToolTip("Click an entry to put it on the screen · drag to reorder")
@@ -3266,7 +3316,7 @@ class CuePad(QFrame):
         self.setProperty("playing", "false")
         self.setProperty("paused", "false")
         self.setProperty("filled", "false")
-        self.setFixedHeight(88)
+        self.setFixedHeight(76)
         self.setMinimumWidth(140)
         self._scrubbing = False
         self._duration = 0
@@ -3465,6 +3515,21 @@ class CuePad(QFrame):
         event.acceptProposedAction()
 
 
+class FileGrid(QListWidget):
+    """The Library's files: dragged out, they carry the files themselves - onto a screen, a card, a step."""
+
+    def mimeTypes(self):  # noqa: N802
+        return ["text/uri-list"]
+
+    def mimeData(self, items):  # noqa: N802
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(item.data(Qt.UserRole)) for item in items])
+        return data
+
+
+FAVOURITES = "*favourites*"
+
+
 class MediaLibrary(QWidget):
     """
     Browse the folders the event material lives in, without leaving the app.
@@ -3478,6 +3543,7 @@ class MediaLibrary(QWidget):
     queueRequested = Signal(str, list)    # role, paths
     cueRequested = Signal(int, str)       # slot, path
     buildRequested = Signal()
+    favouritesChanged = Signal()
 
     GRID = QSize(158, 132)
     THUMB = QSize(138, 78)
@@ -3487,6 +3553,8 @@ class MediaLibrary(QWidget):
         super().__init__(parent)
         self._folder = ""
         self._pinned: List[str] = []
+        self._favourites: List[str] = []
+        self._show_favourites = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 10, 0, 0)
@@ -3565,7 +3633,7 @@ class MediaLibrary(QWidget):
         self.folders.itemClicked.connect(self._on_folder_activated)
         split.addWidget(self.folders)
 
-        self.files = QListWidget()
+        self.files = FileGrid()
         self.files.setViewMode(QListView.ViewMode.IconMode)
         self.files.setResizeMode(QListView.ResizeMode.Adjust)
         self.files.setMovement(QListView.Movement.Static)
@@ -3580,6 +3648,9 @@ class MediaLibrary(QWidget):
         self.files.setUniformItemSizes(True)
         self.files.itemSelectionChanged.connect(self._sync_actions)
         self.files.itemDoubleClicked.connect(self._on_double_click)
+        self.files.setDragEnabled(True)
+        self.files.setDragDropMode(QAbstractItemView.DragOnly)
+        self.files.setDefaultDropAction(Qt.CopyAction)
         split.addWidget(self.files, 1)
         outer.addLayout(split, 1)
 
@@ -3590,6 +3661,10 @@ class MediaLibrary(QWidget):
         self.selection_label.setObjectName("cardHint")
         self.selection_label.setMinimumWidth(150)
         actions.addWidget(self.selection_label)
+        self.fav_button = QPushButton("  ☆ Favourite")
+        self.fav_button.setToolTip("Keep the selected files under ★ Favourites, whichever folder they are in")
+        self.fav_button.clicked.connect(self._toggle_favourite)
+        actions.addWidget(self.fav_button)
 
         actions.addSpacing(10)
         show_caption = QLabel("Show now on")
@@ -3658,21 +3733,24 @@ class MediaLibrary(QWidget):
     def _rebuild_places(self) -> None:
         self.places.blockSignals(True)
         self.places.clear()
+        self.places.addItem("★  Favourites", FAVOURITES)
         # An unpinned folder still gets an entry, otherwise the picker goes blank
         # and it looks as though nothing is open.
-        if self._folder and self._folder not in self._pinned:
+        if self._folder and self._folder not in self._pinned and not self._show_favourites:
             self.places.addItem(
                 (os.path.basename(self._folder) or self._folder) + "   (not pinned)", self._folder)
         for folder in self._pinned:
             self.places.addItem(os.path.basename(folder) or folder, folder)
-        index = self.places.findData(self._folder)
+        index = self.places.findData(FAVOURITES if self._show_favourites else self._folder)
         self.places.setCurrentIndex(index if index >= 0 else 0)
         self.places.blockSignals(False)
 
     @Slot(int)
     def _on_place_chosen(self, index: int) -> None:
         folder = self.places.itemData(index)
-        if folder:
+        if folder == FAVOURITES:
+            self.show_favourites()
+        elif folder:
             self.set_folder(folder)
 
     def _pin_current(self) -> None:
@@ -3699,6 +3777,7 @@ class MediaLibrary(QWidget):
         """
         if not folder or not os.path.isdir(folder):
             return
+        self._show_favourites = False
         self._folder = os.path.normpath(folder)
         self.path_label.setText(self._folder)
         self._fill_folders()
@@ -3747,42 +3826,81 @@ class MediaLibrary(QWidget):
 
     def _fill_files(self) -> None:
         self.files.clear()
-        if not self._folder:
-            return
         needle = self.search.text().strip().lower()
-        try:
-            entries = sorted(
-                (e for e in os.scandir(self._folder) if e.is_file()),
-                key=lambda e: e.name.lower())
-        except OSError:
-            return
+        if self._show_favourites:
+            candidates = [(os.path.basename(p), p) for p in self._favourites if os.path.isfile(p)]
+            where = "★  Favourites  -  from every folder"
+        else:
+            if not self._folder:
+                return
+            try:
+                entries = sorted(
+                    (e for e in os.scandir(self._folder) if e.is_file()),
+                    key=lambda e: e.name.lower())
+            except OSError:
+                return
+            candidates = [(e.name, e.path) for e in entries]
+            where = self._folder
+        starred = {os.path.normcase(p) for p in self._favourites}
 
         shown = 0
-        for entry in entries:
-            extension = os.path.splitext(entry.name)[1].lower()
+        for name, path in candidates:
+            extension = os.path.splitext(name)[1].lower()
             if extension not in IMAGE_EXTENSIONS and extension not in VIDEO_EXTENSIONS \
                     and extension not in AUDIO_EXTENSIONS:
                 continue
-            if needle and needle not in entry.name.lower():
+            if needle and needle not in name.lower():
                 continue
             if shown >= self.MAX_ITEMS:
                 break
+            label = ("★ " if os.path.normcase(os.path.normpath(path)) in starred else "") + name
             item = QListWidgetItem(
-                self.files.fontMetrics().elidedText(
-                    entry.name, Qt.ElideMiddle, self.GRID.width() - 18))
-            item.setData(Qt.UserRole, os.path.normpath(entry.path))
-            item.setToolTip(entry.path)
-            item.setIcon(self._thumb_for(entry.path, extension))
+                self.files.fontMetrics().elidedText(label, Qt.ElideMiddle, self.GRID.width() - 18))
+            item.setData(Qt.UserRole, os.path.normpath(path))
+            item.setToolTip(path + "\n\nDrag it onto a screen in the header, or onto a card, to show it.")
+            item.setIcon(self._thumb_for(path, extension))
             item.setTextAlignment(Qt.AlignHCenter | Qt.AlignTop)
             self.files.addItem(item)
             shown += 1
 
-        total = shown
-        note = f"{self._folder}      {total} item(s)"
+        note = f"{where}      {shown} item(s)"
         if shown >= self.MAX_ITEMS:
             note += f"  —  showing the first {self.MAX_ITEMS}, use the filter to narrow it"
+        if self._show_favourites and not candidates:
+            note = "★  Favourites  -  none yet: select files in any folder and press ☆ Favourite"
         self.path_label.setText(note)
         self._sync_actions()
+
+    # -- favourites ----------------------------------------------------------- #
+
+    def favourites(self) -> List[str]:
+        return list(self._favourites)
+
+    def set_favourites(self, paths: List[str]) -> None:
+        self._favourites = [os.path.normpath(p) for p in paths if p]
+
+    def show_favourites(self) -> None:
+        self._show_favourites = True
+        self.folders.clear()
+        self._fill_files()
+        self._rebuild_places()
+
+    def _toggle_favourite(self) -> None:
+        paths = self.selected_paths()
+        if not paths:
+            return
+        starred = {os.path.normcase(p) for p in self._favourites}
+        if all(os.path.normcase(p) in starred for p in paths):
+            wanted = {os.path.normcase(p) for p in paths}
+            self._favourites = [p for p in self._favourites if os.path.normcase(p) not in wanted]
+        else:
+            self._favourites += [p for p in paths if os.path.normcase(p) not in starred]
+        self.favouritesChanged.emit()
+        selected = set(paths)
+        self._fill_files()
+        for row in range(self.files.count()):
+            item = self.files.item(row)
+            item.setSelected(item.data(Qt.UserRole) in selected)
 
     def _tile(self, pixmap: QPixmap) -> QIcon:
         """
@@ -3849,6 +3967,10 @@ class MediaLibrary(QWidget):
         else:
             self.selection_label.setText(f"{len(paths)} items selected")
 
+        starred = {os.path.normcase(p) for p in self._favourites}
+        self.fav_button.setEnabled(bool(paths))
+        self.fav_button.setText("  ★ Unfavourite" if paths and all(os.path.normcase(p) in starred for p in paths)
+                                else "  ☆ Favourite")
         for button in self.show_buttons.values():
             button.setEnabled(len(visual) == 1 and not audio)
         for button in self.queue_buttons.values():
@@ -3881,6 +4003,19 @@ class MediaLibrary(QWidget):
             self.queueRequested.emit("", [path])   # "" means the active card
 
 
+# Ready-made looks for names on screen; the operator can save more.
+TEXT_LOOKS = {
+    "Name + role, low (lower third)": {"title_px": 72, "subtitle_px": 40, "position": "bottom", "scrim": True,
+                                        "colour": "#ffffff", "subtitle_colour": "#cfd8e6"},
+    "Big title, centre": {"title_px": 130, "subtitle_px": 56, "position": "middle", "scrim": False,
+                          "colour": "#ffffff", "subtitle_colour": "#e9edf5"},
+    "Award: gold name": {"title_px": 96, "subtitle_px": 46, "position": "middle", "scrim": True,
+                         "colour": "#ffd23f", "subtitle_colour": "#ffffff"},
+    "Caption at the top": {"title_px": 64, "subtitle_px": 36, "position": "top", "scrim": True,
+                           "colour": "#ffffff", "subtitle_colour": "#cfd8e6"},
+}
+
+
 class TextSlides(QWidget):
     """
     Names on screen, prepared in advance and stepped through live.
@@ -3894,6 +4029,7 @@ class TextSlides(QWidget):
     hideRequested = Signal()
     styleChanged = Signal()
     targetChanged = Signal(str)
+    looksChanged = Signal()
 
     SEPARATOR = "|"
 
@@ -3901,6 +4037,11 @@ class TextSlides(QWidget):
         super().__init__(parent)
         self._title_colour = QColor("#ffffff")
         self._subtitle_colour = QColor("#cfd8e6")
+        self.custom_looks: Dict[str, dict] = {}
+        # set by the dashboard: a live picture of a screen, and a screen's real size
+        self.preview_source: Optional[Callable[[str, QSize], Optional[QPixmap]]] = None
+        self.stage_size: Optional[Callable[[str], QSize]] = None
+        self._preview_window: Optional[SceneOutputWindow] = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 10, 0, 0)
@@ -3957,6 +4098,16 @@ class TextSlides(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(5)
+        self.preview_caption = QLabel("PREVIEW")
+        self.preview_caption.setObjectName("sectionTitle")
+        right.addWidget(self.preview_caption)
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setMinimumHeight(140)
+        self.preview_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.preview_label.setStyleSheet("background: #05070b; border-radius: 8px;")
+        self.preview_label.setToolTip("The selected name, as it will look on that screen - over what it shows now")
+        right.addWidget(self.preview_label)
         caption2 = QLabel("SLIDES  —  click one to put it on screen")
         caption2.setObjectName("sectionTitle")
         right.addWidget(caption2)
@@ -3970,6 +4121,16 @@ class TextSlides(QWidget):
         # --- look ----------------------------------------------------------- #
         look = QHBoxLayout()
         look.setSpacing(7)
+        self.look_combo = QComboBox()
+        self.look_combo.setToolTip("Ready-made looks: size, position, colours and shade in one go")
+        self.look_combo.activated.connect(self._on_look_chosen)
+        look.addWidget(self.look_combo)
+        save_look = QPushButton("  Save look…")
+        save_look.setIcon(Icons.get("save", CLR_TEXT, 15))
+        save_look.setToolTip("Keep the current size, position and colours as a look of your own")
+        save_look.clicked.connect(self._save_look)
+        look.addWidget(save_look)
+        look.addSpacing(8)
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(QFont("Segoe UI"))
         self.font_combo.setMaximumWidth(210)
@@ -4025,6 +4186,13 @@ class TextSlides(QWidget):
         look.addStretch(1)
         outer.addLayout(look)
         self._update_swatches()
+        self._fill_looks()
+        self.styleChanged.connect(self.refresh_preview)
+        self.slides.currentRowChanged.connect(lambda _r: self.refresh_preview())
+        self.target.currentIndexChanged.connect(lambda _i: self.refresh_preview())
+        self._preview_timer = QTimer(self)
+        self._preview_timer.timeout.connect(self.refresh_preview)
+        self._preview_timer.start(1500)      # the screen behind the text keeps moving
 
         # --- transport ------------------------------------------------------ #
         transport = QHBoxLayout()
@@ -4060,6 +4228,93 @@ class TextSlides(QWidget):
         outer.addLayout(transport)
 
         root.addWidget(card, 1)
+
+    # -- looks ---------------------------------------------------------------- #
+
+    def _fill_looks(self) -> None:
+        self.look_combo.blockSignals(True)
+        self.look_combo.clear()
+        self.look_combo.addItem("Look…", "")
+        for name in TEXT_LOOKS:
+            self.look_combo.addItem(name, name)
+        for name in self.custom_looks:
+            self.look_combo.addItem(f"★ {name}", name)
+        self.look_combo.blockSignals(False)
+
+    def set_custom_looks(self, looks: Dict[str, dict]) -> None:
+        self.custom_looks = {k: v for k, v in looks.items() if isinstance(v, dict)}
+        self._fill_looks()
+
+    def _on_look_chosen(self, index: int) -> None:
+        name = self.look_combo.itemData(index)
+        self.look_combo.setCurrentIndex(0)
+        look = self.custom_looks.get(name) or TEXT_LOOKS.get(name)
+        if look:
+            self.apply_look(look)
+
+    def apply_look(self, look: dict) -> None:
+        widgets = (self.font_combo, self.title_size, self.subtitle_size, self.position, self.scrim)
+        for widget in widgets:
+            widget.blockSignals(True)
+        if look.get("family"):
+            self.font_combo.setCurrentFont(QFont(look["family"]))
+        self.title_size.setValue(int(look.get("title_px", self.title_size.value())))
+        self.subtitle_size.setValue(int(look.get("subtitle_px", self.subtitle_size.value())))
+        self.position.setCurrentIndex(max(0, self.position.findData(look.get("position", "middle"))))
+        self.scrim.setChecked(bool(look.get("scrim", True)))
+        self._title_colour = QColor(look.get("colour", self._title_colour.name()))
+        self._subtitle_colour = QColor(look.get("subtitle_colour", self._subtitle_colour.name()))
+        for widget in widgets:
+            widget.blockSignals(False)
+        self._update_swatches()
+        self.styleChanged.emit()
+
+    def _save_look(self) -> None:
+        name, accepted = QInputDialog.getText(self, "Save look", "Name for this look:")
+        name = name.strip()
+        if not accepted or not name:
+            return
+        self.custom_looks[name] = self.style_dict()
+        self._fill_looks()
+        self.looksChanged.emit()
+
+    # -- preview --------------------------------------------------------------- #
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self.refresh_preview)
+
+    def refresh_preview(self) -> None:
+        """
+        The selected name as it will look: drawn by the same machinery as the
+        stage, at the screen's real size, over a picture of what it shows now.
+        """
+        if not self.isVisible() or self.stage_size is None:
+            return
+        role = self.target.currentData() or ROLE_MAIN
+        size = self.stage_size(role)
+        if size.isEmpty():
+            return
+        if self._preview_window is None:
+            self._preview_window = StandardOutputWindow("text preview")
+            self._preview_window.setWindowFlags(Qt.Widget)
+        window = self._preview_window
+        window.set_virtual_size(size)
+        width = max(160, self.preview_label.width() - 8)
+        height = int(width * size.height() / size.width())
+        if height > 220:
+            height = 220
+            width = int(height * size.width() / size.height())
+        backdrop = self.preview_source(role, QSize(max(1, width), max(1, height))) if self.preview_source else None
+        window.set_backdrop(backdrop)
+        item = self.slides.currentItem()
+        title, subtitle = item.data(Qt.UserRole) if item is not None else ("Nino Beridze", "Grade 5 · Mathematics")
+        window.set_slide_style(self.style_dict())
+        window.show_slide(title, subtitle, 0)
+        self.preview_label.setFixedHeight(max(40, height + 8))
+        self.preview_label.setPixmap(window.preview(QSize(max(1, width), max(1, height))))
+        self.preview_caption.setText(f"PREVIEW  ·  {ROLE_LABELS[role].upper()}  ·  {size.width()}×{size.height()}"
+                                     + ("" if item is not None else "  ·  sample name"))
 
     # -- running order ------------------------------------------------------ #
 
@@ -4206,8 +4461,8 @@ class OutputCard(QFrame):
         self._scrubbing = False
 
         self.root = QVBoxLayout(self)
-        self.root.setContentsMargins(13, 10, 13, 11)
-        self.root.setSpacing(7)
+        self.root.setContentsMargins(13, 9, 13, 10)
+        self.root.setSpacing(6)
 
         # --- header -------------------------------------------------------- #
         header = QHBoxLayout()
@@ -4565,10 +4820,12 @@ class TopCard(OutputCard):
         self.text_edit = QLineEdit()
         self.text_edit.setPlaceholderText("Text to scroll across the strip…")
         self.text_edit.textChanged.connect(self.marqueeTextChanged.emit)
-        self.root.addWidget(self.text_edit)
 
+        # the text, its speed and Start / Stop share one row: the card is the
+        # tallest on the Live tab, and the Live tab has to fit a 1080p desk
         speed_row = QHBoxLayout()
         speed_row.setSpacing(8)
+        speed_row.addWidget(self.text_edit, 3)
         speed_caption = QLabel("Speed")
         speed_caption.setObjectName("cardHint")
         speed_row.addWidget(speed_caption)
@@ -4576,6 +4833,7 @@ class TopCard(OutputCard):
         self.speed_slider.setRange(20, 800)
         self.speed_slider.setValue(180)
         self.speed_slider.valueChanged.connect(self._on_speed)
+        self.speed_slider.setMinimumWidth(70)
         speed_row.addWidget(self.speed_slider, 1)
         self.speed_label = QLabel("180 px/s")
         self.speed_label.setObjectName("cardHint")
@@ -5446,6 +5704,7 @@ class ControlPanel(QMainWindow):
         self._ready_dialog = None
         self._undo_snapshot: Optional[dict] = None
         self._rehearsal: Optional[RehearsalMonitor] = None
+        self._thumb_cache: Dict[tuple, QPixmap] = {}
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -5460,7 +5719,7 @@ class ControlPanel(QMainWindow):
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
 
-        self.tabs = QTabWidget()
+        self.tabs = desk_mod.PageTabs()
         self.tabs.addTab(self._build_live_tab(), "  Live  ")
         self.tabs.addTab(self._build_show_tab(), "  Show  ")
         self.tabs.addTab(self._build_presentation_tab(), "  Slides  ")
@@ -5472,7 +5731,7 @@ class ControlPanel(QMainWindow):
         self.dj_page = QWidget()
         dj_layout = QVBoxLayout(self.dj_page)
         dj_layout.setContentsMargins(0, 0, 0, 0)
-        self.tabs.addTab(self.dj_page, "  DJ  ")
+        self.tabs.addTab(self.dj_page, "  DJ  ", scroll=False)   # the DJ desk sizes itself
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
         self.screens_page = self._build_screens_tab()
         self.tabs.addTab(self.screens_page, "  Screens && Setup  ")
@@ -5534,7 +5793,7 @@ class ControlPanel(QMainWindow):
         bar = QFrame()
         bar.setObjectName("bar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(14, 8, 12, 8)
+        layout.setContentsMargins(14, 6, 12, 6)
         layout.setSpacing(16)
 
         left = QVBoxLayout()
@@ -6237,7 +6496,7 @@ class ControlPanel(QMainWindow):
         bar = QFrame()
         bar.setObjectName("bar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setContentsMargins(14, 6, 14, 6)
         layout.setSpacing(12)
 
         caption_box = QVBoxLayout()
@@ -6528,7 +6787,9 @@ class ControlPanel(QMainWindow):
 
     def _build_show_tab(self) -> QWidget:
         self.show_store = ShowStore(SHOW_FILE)
-        self.show_tab = ShowTab(self.show_store, Icons, THEME, touch=self.touch_enabled())
+        self.show_tab = ShowTab(self.show_store, Icons, THEME, touch=self.touch_enabled(),
+                                thumbs=lambda path: self._cached_thumb(path))
+        thumbnailer().ready.connect(lambda *_a: self.show_tab.list.viewport().update())
         self.show_tab.nextRequested.connect(self.show_next)
         self.show_tab.backRequested.connect(self.show_back)
         self.show_tab.restartRequested.connect(self.show_restart)
@@ -6542,6 +6803,18 @@ class ControlPanel(QMainWindow):
 
     def _show_output(self, role: str):
         return getattr(self, self.OUTPUT_ATTRS[role], None)
+
+    def _cached_thumb(self, path: str, width: int = 112, height: int = 64) -> Optional[QPixmap]:
+        """Small pictures for lists that repaint often: made once, kept."""
+        key = (path, width, height)
+        picture = self._thumb_cache.get(key)
+        if picture is None:
+            picture = small_picture(path, QSize(width, height))
+            if picture is not None:
+                if len(self._thumb_cache) > 400:
+                    self._thumb_cache.clear()
+                self._thumb_cache[key] = picture
+        return picture
 
     def _on_show_edited(self) -> None:
         """Steps added, moved or deleted mid-show: NOW stays on the step that is running."""
@@ -7020,6 +7293,15 @@ class ControlPanel(QMainWindow):
         self.text_slides.hideRequested.connect(self._hide_slide)
         self.text_slides.styleChanged.connect(self._on_slide_style_changed)
         self.text_slides.targetChanged.connect(self._on_slide_target_changed)
+        self.text_slides.stage_size = self._stage_size
+        self.text_slides.preview_source = (
+            lambda role, size: self._show_output(role).preview(size) if self._show_output(role) else None)
+        try:
+            self.text_slides.set_custom_looks(json.loads(self.settings.value("text/looks", "") or "{}"))
+        except (ValueError, TypeError):
+            pass
+        self.text_slides.looksChanged.connect(
+            lambda: self.settings.setValue("text/looks", json.dumps(self.text_slides.custom_looks)))
         return self.text_slides
 
     def _slide_output(self):
@@ -7178,6 +7460,8 @@ class ControlPanel(QMainWindow):
         self.library.queueRequested.connect(self._library_queue)
         self.library.cueRequested.connect(self._assign_cue)
         self.library.buildRequested.connect(self.build_show_from_folder)
+        self.library.favouritesChanged.connect(
+            lambda: self.settings.setValue("library/favourites", self.library.favourites()))
         return self.library
 
     def _restore_library_places(self) -> None:
@@ -7185,6 +7469,10 @@ class ControlPanel(QMainWindow):
         if isinstance(stored, str):
             stored = [stored] if stored else []
         self.library.set_pinned([str(f) for f in (stored or [])])
+        favourites = self.settings.value("library/favourites", [])
+        if isinstance(favourites, str):
+            favourites = [favourites] if favourites else []
+        self.library.set_favourites([str(f) for f in (favourites or [])])
         last = self.settings.value("library/last", "")
         folders = self.library.pinned()
         self.library.set_folder(last if last and os.path.isdir(last)
@@ -7224,8 +7512,8 @@ class ControlPanel(QMainWindow):
         bar = QFrame()
         bar.setObjectName("card")
         layout = QVBoxLayout(bar)
-        layout.setContentsMargins(14, 10, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 8, 14, 10)
+        layout.setSpacing(7)
 
         header = QHBoxLayout()
         header.setSpacing(8)
@@ -7241,6 +7529,10 @@ class ControlPanel(QMainWindow):
         hint.setObjectName("keyHint")
         header.addWidget(hint)
         header.addStretch(1)
+        self.now_playing = QLabel("")
+        self.now_playing.setToolTip("The sound that ends soonest, and how long it has left")
+        header.addWidget(self.now_playing)
+        header.addSpacing(10)
 
         header.addWidget(QLabel("Output"))
         self.audio_device_combo = QComboBox()
@@ -7258,6 +7550,11 @@ class ControlPanel(QMainWindow):
         self.sound_master.valueChanged.connect(self._on_master_volume)
         header.addWidget(self.sound_master)
 
+        fade_all = QPushButton("  Fade out")
+        fade_all.setIcon(Icons.get("volume", CLR_TEXT, 15))
+        fade_all.setToolTip("Fade every sound out gently, over three seconds")
+        fade_all.clicked.connect(self._fade_all_sound)
+        header.addWidget(fade_all)
         stop_all = QPushButton("  STOP SOUND")
         stop_all.setObjectName("danger")
         stop_all.setIcon(Icons.get("stop", CLR_DANGER, 15))
@@ -7335,6 +7632,39 @@ class ControlPanel(QMainWindow):
     def _refresh_cue_pads(self) -> None:
         for pad, cue in zip(self.cue_pads, self.sound.cues):
             pad.show_cue(cue)
+        self._refresh_now_playing()
+
+    def _refresh_now_playing(self) -> None:
+        """Big and plain: what is playing, and how long until it stops."""
+        playing = [cue for cue in list(self.sound.cues) + list(self._show_players) if cue.is_playing()]
+        if not playing:
+            if self.now_playing.text():
+                self.now_playing.setText("")
+            return
+
+        def left(cue) -> float:
+            if cue.loop or cue.duration() <= 0:
+                return float("inf")
+            return max(0, cue.duration() - cue.position())
+
+        cue = min(playing, key=left)
+        remaining = left(cue)
+        name = cue.label() + ("  (running order)" if cue in self._show_players else "")
+        more = f"   +{len(playing) - 1}" if len(playing) > 1 else ""
+        if remaining == float("inf"):
+            text, colour = f"♪  {name}  ·  looping{more}", CLR_OK
+        else:
+            text = f"♪  {name}  ·  {format_time(int(remaining))} left{more}"
+            colour = CLR_WARN if remaining < 10000 else CLR_OK
+        self.now_playing.setText(text)
+        self.now_playing.setStyleSheet(f"color: {colour}; font-size: 15px; font-weight: 700;")
+
+    @Slot()
+    def _fade_all_sound(self) -> None:
+        self.sound.stop_all(3000)
+        for player in self._show_players:
+            player.stop(3000)
+        self.statusBar().showMessage("Fading every sound out…", 4000)
 
     def _assign_cue(self, index: int, path: str) -> None:
         try:
@@ -7708,7 +8038,19 @@ class ControlPanel(QMainWindow):
         tab.globalToggled.connect(self._on_clicker_global)
         tab.powerpointToggled.connect(
             lambda on: self.settings.setValue("slides/powerpoint", "true" if on else "false"))
+        tab.limit_spin.setValue(int(self.settings.value("slides/limit", 0) or 0))
+        tab.countdown_combo.setCurrentIndex(max(0, tab.countdown_combo.findData(
+            str(self.settings.value("slides/countdown", "") or ""))))
+        tab.limitChanged.connect(lambda minutes: self.settings.setValue("slides/limit", minutes))
+        tab.countdownTargetChanged.connect(lambda role: self.settings.setValue("slides/countdown", role))
+        tab.countdown.connect(self._on_countdown)
         return tab
+
+    @Slot(str, str, str)
+    def _on_countdown(self, role: str, text: str, colour: str) -> None:
+        window = self._show_output(role) if role in STAGE_ROLES else None
+        if window is not None:
+            window.set_corner_text(text, colour)
 
     def _recent_decks(self) -> List[str]:
         stored = self.settings.value("slides/recent", [])
@@ -7791,7 +8133,7 @@ class ControlPanel(QMainWindow):
             shortcut.setEnabled(not on_dj)
         # Presets describe the stage screens; the DJ desk wants the height.
         # The header, with BLACKOUT, stays.
-        self.preset_bar.setVisible(not on_dj)
+        self.preset_bar.setVisible(self.tabs.widget(index) in (self.tabs.widget(0), self.library))
         if on_dj and self.dj_panel is None:
             self._build_dj_panel()
         self._refresh_show_strip()

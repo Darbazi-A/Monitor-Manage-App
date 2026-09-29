@@ -17,8 +17,8 @@ import os
 import uuid
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import QRectF, QSize, Qt, QTime, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
@@ -59,6 +59,7 @@ def new_step(title: str = "New step") -> dict:
         "marquee": {"mode": "keep", "text": ""},
         "slides": {"mode": "keep", "path": "", "target": "main"},
         "advance": {"mode": "manual", "seconds": 10},
+        "minutes": 0,                   # how long it takes, roughly; 0 = not said
     }
 
 
@@ -70,6 +71,8 @@ def normalise_step(data: dict) -> dict:
     for key in ("id", "title", "notes"):
         if isinstance(data.get(key), str):
             step[key] = data[key]
+    if isinstance(data.get("minutes"), (int, float)) and data["minutes"] >= 0:
+        step["minutes"] = data["minutes"]
     for role in ROLES:
         step["screens"][role].update((data.get("screens") or {}).get(role) or {})
     for part in ("sound", "text", "marquee", "slides", "advance"):
@@ -231,16 +234,26 @@ class StepDelegate(QStyledItemDelegate):
         painter.setPen(QColor(theme["ink"] if now else theme["dim"]))
         painter.setFont(_font(9, QFont.Bold))
         painter.drawText(badge, Qt.AlignCenter, str(row + 1))
-        # text
+        # pictures of what it puts on the screens, right-aligned before the tag
         left = badge.right() + 12
         tag_w = 58 if (now or upcoming) else 0
-        text_rect = QRectF(left, rect.top() + 7, rect.right() - left - tag_w - 10, rect.height() / 2 - 4)
+        pictures_right = rect.right() - tag_w - (14 if tag_w else 8)
+        pictures_w = self._paint_pictures(painter, step, pictures_right, rect)
+        minutes = step.get("minutes") or 0
+        minutes_w = 60 if minutes else 0
+        text_rect = QRectF(left, rect.top() + 7, rect.right() - left - tag_w - 10 - pictures_w - minutes_w,
+                           rect.height() / 2 - 4)
+        if minutes:
+            painter.setPen(QColor(theme["muted"]))
+            painter.setFont(_font(8.5))
+            painter.drawText(QRectF(text_rect.right() + 4, text_rect.top(), minutes_w - 18, text_rect.height()),
+                             Qt.AlignRight | Qt.AlignVCenter, f"{minutes:g} min")
         painter.setPen(QColor(theme["text"]))
         painter.setFont(_font(10.5, QFont.DemiBold))
         metrics = painter.fontMetrics()
         painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter,
                          metrics.elidedText(step["title"] or "Untitled", Qt.ElideRight, int(text_rect.width())))
-        sub_rect = QRectF(left, rect.center().y() + 1, text_rect.width(), rect.height() / 2 - 8)
+        sub_rect = QRectF(left, rect.center().y() + 1, text_rect.width() + minutes_w, rect.height() / 2 - 8)
         painter.setPen(QColor(theme["muted"]))
         painter.setFont(_font(8.5))
         metrics = painter.fontMetrics()
@@ -258,6 +271,51 @@ class StepDelegate(QStyledItemDelegate):
             painter.setFont(_font(7.5, QFont.Bold))
             painter.drawText(tag, Qt.AlignCenter, "NOW" if now else "NEXT")
         painter.restore()
+
+    def _paint_pictures(self, painter: QPainter, step: dict, right: float, rect: QRectF) -> float:
+        """Main Stage and Side Screens as small pictures; black as black. Returns the width used."""
+        provider = self.tab.thumbs
+        if provider is None:
+            return 0.0
+        wanted = [role for role in ("main", "sides") if step["screens"][role]["mode"] in ("file", "black")]
+        if not wanted:
+            return 0.0
+        height = min(34.0, rect.height() - 16)
+        width = height * 16 / 9
+        x = right - len(wanted) * (width + 6)
+        top = rect.center().y() - height / 2
+        for role in wanted:
+            box = QRectF(x, top, width, height)
+            clip = QPainterPath()
+            clip.addRoundedRect(box, 4, 4)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#05070b"))
+            painter.drawPath(clip)
+            screen = step["screens"][role]
+            picture = provider(screen["path"]) if screen["mode"] == "file" and screen["path"] else None
+            if picture is not None and not picture.isNull():
+                pw, ph = picture.width(), picture.height()
+                scale = max(width / pw, height / ph)
+                sw, sh = width / scale, height / scale
+                painter.save()
+                painter.setClipPath(clip)
+                painter.drawPixmap(box, picture, QRectF((pw - sw) / 2, (ph - sh) / 2, sw, sh))
+                painter.restore()
+            elif screen["mode"] == "file":
+                painter.setPen(QColor(self.tab.theme["danger"] if screen["path"] and not os.path.isfile(screen["path"])
+                                      else self.tab.theme["muted"]))
+                painter.setFont(_font(7))
+                painter.drawText(box, Qt.AlignCenter, "missing" if screen["path"] else "?")
+            painter.setPen(QPen(QColor(self.tab.theme["edge"]), 1))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(box, 4, 4)
+            x += width + 6
+        return len(wanted) * (width + 6)
+
+
+def _duration(seconds: float) -> str:
+    minutes = int(round(seconds / 60))
+    return f"{minutes // 60} h {minutes % 60:02d} min" if minutes >= 60 else f"{minutes} min"
 
 
 def _font(size: float, weight: int = QFont.Normal) -> QFont:
@@ -362,11 +420,14 @@ class ShowTab(QWidget):
     showSwitched = Signal()
     edited = Signal()
 
-    def __init__(self, store: ShowStore, icons, theme: dict, touch: bool = False) -> None:
+    def __init__(self, store: ShowStore, icons, theme: dict, touch: bool = False,
+                 thumbs: Optional[Callable[[str], Optional[QPixmap]]] = None) -> None:
         super().__init__()
         self.store = store
         self.icons = icons
         self.theme = theme
+        self.thumbs = thumbs            # path -> small picture, or None while it is being made
+        self._elapsed: Optional[float] = None
         self.running_index = -1
         self.row_height = 62 if touch else 54
         self._loading = False
@@ -534,6 +595,9 @@ class ShowTab(QWidget):
         self.list.itemDoubleClicked.connect(lambda item: self.goRequested.emit(self.list.row(item)))
         self.list.model().rowsMoved.connect(self._on_rows_moved)
         box.addWidget(self.list, 1)
+        self.total_label = QLabel("")
+        self.total_label.setObjectName("cardHint")
+        box.addWidget(self.total_label)
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
         for text, icon, tip, handler in (
@@ -686,6 +750,20 @@ class ShowTab(QWidget):
         self.advance_seconds.setSuffix(" s")
         self.advance_seconds.valueChanged.connect(self._on_advance)
         row.addWidget(self.advance_seconds)
+        form.addLayout(row)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(_caption("Takes about"))
+        self.minutes_spin = QSpinBox()
+        self.minutes_spin.setRange(0, 240)
+        self.minutes_spin.setSuffix(" min")
+        self.minutes_spin.setSpecialValueText("not said")
+        self.minutes_spin.setToolTip("Roughly how long this part of the event lasts - adds up to the show's length\n"
+                                     "and when it should end")
+        self.minutes_spin.valueChanged.connect(
+            lambda value: self._edit(lambda s: s.__setitem__("minutes", value)))
+        row.addWidget(self.minutes_spin)
+        row.addStretch(1)
         form.addLayout(row)
         form.addStretch(1)
         self.empty_note = QLabel("Add a step with “+ Step”, or set the screens up on the Live tab and "
@@ -914,6 +992,9 @@ class ShowTab(QWidget):
             self.advance_seconds.blockSignals(True)
             self.advance_seconds.setValue(int(step["advance"]["seconds"]))
             self.advance_seconds.blockSignals(False)
+            self.minutes_spin.blockSignals(True)
+            self.minutes_spin.setValue(int(step.get("minutes") or 0))
+            self.minutes_spin.blockSignals(False)
         self._loading = False
         self._sync_enabled()
 
@@ -1002,7 +1083,30 @@ class ShowTab(QWidget):
         self._edit(lambda s: s["advance"].update(
             mode=self.advance_mode.currentData(), seconds=self.advance_seconds.value()))
 
+    def _refresh_total(self) -> None:
+        """How long the whole show is, and - once it runs - when it should end."""
+        steps = self.steps()
+        if not steps:
+            self.total_label.setText("")
+            return
+        timed = [s.get("minutes") or 0 for s in steps]
+        total = sum(timed)
+        unsaid = sum(1 for m in timed if not m)
+        text = f"{len(steps)} step(s)"
+        if total:
+            text += f"  ·  about {_duration(total * 60)}"
+            if unsaid:
+                text += f"  ({unsaid} without a time)"
+        index = self.running_index
+        if total and 0 <= index < len(steps) and self._elapsed is not None:
+            current = (steps[index].get("minutes") or 0) * 60
+            left = max(0.0, current - self._elapsed) + sum(timed[index + 1:]) * 60
+            end = QTime.currentTime().addSecs(int(left))
+            text += f"  ·  ends about {end.toString('HH:mm')}"
+        self.total_label.setText(text)
+
     def _refresh_missing(self) -> None:
+        self._refresh_total()
         gone = missing_files(self.steps())
         self.missing_label.setText(f"⚠ {len(gone)} file(s) missing" if gone else "")
         self.missing_label.setToolTip("\n".join(gone))
@@ -1030,14 +1134,29 @@ class ShowTab(QWidget):
             self.next_summary.setText("")
         self.next_btn.setEnabled(upcoming is not None)
         self.list.viewport().update()
+        if index < 0:
+            self._elapsed = None
+        self._refresh_total()
         if 0 <= index < self.list.count():
             self.list.scrollToItem(self.list.item(index), QAbstractItemView.PositionAtCenter)
 
     def set_clock(self, elapsed: Optional[float], auto_remaining: Optional[float], auto_text: str = "") -> None:
+        changed_minute = (self._elapsed is None) != (elapsed is None) or \
+            (elapsed is not None and self._elapsed is not None and int(elapsed) // 15 != int(self._elapsed) // 15)
+        self._elapsed = elapsed
         if elapsed is None:
             self.now_clock.setText("")
+            self.now_clock.setStyleSheet("")
         else:
-            self.now_clock.setText(f"running {int(elapsed // 60)}:{int(elapsed % 60):02d}")
+            text = f"running {int(elapsed // 60)}:{int(elapsed % 60):02d}"
+            step = self.step_at(self.running_index)
+            planned = (step.get("minutes") or 0) * 60 if step else 0
+            if planned:
+                text += f"  of about {_duration(planned)}"
+            self.now_clock.setText(text)
+            self.now_clock.setStyleSheet(f"color: {self.theme['warn']};" if planned and elapsed > planned else "")
+        if changed_minute:
+            self._refresh_total()
         if auto_remaining is not None:
             self.next_auto.setText(f"goes on by itself in {int(auto_remaining + 0.99)} s")
         else:
