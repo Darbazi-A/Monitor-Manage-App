@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QSizePolicy, QTabWidget, QToolTip, QVBoxLayout, QWidget)
@@ -974,3 +974,42 @@ class RecoveryDialog(QDialog):
             return
         self.countdown.setText(f"Putting it back by itself in {self._left} s…")
         self._left -= 1
+
+
+# --------------------------------------------------------------------------- #
+# Dark room
+# --------------------------------------------------------------------------- #
+
+class DimOverlay(QWidget):
+    """
+    A veil of black over the whole dashboard, for a dark hall. It is only
+    paint: clicks, touches and keys go straight through to what is under it.
+    """
+
+    def __init__(self, window: QWidget) -> None:
+        super().__init__(window)
+        self.amount = 0.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setFocusPolicy(Qt.NoFocus)
+        window.installEventFilter(self)
+        self.hide()
+
+    def set_amount(self, amount: float) -> None:
+        self.amount = amount
+        self.setGeometry(self.parentWidget().rect())
+        self.setVisible(amount > 0)
+        self.raise_()
+        self.update()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self.parentWidget() and event.type() in (QEvent.Resize, QEvent.Show, QEvent.ChildAdded):
+            self.setGeometry(watched.rect())
+            if self.isVisible():
+                self.raise_()
+        return False
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, int(255 * self.amount)))
+        painter.end()

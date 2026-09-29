@@ -446,7 +446,7 @@ class ControlPanel(QMainWindow):
         # The look - touch-sized or not - goes on once, before a single widget
         # exists: re-styling the finished window cost over half a second of start-up.
         app = QApplication.instance()
-        sheet = STYLESHEET + (TOUCH_STYLESHEET if self.touch_enabled() else "")
+        sheet = STYLESHEET + (touch_stylesheet() if self.touch_enabled() else "")
         if app is not None and app.styleSheet() != sheet:
             app.setStyleSheet(sheet)
         self._freshly_opened: set = set()
@@ -557,6 +557,11 @@ class ControlPanel(QMainWindow):
         self._multiview_timer = QTimer(self)
         self._multiview_timer.timeout.connect(self._refresh_multiview)
         self._multiview_timer.start(500)
+        self.dim_overlay = desk_mod.DimOverlay(self)
+        try:
+            self._set_dark_room(int(self.settings.value("ui/darkroom", 0) or 0))
+        except (TypeError, ValueError):
+            self._set_dark_room(0)
         self._set_mode(str(self.settings.value("ui/mode", "setup")), check=False)
         self._refresh_show_strip()
         # What is on stage is written down every few seconds; after a crash it is offered back.
@@ -689,6 +694,12 @@ class ControlPanel(QMainWindow):
         blackout.clicked.connect(self._blackout_all)
         bottom_row.addWidget(blackout)
 
+        self.dark_btn = icon_button("moon", "Dark room: dim this screen so its light does not spill into the hall",
+                                    CLR_DIM, 16)
+        self.dark_btn.setObjectName("ghost")
+        self.dark_btn.setCheckable(True)
+        self.dark_btn.clicked.connect(self._cycle_dark_room)
+        bottom_row.addWidget(self.dark_btn)
         shrink = icon_button("compress", "Shrink to a small bar that stays on top",
                              CLR_DIM, 16)
         shrink.setObjectName("ghost")
@@ -807,6 +818,30 @@ class ControlPanel(QMainWindow):
             self.mode_note.setStyleSheet("")
         if show and check and any(row["status"] == "fail" for row in self._ready_checks()):
             self._open_ready_check()
+
+    # -- dark room ------------------------------------------------------------ #
+
+    DARK_LEVELS = ((0.0, "off"), (0.38, "dim"), (0.6, "darker"))
+
+    @Slot()
+    def _cycle_dark_room(self) -> None:
+        self._set_dark_room((self.dark_level + 1) % len(self.DARK_LEVELS))
+
+    def _set_dark_room(self, level: int) -> None:
+        """
+        During the event the desk sits in a dark hall; a bright dashboard lights
+        up the operator's face and the front rows. Two steps darker, clicks still
+        pass straight through, and the stage itself is never touched.
+        """
+        level = max(0, min(level, len(self.DARK_LEVELS) - 1))
+        self.dark_level = level
+        self.settings.setValue("ui/darkroom", level)
+        amount, name = self.DARK_LEVELS[level]
+        self.dim_overlay.set_amount(amount)
+        self.dark_btn.setChecked(level > 0)
+        following = self.DARK_LEVELS[(level + 1) % len(self.DARK_LEVELS)][1]
+        self.dark_btn.setToolTip(f"Dark room: {name} - click for {following}. "
+                                 "Dims this screen so its light does not spill into the hall.")
 
     # -- PREVIEW -> TAKE ------------------------------------------------------- #
 
@@ -3382,7 +3417,7 @@ class ControlPanel(QMainWindow):
     def _apply_touch_mode(self) -> None:
         touch = self.touch_enabled()
         app = QApplication.instance()
-        sheet = STYLESHEET + (TOUCH_STYLESHEET if touch else "")
+        sheet = STYLESHEET + (touch_stylesheet() if touch else "")
         if app.styleSheet() != sheet:
             app.setStyleSheet(sheet)
         # A finger flicks a list rather than rubber-banding a selection; the

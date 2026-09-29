@@ -291,6 +291,15 @@ class Icons:
         p.fillPath(path, p.pen().brush())
 
     @staticmethod
+    def _moon(p: QPainter) -> None:
+        """A crescent: the dark-room switch."""
+        outer = QPainterPath()
+        outer.addEllipse(QPointF(12, 12), 8.5, 8.5)
+        bite = QPainterPath()
+        bite.addEllipse(QPointF(16.5, 8.5), 7.0, 7.0)
+        p.drawPath(outer.subtracted(bite))
+
+    @staticmethod
     def _power(p: QPainter) -> None:
         rect = QRectF(4.5, 4.5, 15, 15)
         p.drawArc(rect, int(-55 * 16), int(290 * 16))
@@ -837,6 +846,55 @@ QMenu::item {{ padding: 11px 26px; }}
 """
 
 TOUCH_MODES = (("Automatic", "auto"), ("Larger controls", "on"), ("Mouse sizes", "off"))
+
+
+def _switch_images() -> Dict[str, str]:
+    """
+    Finger-sized on/off switches for the touch look, drawn once and kept as
+    small PNGs - a stylesheet can only show a picture as a check box's box.
+    """
+    folder = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+                          "StageDisplayController", "ui")
+    paths = {}
+    for name, on, enabled in (("off", False, True), ("on", True, True),
+                              ("off_dis", False, False), ("on_dis", True, False)):
+        path = os.path.join(folder, f"switch_v1_{name}.png")
+        if not os.path.exists(path):
+            os.makedirs(folder, exist_ok=True)
+            picture = QPixmap(92, 52)
+            picture.fill(Qt.transparent)
+            painter = QPainter(picture)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setOpacity(1.0 if enabled else 0.4)
+            track = QRectF(2, 4, 88, 44)
+            painter.setPen(QPen(QColor("#c9992f" if on else CLR_EDGE_HI), 2))
+            painter.setBrush(QColor(CLR_ACCENT if on else "#1b2231"))
+            painter.drawRoundedRect(track, 22, 22)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(CLR_INK if on else "#c9d2e2"))
+            painter.drawEllipse(QPointF(66 if on else 26, 26), 16, 16)
+            painter.end()
+            picture.save(path)
+        paths[name] = path.replace("\\", "/")
+    return paths
+
+
+def touch_stylesheet() -> str:
+    """The touch look, with check boxes drawn as switches."""
+    try:
+        images = _switch_images()
+    except OSError:
+        return TOUCH_STYLESHEET
+    return TOUCH_STYLESHEET + f"""
+QCheckBox {{ spacing: 12px; }}
+QCheckBox::indicator {{
+    width: 46px; height: 26px; border: none; border-radius: 0px; background: transparent;
+    image: url("{images['off']}");
+}}
+QCheckBox::indicator:checked {{ image: url("{images['on']}"); border: none; background: transparent; }}
+QCheckBox::indicator:disabled {{ image: url("{images['off_dis']}"); border: none; background: transparent; }}
+QCheckBox::indicator:checked:disabled {{ image: url("{images['on_dis']}"); background: transparent; }}
+"""
 
 
 def touch_screen_present() -> bool:
