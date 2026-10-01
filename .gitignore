@@ -8,3 +8,6 @@ presets.json
 presets.json.bak
 shows.json
 backups/
+
+# The screen share's self-signed certificate and key, made on this machine.
+share_cert/

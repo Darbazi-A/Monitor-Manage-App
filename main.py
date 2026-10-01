@@ -165,6 +165,7 @@ import backups  # noqa: E402 - copies of presets.json and shows.json before each
 import desk as desk_mod  # noqa: E402 - multiview, SETUP / SHOW, TAKE, ready check
 import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
+import screenshare as share_mod  # noqa: E402 - laptops on the Main Stage (WebRTC)
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -477,6 +478,12 @@ class ControlPanel(QMainWindow):
                                               screen=self._remote_screen_image)
         self._remote_dialog = None
         self._guest_dialog = None
+        # Laptop screen share: laptops ask over HTTPS, the picture comes over WebRTC.
+        self.share = share_mod.ShareServer(os.path.join(APP_DIR, "share_cert"), self)
+        self.share_receiver = share_mod.ShareReceiver(self)
+        self._share_live = ""               # the laptop on the Main Stage (its request id)
+        self._share_dialog = None
+        self._share_lost_at = 0.0
 
         # Presentations: one presenter, driven by the dashboard, the clicker,
         # the keyboard, the phone and the running order alike.
@@ -506,6 +513,13 @@ class ControlPanel(QMainWindow):
         root.setContentsMargins(14, 12, 14, 8)
         root.setSpacing(9)
         root.addWidget(self._build_header())
+        # A laptop asking to share, or on stage, shows here whatever tab is open.
+        self.share_bar = share_mod.ShareBar(Icons, THEME)
+        self.share_bar.acceptRequested.connect(self._accept_share)
+        self.share_bar.declineRequested.connect(self._decline_share)
+        self.share_bar.stopRequested.connect(lambda: self._end_share(tr("The stage desk ended the share.")))
+        self.share_bar.volumeChanged.connect(self._on_share_volume)
+        root.addWidget(self.share_bar)
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
 
@@ -557,6 +571,7 @@ class ControlPanel(QMainWindow):
         self._apply_touch_mode()
         self._restore_window_geometry()
         self._restore_remote()
+        self._restore_share()
         self._multiview_timer = QTimer(self)
         self._multiview_timer.timeout.connect(self._refresh_multiview)
         self._multiview_timer.start(500)
@@ -728,7 +743,14 @@ class ControlPanel(QMainWindow):
                 tile.set_state(desk_mod.STATE_CLOSED, None, tr("monitor gone - waiting for it"))
                 continue
             card = self.cards.get(role) if hasattr(self, "cards") else None
-            if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+            if role == ROLE_MAIN and self._share_on(window):
+                pixmap = self.share_receiver.snapshot()
+                pixmap = pixmap.scaled(tile.preview_size(), Qt.KeepAspectRatio, Qt.SmoothTransformation) \
+                    if not pixmap.isNull() else None
+                request = self.share.request(self._share_live)
+                caption = tr("laptop  ·  {0}").format(request.name if request else "")
+                live = True
+            elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
                 pixmap = None
                 if presenter.deck is not None and presenter.count() and not presenter.black:
                     pixmap = presenter.deck.thumb(presenter.index, 256)
@@ -1263,6 +1285,8 @@ class ControlPanel(QMainWindow):
         monitor = self._rehearsal
         if monitor is None:
             return
+        if self._share_live and self.share_receiver.window is self.main_output:
+            self._end_share(tr("The rehearsal ended."))     # it was on the rehearsal window
         before = self._rehearsal_before
         if self.presenter.live:
             self.presenter.end()
@@ -2195,6 +2219,220 @@ class ControlPanel(QMainWindow):
             self.remote.start(self.remote.port)
         self._describe_remote()
 
+    # -- laptop screen share ---------------------------------------------------- #
+
+    def _restore_share(self) -> None:
+        code = str(self.settings.value("share/code", "") or "")
+        if len(code) != 4 or not code.isdigit():
+            code = share_mod.new_code()
+            self.settings.setValue("share/code", code)
+        self.share.code = code
+        try:
+            self.share.port = int(self.settings.value("share/port", share_mod.DEFAULT_SHARE_PORT))
+        except (TypeError, ValueError):
+            self.share.port = share_mod.DEFAULT_SHARE_PORT
+        try:
+            volume = int(self.settings.value("share/volume", 100))
+        except (TypeError, ValueError):
+            volume = 100
+        self.share_bar.volume.blockSignals(True)
+        self.share_bar.volume.setValue(volume)
+        self.share_bar.volume.blockSignals(False)
+        self.share_receiver.volume = volume / 100.0
+        self.share.requestArrived.connect(self._on_share_request)
+        self.share.requestGone.connect(self._on_share_gone)
+        self.share_receiver.answered.connect(self._on_share_answered)
+        self.share_receiver.failed.connect(self._on_share_failed)
+        self.share_receiver.stateChanged.connect(self._on_share_state)
+        self.share_receiver.statsChanged.connect(lambda _stats: self._refresh_share_bar())
+        self.share_receiver.detached.connect(
+            lambda: self._end_share(tr("The Main Stage screen was closed.")))
+        if str(self.settings.value("share/enabled", "false")).lower() == "true":
+            self._toggle_share(True)
+        self._describe_share()
+
+    def _share_on(self, window) -> bool:
+        """Whether a laptop's picture covers this stage window right now."""
+        receiver = self.share_receiver
+        return bool(self._share_live) and window is not None and receiver.window is window \
+            and receiver.view is not None and receiver.view.isVisible()
+
+    def _toggle_share(self, on: bool) -> str:
+        error = ""
+        if on:
+            if not self.share_receiver.available():
+                error = tr("This installation of PySide6 has no QtWebEngine.")
+            else:
+                error = self.share.start(self.share.port) or ""
+                self.settings.setValue("share/port", self.share.port)
+                if not error:
+                    # Chromium starts now, so the first laptop is on screen at once
+                    QTimer.singleShot(1500, self.share_receiver.warm_up)
+        else:
+            self._end_share(tr("The stage desk switched the screen share off."))
+            self.share.stop()
+        self.settings.setValue("share/enabled", "true" if self.share.running else "false")
+        if self._share_dialog is not None:
+            self._share_dialog.refresh(error)
+        self._refresh_share_bar()
+        self._describe_share()
+        return error
+
+    @Slot()
+    def _open_share_dialog(self) -> None:
+        if self._share_dialog is None:
+            auto = str(self.settings.value("share/auto", "false")).lower() == "true"
+            dialog = share_mod.ShareDialog(self.share, THEME, self, auto=auto)
+            dialog.toggled.connect(self._toggle_share)
+            dialog.portChanged.connect(lambda port: setattr(self.share, "port", port))
+            dialog.codeRenewed.connect(self._renew_share_code)
+            dialog.autoToggled.connect(lambda on: self.settings.setValue("share/auto", "true" if on else "false"))
+            self._share_dialog = dialog
+        self._share_dialog.refresh()
+        self._share_dialog.show()
+        self._share_dialog.raise_()
+
+    def _renew_share_code(self) -> None:
+        self.settings.setValue("share/code", self.share.new_code())
+        if self._share_dialog is not None:
+            self._share_dialog.refresh()
+
+    def _describe_share(self) -> None:
+        tab = getattr(self, "presentation_tab", None)
+        if tab is None:
+            return
+        if self.share.running:
+            tab.laptop_btn.setText(tr("  Laptop screen share · ON"))
+            tab.laptop_btn.setStyleSheet(f"color: {CLR_OK}; font-weight: 600;")
+        else:
+            tab.laptop_btn.setText(tr("  Laptop screen share…"))
+            tab.laptop_btn.setStyleSheet("")
+
+    @Slot(str)
+    def _on_share_request(self, ident: str) -> None:
+        request = self.share.request(ident)
+        if request is None:
+            return
+        if not self._share_live and str(self.settings.value("share/auto", "false")).lower() == "true":
+            self._accept_share(ident)
+            return
+        self._refresh_share_bar()
+        self.statusBar().showMessage(
+            tr("{0} wants to share their screen - Show on Main Stage puts it there.").format(request.name), 10000)
+        QApplication.alert(self)
+
+    @Slot(str)
+    def _accept_share(self, ident: str) -> None:
+        request = self.share.request(ident)
+        if request is None or request.state != "waiting":
+            self._refresh_share_bar()
+            return
+        window = self.main_output
+        if window is None:
+            self.statusBar().showMessage(
+                tr("Open the Main Stage screen first - the laptop's picture goes there."), 8000)
+            return
+        if self._share_live and self._share_live != ident:
+            self.share.end(self._share_live, tr("The stage desk switched to another laptop."))
+        self._share_live = ident
+        self._share_lost_at = 0.0
+        self.share_receiver.receive(ident, request.offer, window)
+        self._watch_share_window(window)
+        self._refresh_share_bar()
+        self.statusBar().showMessage(tr("{0}: connecting to the Main Stage…").format(request.name), 6000)
+
+    @Slot(str, str)
+    def _on_share_answered(self, ident: str, sdp: str) -> None:
+        if not self.share.go_live(ident, sdp) and ident == self._share_live:
+            self._end_share("")             # the laptop gave up while the desk was answering
+
+    @Slot(str, str)
+    def _on_share_failed(self, ident: str, why: str) -> None:
+        if ident == self._share_live:
+            self._end_share(tr("The stage could not show this screen."))
+            self.statusBar().showMessage(tr("Screen share failed: {0}").format(why), 10000)
+
+    @Slot(str)
+    def _decline_share(self, ident: str) -> None:
+        self.share.decline(ident)
+        self._refresh_share_bar()
+
+    def _end_share(self, message: str = "") -> None:
+        ident, self._share_live = self._share_live, ""
+        self._watch_share_window(None)
+        self.share_receiver.stop()
+        if ident:
+            self.share.end(ident, message)
+        self._refresh_share_bar()
+
+    def _watch_share_window(self, window) -> None:
+        """A new picture sent to the Main Stage - a step, a preset, a file - takes the laptop off it."""
+        old = getattr(self, "_share_watched", None)
+        if old is not None:
+            try:
+                old.pictureReplaced.disconnect(self._on_share_covered)
+            except (RuntimeError, TypeError):
+                pass                        # the window has gone already
+        self._share_watched = window
+        if window is not None:
+            window.pictureReplaced.connect(self._on_share_covered)
+
+    @Slot()
+    def _on_share_covered(self) -> None:
+        if self._share_live:
+            self._end_share(tr("The stage desk put something else on the Main Stage."))
+            self.statusBar().showMessage(tr("The laptop came off the Main Stage for the new picture."), 6000)
+
+    @Slot(str)
+    def _on_share_gone(self, ident: str) -> None:
+        if ident == self._share_live:
+            request = self.share.request(ident)
+            self._end_share("")
+            self.statusBar().showMessage(
+                tr("{0} stopped sharing - the Main Stage shows what it had before.").format(
+                    request.name if request else tr("The laptop")), 8000)
+        self._refresh_share_bar()
+
+    @Slot(str)
+    def _on_share_state(self, state: str) -> None:
+        if state == "connected":
+            self._share_lost_at = 0.0
+            request = self.share.request(self._share_live)
+            if request is not None:
+                self.statusBar().showMessage(tr("{0} is on the Main Stage.").format(request.name), 6000)
+        elif state == "failed":
+            self._end_share(tr("The connection was lost."))
+            self.statusBar().showMessage(tr("The laptop's connection was lost."), 8000)
+        elif state == "disconnected":
+            # Wi-Fi hiccups reconnect by themselves; give it a few seconds before giving up
+            self._share_lost_at = time.monotonic()
+            QTimer.singleShot(8000, self._check_share_lost)
+        self._refresh_share_bar()
+
+    def _check_share_lost(self) -> None:
+        if self._share_live and self._share_lost_at and time.monotonic() - self._share_lost_at >= 7.5 \
+                and self.share_receiver.state == "disconnected":
+            self._end_share(tr("The connection was lost."))
+            self.statusBar().showMessage(tr("The laptop's connection was lost."), 8000)
+
+    @Slot(int)
+    def _on_share_volume(self, value: int) -> None:
+        self.share_receiver.set_volume(value / 100.0)
+        self.settings.setValue("share/volume", value)
+
+    def _refresh_share_bar(self) -> None:
+        bar = getattr(self, "share_bar", None)
+        if bar is None:
+            return
+        live = self.share.request(self._share_live) if self._share_live else None
+        waiting = self.share.waiting() if self.share.running else []
+        if waiting:
+            bar.show_waiting(waiting[0], len(waiting) - 1, replacing=live.name if live else "")
+        elif live is not None:
+            bar.show_live(live, self.share_receiver.stats, self.share_receiver.state == "connected")
+        else:
+            bar.hide()
+
     def _describe_remote(self) -> None:
         if self.remote.running:
             count = self.remote.clients()
@@ -3105,6 +3343,7 @@ class ControlPanel(QMainWindow):
         tab.openedPath.connect(self._remember_deck)
         tab.learnRequested.connect(self._learn_clicker)
         tab.guestRequested.connect(self._open_guest_dialog)
+        tab.laptopRequested.connect(self._open_share_dialog)
         tab.global_check.setChecked(self._clicker_global())
         tab.globalToggled.connect(self._on_clicker_global)
         tab.powerpointToggled.connect(
@@ -3197,7 +3436,9 @@ class ControlPanel(QMainWindow):
         if window is None:
             return "closed", False, "closed"
         presenter = self.presenter
-        if presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+        if role == ROLE_MAIN and self._share_on(window):
+            live, moving, version = True, True, "laptop"
+        elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
             live, moving, version = not presenter.black, False, f"ppt-{presenter.index}-{presenter.black}"
         else:
             live, moving, version = window.has_picture(), window.is_moving(), str(window.picture_version)
@@ -3217,7 +3458,13 @@ class ControlPanel(QMainWindow):
         if not moving and cache.get(role, (None, None))[0] == version:
             return cache[role][1]
         presenter = self.presenter
-        if version.startswith("ppt-") and presenter.deck is not None and not presenter.black:
+        if version == "laptop":
+            buffer_data = QByteArray()
+            buffer = QBuffer(buffer_data)
+            buffer.open(QIODevice.WriteOnly)
+            self.share_receiver.snapshot().scaledToWidth(480, Qt.SmoothTransformation).save(buffer, "JPG", 72)
+            data = bytes(buffer_data.data())
+        elif version.startswith("ppt-") and presenter.deck is not None and not presenter.black:
             data = presenter.deck.jpeg(presenter.index, 480)
         else:
             stage = self._stage_size(role)
@@ -4059,6 +4306,8 @@ class ControlPanel(QMainWindow):
 
     @Slot()
     def _blackout_all(self) -> None:
+        if self._share_live:
+            self._end_share(tr("The stage went to black."))
         def black() -> None:
             fade = self.fade_ms()
             for window in self._outputs():
@@ -4466,6 +4715,9 @@ class ControlPanel(QMainWindow):
             self.presenter.deck.stop()
         pres_mod.release_powerpoint()        # and the hidden PowerPoint behind it, once idle
         self.remote.stop()
+        self._end_share(tr("The stage desk closed."))
+        self.share.stop()
+        self.share_receiver.shutdown()
         self.show_store.save()
         if self.dj_panel:
             self.dj_panel.shutdown()

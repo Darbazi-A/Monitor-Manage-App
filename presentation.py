@@ -1047,6 +1047,7 @@ class PresentationTab(QWidget):
 
     learnRequested = Signal()
     guestRequested = Signal()
+    laptopRequested = Signal()              # the laptop screen share
     globalToggled = Signal(bool)
     powerpointToggled = Signal(bool)
     limitChanged = Signal(int)              # minutes, 0 = no limit
@@ -1234,6 +1235,11 @@ class PresentationTab(QWidget):
         self.status = QLabel("")
         self.status.setObjectName("cardHint")
         row.addWidget(self.status)
+        self.laptop_btn = QPushButton(tr('  Laptop screen share…'))
+        self.laptop_btn.setIcon(self.icons.get("monitor", self.theme["text"], 15))
+        self.laptop_btn.setToolTip(tr("A laptop on the same network shows its screen - and its sound - on the Main Stage"))
+        self.laptop_btn.clicked.connect(self.laptopRequested.emit)
+        row.addWidget(self.laptop_btn)
         return bar
 
     def _build_clicker_bar(self) -> QWidget:

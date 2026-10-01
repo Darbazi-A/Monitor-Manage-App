@@ -83,6 +83,9 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
   with presenter view (next slide, notes, a time limit counted down), a
   clicker that works whichever window is in front, and phone pages for
   turning slides — one for the crew, a slides-only QR link for guests.
+- **Laptop screen share** — any laptop on the hall's network shows its screen
+  *and its sound* on the Main Stage from a web page in Chrome or Edge: nothing
+  to install, the desk approves it. See [Laptop screen share](#laptop-screen-share).
 - **Phone remote** — a live picture of every stage screen, NEXT, BLACKOUT,
   sound cues and presets from any phone on the Wi-Fi, behind a PIN.
 - **Keeps going when something fails** — a screen whose monitor drops out comes
@@ -362,6 +365,53 @@ address that gets the PIN wrong five times is locked out for a minute. A double
 tap on NEXT cannot skip a step. The first time it is switched on, Windows asks
 whether Python may use the network — allow it on private networks. The page can
 be added to the phone's home screen as a shortcut.
+
+## Laptop screen share
+
+**Slides → Laptop screen share…** switches it on and shows what the laptop
+needs: an address such as `https://192.168.1.23:8443` (also as a QR code) and a
+four-digit share code.
+
+On the laptop, in **Chrome or Edge**:
+
+1. Open the address. The first time, the browser warns that the connection is
+   not private — the app signs its own certificate, because a hall PC has no
+   domain name a certificate authority would sign. Press *Advanced → Continue*.
+2. Type the code (and a name, so the desk knows who is asking), pick *Slides
+   and documents* (sharper text) or *Video* (smoother movement), press **Share
+   my screen**.
+3. In the browser's window choose *Entire screen* and switch on **Also share
+   system audio** — or choose a tab and *Also share tab audio*. The page says
+   whether sound is being sent.
+
+At the desk a bar appears over every tab: *“Nino wants to share their screen”*
+with **Show on Main Stage** and **Decline**. Nothing reaches the stage until the
+operator presses it (for rehearsals, *Put a laptop on stage as soon as it asks*
+skips that). On stage, the bar shows who is on, the resolution and frame rate,
+whether sound is arriving, a volume slider for the hall, and **Stop sharing**.
+A second laptop can ask meanwhile; showing it takes the first one off.
+
+The laptop's picture lies over the Main Stage window, so ending the share simply
+uncovers what was there. It ends when the laptop stops (or closes the tab), when
+the desk presses Stop, on **BLACKOUT**, when the Main Stage is sent something
+new (a step, a preset, a file — text and the speaker's timer laid over it do
+not count), when the Main Stage window closes, or when the connection drops for
+more than a few seconds. The laptop's page always says why. The header's
+picture of the Main Stage, and the phone remote's, show the laptop while it is on.
+
+How it works: the page captures the screen with `getDisplayMedia` and sends it
+over **WebRTC** straight across the LAN — about a second to connect, full frame
+rate, up to 8 Mbit/s for the picture and 256 kbit/s stereo Opus for the sound
+(echo cancelling and noise suppression off, for music). The app plays it in
+Chromium (QtWebEngine) inside the Main Stage window, through the PC's default
+sound device — the hall mixer. The offer and answer travel through a small
+HTTPS server on a thread of its own (`screenshare.py`); `http://` on the same
+port is redirected to `https://`. The certificate is made by `selfcert.py` in
+pure Python (RSA-2048, SHA-256, the PC's addresses in the subjectAltName) and
+kept in `share_cert/` until the PC's address changes.
+
+A wrong code five times locks that address out for a minute. Firefox and Safari
+share the picture without sound. On a Mac, share a Chrome tab to send its sound.
 
 ## Building a show from a folder
 
@@ -763,6 +813,8 @@ The running order and the remote are separate modules too; the dashboard
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link), `RemoteDialog`, `GuestDialog`, and the phone pages themselves |
+| `screenshare.py` | the laptop screen share: `ShareServer` (HTTPS, a thread), `ShareReceiver` (WebRTC in QtWebEngine over the Main Stage), `ShareBar`, `ShareDialog`, and the laptop's page |
+| `selfcert.py` | a self-signed TLS certificate in pure Python, for the share's HTTPS |
 | `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |
 | `qr.py` | a small QR code encoder (no extra packages) for the phone links |
 | `desk.py` | the desk: `MultiView` / `ScreenTile`, `ModeSwitch`, `TakeBar` (preview, TAKE, undo), `ShowStrip`, `ReadyCheckDialog`, `PresetStrip`, `HealthBar`, `ShortcutsDialog`, `HoldButton`, and `PageTabs`, whose pages scroll instead of outgrowing the screen |

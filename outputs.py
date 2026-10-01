@@ -445,6 +445,7 @@ class BaseOutputWindow(QWidget):
     """
 
     closedByUser = Signal()
+    pictureReplaced = Signal()      # a new file, a colour or black - not text laid over it
 
     BASE_FLAGS = Qt.Window | Qt.FramelessWindowHint | Qt.Tool
 
@@ -765,6 +766,7 @@ class SceneOutputWindow(BaseOutputWindow):
 
     def commit_media(self, payload) -> None:
         self.picture_version += 1
+        self.pictureReplaced.emit()
         kind, value = payload
         if kind == "image":
             self.engine.clear()
@@ -782,6 +784,7 @@ class SceneOutputWindow(BaseOutputWindow):
     def set_background_color(self, color: QColor) -> None:
         """Solid-colour background; also clears any image or video."""
         self.picture_version += 1
+        self.pictureReplaced.emit()
         self._bg_color = color
         self._bg_item.setBrush(QBrush(color))
         self.engine.clear()
@@ -791,6 +794,7 @@ class SceneOutputWindow(BaseOutputWindow):
 
     def clear_output(self) -> None:
         self.picture_version += 1
+        self.pictureReplaced.emit()
         self.engine.clear()
         self._pixmap_item.setVisible(False)
         self._pixmap_item.setPixmap(QPixmap())

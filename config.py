@@ -112,6 +112,20 @@ from PySide6.QtWidgets import (
 # machine that cannot. Set before any player exists; an explicit setting wins.
 os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "dxva2")
 
+# The laptop screen share plays in Chromium (QtWebEngine), started the first time
+# it is used. Its WebRTC must offer this PC's real LAN address - by default
+# Chromium hides it behind a random .local name a laptop may not resolve - and its
+# sound must start without anyone clicking the stage. Both before Chromium starts;
+# sharing GL contexts must be asked for before the QApplication exists.
+_chromium = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+for _flag in ("--disable-features=WebRtcHideLocalIpsWithMdns", "--autoplay-policy=no-user-gesture-required",
+              "--log-level=3"):
+    if _flag not in _chromium:
+        _chromium = (_chromium + " " + _flag).strip()
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium
+if QApplication.instance() is None:
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
