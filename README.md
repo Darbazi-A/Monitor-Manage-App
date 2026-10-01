@@ -439,20 +439,39 @@ On the laptop, in **Chrome or Edge**:
    system audio** — or choose a tab and *Also share tab audio*. The page says
    whether sound is being sent.
 
-At the desk a bar appears over every tab: *“Nino wants to share their screen”*
-with **Show on Main Stage** and **Decline**. Nothing reaches the stage until the
-operator presses it (for rehearsals, *Put a laptop on stage as soon as it asks*
-skips that). On stage, the bar shows who is on, the resolution and frame rate,
-whether sound is arriving, a volume slider for the hall, and **Stop sharing**.
-A second laptop can ask meanwhile; showing it takes the first one off.
+At the desk a **Laptops** bar appears over every tab, with a card for each
+laptop:
 
-The laptop's picture lies over the Main Stage window, so ending the share simply
-uncovers what was there. It ends when the laptop stops (or closes the tab), when
-the desk presses Stop, on **BLACKOUT**, when the Main Stage is sent something
-new (a step, a preset, a file — text and the speaker's timer laid over it do
-not count), when the Main Stage window closes, or when the connection drops for
-more than a few seconds. The laptop's page always says why. The header's
-picture of the Main Stage, and the phone remote's, show the laptop while it is on.
+![Two laptops on the stage, a third in preview](docs/laptops.png)
+
+1. **Asks** — *“Nino”*, its address, whether it shares sound: **Preview** or
+   **Decline**.
+2. **Preview** — its picture plays *in the card*, on the desk only and silent,
+   so an open e-mail or a notification never reaches the hall; the laptop's page
+   says *“the stage desk is looking at your screen - not on the big screen
+   yet”*. **TAKE** puts it on the Main Stage; with a laptop already there,
+   **Beside** puts the two side by side and **Small** puts it in the corner of
+   the other one (picture in picture); ✕ ends the preview.
+3. **On stage** — resolution, frame rate, whether sound arrives, **Mute** and
+   **Stop** for that laptop. With two on the stage the bar offers *Side by side* /
+   *Picture in picture* and **Swap**, and one volume slider for the hall.
+
+TAKE moves the very same connection from the desk to the stage — nothing
+reconnects, the picture does not blink. TAKE alone with something already on
+the stage replaces it (that laptop is told). At most three laptops are connected
+at once — two on the stage and one in preview; a fourth waits. *Laptops wait in
+a preview on the desk until TAKE* can be switched off in the share's window
+(the button then says **Show on Main Stage** and works as before), and *Put a
+laptop on stage as soon as it asks* (rehearsals) previews it by itself.
+
+The laptops' pictures lie over the Main Stage window, so ending a share simply
+uncovers what was there. They come off when a laptop stops (or closes the tab),
+when the desk presses Stop, on **BLACKOUT**, when the Main Stage is sent
+something new (a step, a preset, a file — text and the speaker's timer laid over
+it do not count), when the Main Stage window closes, or when the connection
+drops for more than a few seconds; a preview on the desk stays through all but
+the last. The laptop's page always says why. The header's picture of the Main
+Stage, and the phone remote's, show the laptops as the hall sees them.
 
 How it works: the page captures the screen with `getDisplayMedia` and sends it
 over **WebRTC** straight across the LAN — about a second to connect, full frame
@@ -878,7 +897,7 @@ The running order and the remote are separate modules too; the dashboard
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link), `RemoteDialog`, `GuestDialog`, and the phone pages themselves |
-| `screenshare.py` | the laptop screen share: `ShareServer` (HTTPS, a thread), `ShareReceiver` (WebRTC in QtWebEngine over the Main Stage), `ShareBar`, `ShareDialog`, and the laptop's page |
+| `screenshare.py` | the laptop screen share: `ShareServer` (HTTPS, a thread), `ShareReceiver` and `ShareLink` (a Chromium page per laptop - previewed on the desk, then laid out on the Main Stage alone, side by side or picture in picture), `ShareBar` and its cards, `ShareDialog`, and the laptop's page |
 | `selfcert.py` | a self-signed TLS certificate in pure Python, for the share's HTTPS |
 | `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |
 | `qr.py` | a small QR code encoder (no extra packages) for the phone links |

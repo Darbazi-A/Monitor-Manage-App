@@ -11,10 +11,14 @@ its sound - on the Main Stage, from a web page. Nothing to install.
 
 The laptop opens https://<this PC>:8443, types the share code shown at the desk
 and presses Share: the browser asks which screen (and whether to send its
-sound), and an offer waits at the desk. The operator puts it on stage - or the
-desk accepts by itself, if told to - and the picture and sound arrive over
-WebRTC: tens of milliseconds, full frame rate, the hall's sound system playing
-the laptop's audio.
+sound), and an offer waits at the desk. The operator previews it - its picture
+plays in the desk's bar, silent, so an open e-mail never reaches the hall - and
+TAKEs it: alone on the Main Stage, beside the laptop already there, or small in
+its corner. The picture and sound arrive over WebRTC: tens of milliseconds, full
+frame rate, the hall's sound system playing the laptop's audio.
+
+Each laptop has a Chromium page of its own; moving from the desk to the stage
+moves that page's view, so the connection never restarts.
 
 Browsers capture a screen only from HTTPS pages, so the server signs its own
 certificate (selfcert.py); a laptop's browser warns about it the first time.
@@ -36,8 +40,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, QTimer, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSlider,
                                QSpinBox, QVBoxLayout, QWidget)
 
@@ -64,6 +68,7 @@ class ShareRequest:
         self.offer = offer
         self.audio = audio
         self.state = "waiting"          # waiting -> live -> ended, or waiting -> declined
+        self.where = ""                 # while live: "preview" (the desk only) or "stage"
         self.answer = ""
         self.message = ""
         self.seen = time.monotonic()
@@ -230,14 +235,22 @@ class ShareServer(QObject):
         with self._lock:
             return sorted((r for r in self._requests.values() if r.state == "waiting"), key=lambda r: r.arrived)
 
-    def go_live(self, ident: str, answer: str) -> bool:
+    def go_live(self, ident: str, answer: str, where: str = "stage") -> bool:
         with self._lock:
             request = self._requests.get(ident)
             if request is None or request.state != "waiting":
                 return False
-            request.state, request.answer = "live", answer
+            request.state, request.answer, request.where = "live", answer, where
             self._lock.notify_all()
             return True
+
+    def move(self, ident: str, where: str) -> None:
+        """The laptop's picture went from the desk's preview to the stage (or back): the laptop is told."""
+        with self._lock:
+            request = self._requests.get(ident)
+            if request is not None and request.where != where:
+                request.where = where
+                self._lock.notify_all()
 
     def decline(self, ident: str, message: str = "") -> None:
         self._finish(ident, "declined", message or tr("The stage desk said no this time."))
@@ -291,13 +304,15 @@ class ShareServer(QObject):
             return 404, {"ok": False, "state": "ended", "message": tr("The stage desk no longer knows this share.")}
         if path == "/api/poll":
             known = str(data.get("known", ""))
+            known_where = str(data.get("where", ""))
             deadline = time.monotonic() + POLL_WAIT
             with self._lock:
                 request.seen = time.monotonic()
-                while request.state == known and time.monotonic() < deadline and self._server is not None:
+                while request.state == known and request.where == known_where \
+                        and time.monotonic() < deadline and self._server is not None:
                     self._lock.wait(min(1.0, deadline - time.monotonic()))
                     request.seen = time.monotonic()
-                answer = {"ok": True, "state": request.state, "message": request.message}
+                answer = {"ok": True, "state": request.state, "message": request.message, "where": request.where}
                 if request.state == "live" and known != "live":
                     answer["sdp"] = request.answer
             return 200, answer
@@ -318,33 +333,57 @@ def _json(value) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
-# The receiver: Chromium inside the Main Stage window
+# The receiver: one Chromium page per laptop, on the desk or on the stage
 # --------------------------------------------------------------------------- #
+
+class ShareLink:
+    """One laptop's connection: its own Chromium page, wherever its picture is shown."""
+
+    def __init__(self, view, page) -> None:
+        self.id = ""
+        self.view = view
+        self.page = page
+        self.ready = False
+        self.queued: List[str] = []
+        self.where = ""                 # "preview" (in the desk's bar) or "stage"
+        self.state = "connecting"
+        self.stats: dict = {}
+        self.silenced = False           # the operator muted this laptop
+        self.lost_at = 0.0
+
+    def run(self, script: str) -> None:
+        if self.ready:
+            self.page.runJavaScript(script)
+        else:
+            self.queued.append(script)
+
 
 class ShareReceiver(QObject):
     """
-    Plays one laptop's stream across a stage window. The page lives in a
-    QWebEngineView laid over the window's own picture, so ending the share
-    simply uncovers what was there.
+    The laptops' pictures. Each has its own page; a preview lives in a frame on
+    the desk (silent), and TAKE moves the same view - connection and all - onto
+    the Main Stage window, laid out alone, side by side, or one small in the
+    other's corner. Ending a share simply uncovers what the stage had.
     """
 
     answered = Signal(str, str)         # request id, answer SDP
     failed = Signal(str, str)           # request id, why
-    stateChanged = Signal(str)          # connecting / connected / disconnected / failed / closed
-    statsChanged = Signal(dict)
-    detached = Signal()                 # its stage window closed under a live share
+    stateChanged = Signal(str, str)     # request id, connecting / connected / disconnected / failed / closed
+    statsChanged = Signal(str, dict)
+    detached = Signal(list)             # ids taken off the stage because its window closed
+
+    MAX_LINKS = 3                       # two on the stage and one being previewed
+    PIP_WIDTH = 0.30                    # the small picture, as a share of the stage's width
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self.view = None
+        self.links: Dict[str, ShareLink] = {}
+        self.stage: List[str] = []      # on the stage, in layout order (big / left first)
+        self.layout = "single"          # single / side / pip
         self.window: Optional[QWidget] = None
-        self.current = ""               # the request on screen (or being connected)
-        self.muted = False              # tests keep the hall quiet
         self.volume = 1.0
-        self.stats: dict = {}
-        self.state = "closed"
-        self._ready = False
-        self._queued: List[str] = []
+        self.muted = False              # tests keep the hall quiet
+        self._spare: Optional[ShareLink] = None
 
     def available(self) -> bool:
         try:
@@ -354,245 +393,525 @@ class ShareReceiver(QObject):
             return False
 
     def warm_up(self) -> None:
-        """Start Chromium now, so the first share does not wait a second or two for it."""
-        self._ensure_view()
+        """A page started ahead, so the next laptop does not wait a second or two for Chromium."""
+        if self._spare is None and self.available():
+            self._spare = self._make_link()
 
-    def _ensure_view(self):
-        if self.view is not None:
-            return self.view
+    def _make_link(self) -> ShareLink:
         from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
         from PySide6.QtWebEngineWidgets import QWebEngineView
 
         receiver = self
+        view = QWebEngineView()
+        view.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        view.setFocusPolicy(Qt.NoFocus)
+        view.setContextMenuPolicy(Qt.NoContextMenu)
+        link = ShareLink(view, None)
 
         class Page(QWebEnginePage):
             def javaScriptConsoleMessage(self, _level, message, _line, _source):  # noqa: N802
                 if message.startswith("SDS:"):
                     kind, _, payload = message[4:].partition(":")
                     try:
-                        receiver._from_page(kind, json.loads(payload) if payload else None)
+                        receiver._from_page(link, kind, json.loads(payload) if payload else None)
                     except ValueError:
                         pass
 
-        view = QWebEngineView()
-        view.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        view.setFocusPolicy(Qt.NoFocus)
-        view.setContextMenuPolicy(Qt.NoContextMenu)
         page = Page(view)
+        link.page = page
         page.setBackgroundColor(QColor("black"))
         settings = page.settings()
         settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)
         settings.setAttribute(QWebEngineSettings.ShowScrollBars, False)
         view.setPage(page)
-        view.loadFinished.connect(self._on_loaded)
+
+        def loaded(ok: bool) -> None:
+            link.ready = ok
+            queued, link.queued = link.queued, []
+            for script in queued:
+                page.runJavaScript(script)
+
+        view.loadFinished.connect(loaded)
         page.setHtml(RECEIVER_PAGE, QUrl("http://localhost/stage-share"))
         view.hide()
-        self.view = view
-        return view
+        return link
 
-    @Slot(bool)
-    def _on_loaded(self, ok: bool) -> None:
-        self._ready = ok
-        queued, self._queued = self._queued, []
-        for script in queued:
-            self.view.page().runJavaScript(script)
+    # -- connecting ----------------------------------------------------------- #
+    def can_connect(self) -> bool:
+        return len(self.links) < self.MAX_LINKS
 
-    def _run(self, script: str) -> None:
-        if self._ready:
-            self.view.page().runJavaScript(script)
+    def receive(self, ident: str, offer: str, host: Optional[QWidget] = None,
+                window: Optional[QWidget] = None) -> List[str]:
+        """
+        Answer this laptop's offer. Its picture goes into `host` (a preview on the
+        desk) or, with `window`, straight onto the stage, alone. Returns the ids
+        that left the stage for it.
+        """
+        link = self._spare or self._make_link()
+        self._spare = None
+        link.id = ident
+        link.state = "connecting"
+        link.stats = {}
+        self.links[ident] = link
+        removed: List[str] = []
+        if window is not None:
+            removed = self._to_stage(link, window, "alone")
         else:
-            self._queued.append(script)
+            self._to_host(link, host)
+        sound = self._sound(link)
+        link.run(f"receive({json.dumps(ident)}, {json.dumps(offer)}, {json.dumps(sound)})")
+        QTimer.singleShot(800, self.warm_up)
+        return removed
 
-    def attach(self, window: Optional[QWidget]) -> None:
-        """Lay the picture over this stage window (or take it off, with None)."""
-        view = self._ensure_view()
+    def _to_host(self, link: ShareLink, host: Optional[QWidget]) -> None:
+        link.where = "preview"
+        if host is not None:
+            link.view.setParent(host)
+            link.view.setGeometry(host.rect())
+            link.view.show()
+        self._apply_sound(link)
+
+    def take(self, ident: str, mode: str, window: QWidget) -> List[str]:
+        """
+        Put a previewed laptop on the stage: "alone", "side" (beside the one there)
+        or "pip" (small, in its corner). Returns the ids that left the stage.
+        """
+        link = self.links.get(ident)
+        if link is None:
+            return []
+        return self._to_stage(link, window, mode)
+
+    def _to_stage(self, link: ShareLink, window: QWidget, mode: str) -> List[str]:
+        self._attach_window(window)
+        others = [i for i in self.stage if i != link.id]
+        if mode == "alone" or not others:
+            removed, self.stage, self.layout = others, [link.id], "single"
+        else:
+            removed = others[1:]
+            self.stage = [others[0], link.id]
+            self.layout = "pip" if mode == "pip" else "side"
+        for ident in removed:
+            if ident in self.links:
+                self.links[ident].view.hide()
+        link.where = "stage"
+        link.view.setParent(window)
+        self._apply_sound(link)
+        self.relayout()
+        return removed
+
+    def drop(self, ident: str) -> None:
+        """Close this laptop's connection and put its page away."""
+        link = self.links.pop(ident, None)
+        if ident in self.stage:
+            self.stage.remove(ident)
+            if len(self.stage) < 2:
+                self.layout = "single"
+        if link is not None:
+            self._dispose(link, now=False)
+        self.relayout()
+
+    def drop_all(self) -> None:
+        for ident in list(self.links):
+            self.drop(ident)
+
+    def _dispose(self, link: ShareLink, now: bool) -> None:
+        from shiboken6 import Shiboken
+
+        view, page = link.view, link.page
+        if view is not None and Shiboken.isValid(view):
+            view.hide()
+            view.setParent(None)
+        if now:
+            if page is not None and Shiboken.isValid(page):
+                Shiboken.delete(page)          # the page before its view
+            if view is not None and Shiboken.isValid(view):
+                Shiboken.delete(view)
+        else:
+            if page is not None and Shiboken.isValid(page):
+                page.deleteLater()
+            if view is not None and Shiboken.isValid(view):
+                view.deleteLater()
+
+    def shutdown(self) -> None:
+        """Before the app quits: every page goes before its view, all before Chromium's profile."""
+        links = list(self.links.values()) + ([self._spare] if self._spare is not None else [])
+        self.links.clear()
+        self.stage = []
+        self._spare = None
+        self._attach_window(None)
+        for link in links:
+            self._dispose(link, now=True)
+
+    # -- the stage's layout ------------------------------------------------------ #
+    def _attach_window(self, window: Optional[QWidget]) -> None:
+        if self.window is window:
+            return
         if self.window is not None:
             self.window.removeEventFilter(self)
         self.window = window
+        if window is not None:
+            window.installEventFilter(self)
+
+    def set_layout(self, mode: str) -> None:
+        if mode in ("side", "pip") and len(self.stage) >= 2:
+            self.layout = mode
+            self.relayout()
+
+    def swap(self) -> None:
+        if len(self.stage) >= 2:
+            self.stage.reverse()
+            self.relayout()
+
+    def relayout(self) -> None:
+        window = self.window
         if window is None:
-            view.hide()
-            view.setParent(None)
             return
-        view.setParent(window)
-        view.setGeometry(window.rect())
-        window.installEventFilter(self)
+        width, height = window.width(), window.height()
+        ids = [i for i in self.stage if i in self.links]
+        places: Dict[str, QRect] = {}
+        if len(ids) == 1 or (ids and self.layout == "single"):
+            places[ids[0]] = QRect(0, 0, width, height)
+        elif len(ids) >= 2 and self.layout == "side":
+            half = width // 2
+            places[ids[0]] = QRect(0, 0, half, height)
+            places[ids[1]] = QRect(half, 0, width - half, height)
+        elif len(ids) >= 2:
+            places[ids[0]] = QRect(0, 0, width, height)
+            small_w = int(width * self.PIP_WIDTH)
+            small_h = int(small_w * 9 / 16)
+            margin = int(min(width, height) * 0.04)
+            places[ids[1]] = QRect(width - small_w - margin, height - small_h - margin, small_w, small_h)
+        for ident in ids:
+            view = self.links[ident].view
+            if ident in places:
+                view.setGeometry(places[ident])
+                view.show()
+            else:
+                view.hide()
+        for ident in ids:
+            self.links[ident].view.raise_()   # the small one ends up on top
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if watched is not self.window or self.view is None:
+        if watched is not self.window:
             return False
         kind = event.type()
         if kind == QEvent.Resize:
-            self.view.setGeometry(self.window.rect())
+            self.relayout()
         elif kind == QEvent.DeferredDelete or (kind == QEvent.Close and getattr(watched, "_allow_close", True)):
-            # The stage window is going: take the picture out first, or Chromium goes down with it.
-            self.attach(None)
-            if self.current:
-                self.stop()
-                self.detached.emit()
+            # The stage window is going: take the pictures out first, or Chromium goes down with it.
+            gone = list(self.stage)
+            for ident in gone:
+                self.drop(ident)
+            self._attach_window(None)
+            if gone:
+                self.detached.emit(gone)
         return False
 
-    def receive(self, ident: str, offer: str, window: QWidget) -> None:
-        """Answer this laptop's offer and show its stream over `window`."""
-        self.attach(window)
-        self.current = ident
-        self.stats = {}
-        self.state = "connecting"
-        self.view.show()
-        self.view.raise_()
-        self._run(f"receive({json.dumps(ident)}, {json.dumps(offer)}, "
-                  f"{json.dumps({'volume': self.volume, 'muted': self.muted})})")
+    # -- sound ------------------------------------------------------------------ #
+    def _sound(self, link: ShareLink) -> dict:
+        """Only a laptop on the stage is heard - and not then if the operator muted it."""
+        return {"volume": self.volume, "muted": self.muted or link.where != "stage" or link.silenced}
 
-    def stop(self) -> None:
-        self.current = ""
-        self.stats = {}
-        self.state = "closed"
-        if self.view is not None:
-            self._run("stop()")
-            self.view.hide()
-
-    def shutdown(self) -> None:
-        """Before the app quits: the page goes before its view, both before Chromium's profile."""
-        self.stop()
-        view, self.view = self.view, None
-        if view is None:
-            return
-        if self.window is not None:
-            self.window.removeEventFilter(self)
-            self.window = None
-        from shiboken6 import Shiboken
-
-        page = view.page()
-        view.setParent(None)
-        if page is not None and Shiboken.isValid(page):
-            Shiboken.delete(page)
-        if Shiboken.isValid(view):
-            Shiboken.delete(view)
-        self._ready = False
+    def _apply_sound(self, link: ShareLink) -> None:
+        sound = self._sound(link)
+        link.run(f"setVolume({sound['volume']}, {json.dumps(sound['muted'])})")
 
     def set_volume(self, volume: float) -> None:
         self.volume = max(0.0, min(1.0, volume))
-        if self.view is not None:
-            self._run(f"setVolume({self.volume}, {json.dumps(self.muted)})")
+        for link in self.links.values():
+            self._apply_sound(link)
+
+    def set_silenced(self, ident: str, on: bool) -> None:
+        link = self.links.get(ident)
+        if link is not None:
+            link.silenced = on
+            self._apply_sound(link)
+
+    # -- pictures ------------------------------------------------------------------ #
+    def on_stage(self, window) -> bool:
+        return bool(self.stage) and window is not None and self.window is window
 
     def snapshot(self) -> QPixmap:
-        if self.view is None or not self.view.isVisible():
+        """The stage's laptops as the hall sees them."""
+        window = self.window
+        ids = [i for i in self.stage if i in self.links and self.links[i].view.isVisible()]
+        if window is None or not ids:
             return QPixmap()
-        return self.view.grab()
+        canvas = QPixmap(window.size())
+        canvas.fill(QColor("black"))
+        painter = QPainter(canvas)
+        for ident in ids:
+            view = self.links[ident].view
+            painter.drawPixmap(view.geometry().topLeft(), view.grab())
+        painter.end()
+        return canvas
 
-    def _from_page(self, kind: str, data) -> None:
-        if kind == "answer" and isinstance(data, dict):
-            if data.get("id") == self.current:
-                self.answered.emit(self.current, str(data.get("sdp", "")))
-        elif kind == "error" and isinstance(data, dict):
-            if data.get("id") == self.current:
-                self.failed.emit(self.current, str(data.get("message", "")))
-        elif kind == "state" and isinstance(data, dict):
-            if data.get("id") == self.current:
-                self.state = str(data.get("state", ""))
-                self.stateChanged.emit(self.state)
-        elif kind == "stats" and isinstance(data, dict):
-            if data.get("id") == self.current:
-                self.stats = data
-                self.statsChanged.emit(data)
+    def _from_page(self, link: ShareLink, kind: str, data) -> None:
+        if not isinstance(data, dict) or not link.id or data.get("id") != link.id:
+            return
+        if kind == "answer":
+            self.answered.emit(link.id, str(data.get("sdp", "")))
+        elif kind == "error":
+            self.failed.emit(link.id, str(data.get("message", "")))
+        elif kind == "state":
+            link.state = str(data.get("state", ""))
+            self.stateChanged.emit(link.id, link.state)
+        elif kind == "stats":
+            link.stats = data
+            self.statsChanged.emit(link.id, data)
 
 
 # --------------------------------------------------------------------------- #
-# The desk: the bar that asks and shows, and the dialog that switches it on
+# The desk: the bar that asks, previews and shows, and the dialog that switches it on
 # --------------------------------------------------------------------------- #
+
+def describe_stats(request: ShareRequest, link: Optional[ShareLink]) -> str:
+    stats = link.stats if link is not None else {}
+    bits = []
+    if stats.get("width"):
+        bits.append(f"{stats['width']}×{stats['height']}  ·  {stats.get('fps', 0):.0f} fps")
+    elif link is not None:
+        bits.append(tr("connecting…"))
+    if not request.audio:
+        bits.append(tr("no sound shared"))
+    elif link is not None and link.where == "stage" and link.state == "connected":
+        bits.append(tr("sound arriving") if stats.get("audio") else tr("sound: silent"))
+    elif link is not None:
+        bits.append(tr("sound waits for TAKE"))
+    else:
+        bits.append(tr("with sound"))
+    return "  ·  ".join(bits)
+
+
+class ShareChip(QFrame):
+    """One laptop in the bar: asking, being previewed, or on the stage."""
+
+    PREVIEW = QSize(224, 126)
+
+    def __init__(self, ident: str, theme: dict) -> None:
+        super().__init__()
+        self.ident = ident
+        self.theme = theme
+        self.setObjectName("shareChip")
+        self.setStyleSheet(
+            f"QFrame#shareChip {{ background: {theme['raised']}; border: 1px solid {theme['edge']}; border-radius: 10px; }}")
+        box = QVBoxLayout(self)
+        box.setContentsMargins(10, 8, 10, 8)
+        box.setSpacing(6)
+        self.host = QFrame()
+        self.host.setFixedSize(self.PREVIEW)
+        self.host.setStyleSheet("background: #000000; border-radius: 6px;")
+        box.addWidget(self.host, 0, Qt.AlignHCenter)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.tag = QLabel()
+        head.addWidget(self.tag)
+        self.name = QLabel()
+        self.name.setStyleSheet("font-size: 13px; font-weight: 700;")
+        head.addWidget(self.name, 1)
+        box.addLayout(head)
+        self.detail = QLabel()
+        self.detail.setObjectName("cardHint")
+        box.addWidget(self.detail)
+        self.row = QHBoxLayout()
+        self.row.setSpacing(6)
+        box.addLayout(self.row)
+        self._buttons_key = None
+        self.buttons: Dict[str, QPushButton] = {}
+
+    def show_state(self, tag: str, colour: str, name: str, detail: str, preview: bool,
+                   buttons: List[tuple]) -> None:
+        """buttons: (key, text, objectName, callback, tooltip)"""
+        self.tag.setText(tag)
+        self.tag.setStyleSheet(f"color: {colour}; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;")
+        self.name.setText(name)
+        width = (self.PREVIEW.width() if preview else 300) - 4
+        self.detail.setText(self.detail.fontMetrics().elidedText(detail, Qt.ElideRight, width))
+        self.detail.setToolTip(detail)
+        self.host.setVisible(preview)
+        key = tuple((b[0], b[1]) for b in buttons)
+        if key == self._buttons_key:
+            return
+        self._buttons_key = key
+        while self.row.count():
+            item = self.row.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()               # off the chip at once, not when the deferred delete runs
+                widget.setParent(None)
+                widget.deleteLater()
+        self.buttons = {}
+        for key_name, text, object_name, callback, tooltip in buttons:
+            button = QPushButton(text)
+            if object_name:
+                button.setObjectName(object_name)
+            button.setToolTip(tooltip)
+            button.clicked.connect(callback)
+            self.row.addWidget(button)
+            self.buttons[key_name] = button
+
 
 class ShareBar(QFrame):
     """
-    Across the top of every tab while a laptop waits or is on stage: who it is,
-    and the one button that matters.
+    Over every tab while a laptop asks, is previewed or is on the stage: a card
+    for each, with the one or two buttons that matter, and - with two on the
+    stage - how they share it.
     """
 
-    acceptRequested = Signal(str)
+    previewRequested = Signal(str)
     declineRequested = Signal(str)
-    stopRequested = Signal()
+    takeRequested = Signal(str, str)        # request id, "alone" / "side" / "pip"
+    dropRequested = Signal(str)             # end a preview, or take one laptop off the stage
+    silenceToggled = Signal(str, bool)
+    layoutRequested = Signal(str)
+    swapRequested = Signal()
     volumeChanged = Signal(int)
-    settingsRequested = Signal()
 
     def __init__(self, icons, theme: dict, parent=None) -> None:
         super().__init__(parent)
         self.theme = theme
         self.setObjectName("shareBar")
         self.setStyleSheet(
-            f"QFrame#shareBar {{ background: {theme['card']}; border: 1px solid {theme['accent']};"
-            " border-radius: 10px; }")
+            f"QFrame#shareBar {{ background: {theme['card']}; border: 1px solid {theme['edge']}; border-radius: 12px; }}")
         row = QHBoxLayout(self)
-        row.setContentsMargins(14, 8, 10, 8)
+        row.setContentsMargins(14, 10, 12, 10)
         row.setSpacing(10)
-        self.icon = QLabel()
-        self.icon.setPixmap(icons.get("monitor", theme["accent"], 20).pixmap(20, 20))
-        row.addWidget(self.icon)
-        self.tag = QLabel()
-        row.addWidget(self.tag)
-        self.title = QLabel()
-        self.title.setStyleSheet("font-size: 14px; font-weight: 700;")
-        row.addWidget(self.title)
-        self.detail = QLabel()
-        self.detail.setObjectName("cardHint")
-        row.addWidget(self.detail, 1)
+        caption = QVBoxLayout()
+        caption.setSpacing(4)
+        icon = QLabel()
+        icon.setPixmap(icons.get("monitor", theme["accent"], 20).pixmap(20, 20))
+        caption.addWidget(icon)
+        title = QLabel(tr("LAPTOPS"))
+        title.setObjectName("sectionTitle")
+        caption.addWidget(title)
+        caption.addStretch(1)
+        row.addLayout(caption)
+        self.chips_row = QHBoxLayout()
+        self.chips_row.setSpacing(10)
+        row.addLayout(self.chips_row)
+        row.addStretch(1)
+
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        self.layout_box = QWidget()
+        layout_row = QHBoxLayout(self.layout_box)
+        layout_row.setContentsMargins(0, 0, 0, 0)
+        layout_row.setSpacing(6)
+        self.side_btn = QPushButton(tr("Side by side"))
+        self.side_btn.setCheckable(True)
+        self.side_btn.clicked.connect(lambda: self.layoutRequested.emit("side"))
+        layout_row.addWidget(self.side_btn)
+        self.pip_btn = QPushButton(tr("Picture in picture"))
+        self.pip_btn.setCheckable(True)
+        self.pip_btn.clicked.connect(lambda: self.layoutRequested.emit("pip"))
+        layout_row.addWidget(self.pip_btn)
+        self.swap_btn = QPushButton(tr("  Swap"))
+        self.swap_btn.setIcon(icons.get("refresh", theme["text"], 14))
+        self.swap_btn.setToolTip(tr("Swap the two laptops' places"))
+        self.swap_btn.clicked.connect(self.swapRequested.emit)
+        layout_row.addWidget(self.swap_btn)
+        right.addWidget(self.layout_box)
+        volume_row = QHBoxLayout()
         self.volume_label = QLabel(tr("Sound"))
         self.volume_label.setObjectName("cardHint")
-        row.addWidget(self.volume_label)
+        volume_row.addWidget(self.volume_label)
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
-        self.volume.setFixedWidth(130)
-        self.volume.setToolTip(tr("The laptop's sound in the hall"))
+        self.volume.setFixedWidth(160)
+        self.volume.setToolTip(tr("The laptops' sound in the hall"))
         self.volume.valueChanged.connect(self.volumeChanged.emit)
-        row.addWidget(self.volume)
-        self.accept_btn = QPushButton(tr("  Show on Main Stage"))
-        self.accept_btn.setObjectName("primary")
-        self.accept_btn.setIcon(icons.get("play", "#0b0e14", 15))
-        self.accept_btn.clicked.connect(lambda: self.acceptRequested.emit(self._ident))
-        row.addWidget(self.accept_btn)
-        self.decline_btn = QPushButton(tr("Decline"))
-        self.decline_btn.clicked.connect(lambda: self.declineRequested.emit(self._ident))
-        row.addWidget(self.decline_btn)
-        self.stop_btn = QPushButton(tr("  Stop sharing"))
-        self.stop_btn.setObjectName("danger")
-        self.stop_btn.setIcon(icons.get("stop", theme["danger"], 15))
-        self.stop_btn.clicked.connect(self.stopRequested.emit)
-        row.addWidget(self.stop_btn)
-        self._ident = ""
+        volume_row.addWidget(self.volume)
+        right.addLayout(volume_row)
+        right.addStretch(1)
+        row.addLayout(right)
+        self.chips: Dict[str, ShareChip] = {}
+        self.preview_first = True
         self.hide()
 
-    def show_waiting(self, request: ShareRequest, more: int, replacing: str = "") -> None:
-        self._ident = request.id
-        self.tag.setText(tr("LAPTOP"))
-        self.tag.setStyleSheet(f"color: {self.theme['accent']}; font-weight: 800; letter-spacing: 1px;")
-        self.title.setText(tr("{0} wants to share their screen").format(request.name))
-        bits = [request.ip, tr("with sound") if request.audio else tr("no sound shared")]
-        if replacing:
-            bits.append(tr("instead of {0}").format(replacing))
-        if more:
-            bits.append(tr("{0} more waiting").format(more))
-        self.detail.setText("  ·  ".join(bits))
-        for widget in (self.accept_btn, self.decline_btn):
-            widget.show()
-        for widget in (self.volume_label, self.volume, self.stop_btn):
-            widget.setVisible(bool(replacing))
-        self.show()
+    def host_for(self, ident: str) -> QFrame:
+        return self._chip(ident).host
 
-    def show_live(self, request: ShareRequest, stats: dict, connected: bool) -> None:
-        self._ident = request.id
-        self.tag.setText(tr("ON MAIN STAGE") if connected else tr("CONNECTING"))
-        self.tag.setStyleSheet(f"color: {self.theme['danger'] if connected else self.theme['warn']};"
-                               " font-weight: 800; letter-spacing: 1px;")
-        self.title.setText(request.name)
-        bits = [request.ip]
-        if stats.get("width"):
-            bits.append(f"{stats['width']}×{stats['height']}  ·  {stats.get('fps', 0):.0f} fps")
-        if connected:
-            bits.append(tr("sound arriving") if stats.get("audio") else
-                        (tr("no sound shared") if not request.audio else tr("sound: silent")))
-        self.detail.setText("  ·  ".join(bits))
-        for widget in (self.accept_btn, self.decline_btn):
-            widget.hide()
-        for widget in (self.volume_label, self.volume, self.stop_btn):
-            widget.show()
-        self.show()
+    def _chip(self, ident: str) -> ShareChip:
+        chip = self.chips.get(ident)
+        if chip is None:
+            chip = ShareChip(ident, self.theme)
+            self.chips[ident] = chip
+            self.chips_row.addWidget(chip, 0, Qt.AlignTop)
+        return chip
+
+    def update_state(self, waiting: List[ShareRequest], links: List[tuple], stage: List[str], layout: str,
+                     can_connect: bool) -> None:
+        """links: (request, link) for every connected laptop."""
+        theme = self.theme
+        order: List[str] = []
+        on_stage = [(r, l) for r, l in links if l.where == "stage"]
+        on_stage.sort(key=lambda pair: stage.index(pair[0].id) if pair[0].id in stage else 99)
+        previews = [(r, l) for r, l in links if l.where != "stage"]
+        stage_count = len(on_stage)
+
+        for request, link in on_stage:
+            order.append(request.id)
+            ident = request.id
+            silenced = link.silenced
+            self._chip(ident).show_state(
+                tr("ON STAGE"), theme["danger"], request.name, describe_stats(request, link), False, [
+                    ("mute", tr("Unmute") if silenced else tr("Mute"), "",
+                     lambda _c=False, i=ident, s=silenced: self.silenceToggled.emit(i, not s),
+                     tr("Hear this laptop in the hall, or not")),
+                    ("stop", tr("Stop"), "danger", lambda _c=False, i=ident: self.dropRequested.emit(i),
+                     tr("Take this laptop off the stage")),
+                ])
+        for request, link in previews:
+            order.append(request.id)
+            ident = request.id
+            if stage_count == 0:
+                buttons = [("alone", tr("TAKE"), "primary",
+                            lambda _c=False, i=ident: self.takeRequested.emit(i, "alone"),
+                            tr("Put this laptop on the Main Stage"))]
+            else:
+                buttons = [("alone", tr("TAKE"), "primary",
+                            lambda _c=False, i=ident: self.takeRequested.emit(i, "alone"),
+                            tr("On the Main Stage instead of what is there")),
+                           ("side", tr("Beside"), "", lambda _c=False, i=ident: self.takeRequested.emit(i, "side"),
+                            tr("Side by side with the laptop on the stage")),
+                           ("pip", tr("Small"), "", lambda _c=False, i=ident: self.takeRequested.emit(i, "pip"),
+                            tr("Small, in the corner of the laptop on the stage"))]
+            buttons.append(("drop", "✕", "ghost", lambda _c=False, i=ident: self.dropRequested.emit(i),
+                            tr("End this preview")))
+            self._chip(ident).show_state(tr("PREVIEW"), theme["warn"], request.name,
+                                         describe_stats(request, link), True, buttons)
+        for request in waiting:
+            order.append(request.id)
+            ident = request.id
+            first = tr("Preview") if self.preview_first else tr("Show on Main Stage")
+            hint = tr("See it here first - nothing reaches the stage until TAKE") if self.preview_first \
+                else tr("Put it on the Main Stage")
+            self._chip(ident).show_state(
+                tr("ASKS"), theme["accent"], request.name, f"{request.ip}  ·  " + describe_stats(request, None),
+                False, [("preview", first, "primary", lambda _c=False, i=ident: self.previewRequested.emit(i), hint),
+                        ("decline", tr("Decline"), "", lambda _c=False, i=ident: self.declineRequested.emit(i),
+                         tr("Say no to this laptop"))])
+            button = self.chips[ident].buttons.get("preview")
+            if button is not None:
+                button.setEnabled(can_connect)
+                if not can_connect:
+                    button.setToolTip(tr("Three laptops are connected - end one first"))
+
+        for ident in [i for i in self.chips if i not in order]:
+            chip = self.chips.pop(ident)
+            self.chips_row.removeWidget(chip)
+            chip.hide()
+            chip.deleteLater()
+        for index, ident in enumerate(order):
+            if self.chips_row.indexOf(self.chips[ident]) != index:
+                self.chips_row.removeWidget(self.chips[ident])
+                self.chips_row.insertWidget(index, self.chips[ident], 0, Qt.AlignTop)
+        self.layout_box.setVisible(stage_count >= 2)
+        self.side_btn.setChecked(layout == "side")
+        self.pip_btn.setChecked(layout == "pip")
+        for widget in (self.volume_label, self.volume):
+            widget.setVisible(stage_count >= 1)
+        self.setVisible(bool(order))
 
 
 class ShareDialog(QDialog):
@@ -602,8 +921,10 @@ class ShareDialog(QDialog):
     portChanged = Signal(int)
     codeRenewed = Signal()
     autoToggled = Signal(bool)
+    previewToggled = Signal(bool)
 
-    def __init__(self, server: ShareServer, theme: dict, parent=None, auto: bool = False) -> None:
+    def __init__(self, server: ShareServer, theme: dict, parent=None, auto: bool = False,
+                 preview: bool = True) -> None:
         super().__init__(parent)
         self.server = server
         self.theme = theme
@@ -661,6 +982,11 @@ class ShareDialog(QDialog):
         self.auto_check.setChecked(auto)
         self.auto_check.toggled.connect(self.autoToggled.emit)
         left.addWidget(self.auto_check)
+        self.preview_check = QCheckBox(tr("Laptops wait in a preview on the desk until TAKE"))
+        self.preview_check.setToolTip(tr("The laptop's picture plays silently in the desk's bar first, so nothing unexpected - an open e-mail, a notification - reaches the hall."))
+        self.preview_check.setChecked(preview)
+        self.preview_check.toggled.connect(self.previewToggled.emit)
+        left.addWidget(self.preview_check)
         left.addStretch(1)
         middle.addLayout(left, 1)
         self.qr = QLabel()
@@ -736,6 +1062,7 @@ PAGE_WORDS = (
     "In the window that opens, choose Entire screen and switch on “Also share system audio” - or choose a tab and “Also share tab audio” - so the hall hears the sound.",
     "Waiting for the stage desk to put you on screen…",
     "You are on the stage screen",
+    "The stage desk is looking at your screen - not on the big screen yet.",
     "Connecting…",
     "Stop sharing",
     "Share again",
@@ -821,7 +1148,11 @@ document.querySelectorAll("[data-t]").forEach(e => e.textContent = t(e.dataset.t
 document.querySelectorAll("[data-p]").forEach(e => e.placeholder = t(e.dataset.p));
 try { $("name").value = localStorage.getItem("share.name") || ""; $("kind").value = localStorage.getItem("share.kind") || "detail"; } catch (e) {}
 
-let pc = null, stream = null, id = "", known = "", running = false;
+let pc = null, stream = null, id = "", known = "", where = "", running = false;
+function connectedText() {
+  if (where === "stage") status("● " + t("You are on the stage screen"), "ok");
+  else status(t("The stage desk is looking at your screen - not on the big screen yet."), "wait");
+}
 
 function status(text, kind) { $("status").textContent = text || ""; $("status").className = kind || ""; }
 function busy(on) {
@@ -873,7 +1204,7 @@ async function share() {
   preferCodecs(transceiver, kind === "detail" ? ["video/VP9", "video/VP8"] : ["video/VP8", "video/VP9"]);
   stream.getAudioTracks().forEach(track => pc.addTransceiver(track, {direction: "sendonly", streams: [stream]}));
   pc.addEventListener("connectionstatechange", () => {
-    if (pc && pc.connectionState === "connected") { status("● " + t("You are on the stage screen"), "ok"); tune(kind); }
+    if (pc && pc.connectionState === "connected") { connectedText(); tune(kind); }
     if (pc && pc.connectionState === "failed") { status(t("Connection lost."), "bad"); stop(true); }
   });
   await pc.setLocalDescription(await pc.createOffer());
@@ -884,7 +1215,7 @@ async function share() {
   try { reply = await post("/api/offer", {code, name: $("name").value, sdp: pc.localDescription.sdp, audio}); }
   catch (e) { status(t("The stage desk cannot be reached."), "bad"); stop(false); return; }
   if (!reply.ok) { status(reply.message || "error", "bad"); stop(false); return; }
-  id = reply.id; known = ""; running = true;
+  id = reply.id; known = ""; where = ""; running = true;
   poll();
 }
 
@@ -911,7 +1242,7 @@ async function poll() {
   let misses = 0;
   while (running) {
     let reply;
-    try { reply = await post("/api/poll", {id, known}); }
+    try { reply = await post("/api/poll", {id, known, where}); }
     catch (e) {
       if (++misses >= 3) status(t("The stage desk cannot be reached."), "bad");
       await new Promise(r => setTimeout(r, 2000));
@@ -920,11 +1251,14 @@ async function poll() {
     misses = 0;
     if (!running) return;
     known = reply.state;
+    where = reply.where || "";
     if (reply.state === "waiting") status(t("Waiting for the stage desk to put you on screen…"), "wait");
     else if (reply.state === "live" && reply.sdp) {
       status(t("Connecting…"), "wait");
       try { await pc.setRemoteDescription({type: "answer", sdp: reply.sdp}); }
       catch (e) { status(String(e), "bad"); stop(true); return; }
+    } else if (reply.state === "live" && pc && pc.connectionState === "connected") {
+      connectedText();
     } else if (reply.state === "declined" || reply.state === "ended") {
       status(reply.message || t("Connection lost."), reply.state === "ended" && !reply.message ? "" : "bad");
       stop(false);
