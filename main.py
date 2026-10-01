@@ -166,6 +166,8 @@ import desk as desk_mod  # noqa: E402 - multiview, SETUP / SHOW, TAKE, ready che
 import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
 import screenshare as share_mod  # noqa: E402 - laptops on the Main Stage (WebRTC)
+import access as access_mod  # noqa: E402 - the admin PIN
+import simple as simple_mod  # noqa: E402 - the simple desk
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -447,6 +449,9 @@ class ControlPanel(QMainWindow):
         self.presets = PresetStore()
         self.active_role = ROLE_MAIN
         self.settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+        # The administrator sees everything; anyone else gets the simple desk.
+        self.access = access_mod.Access(self.settings)
+        self.role = "admin"
         # The look - touch-sized or not - goes on once, before a single widget
         # exists: re-styling the finished window cost over half a second of start-up.
         app = QApplication.instance()
@@ -509,9 +514,16 @@ class ControlPanel(QMainWindow):
         self._session_written = ""
 
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(14, 12, 14, 8)
-        root.setSpacing(9)
+        shell = QHBoxLayout(central)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        self.nav = desk_mod.NavRail(Icons, THEME)
+        shell.addWidget(self.nav)
+        body = QWidget()
+        shell.addWidget(body, 1)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(18, 12, 18, 6)
+        root.setSpacing(10)
         root.addWidget(self._build_header())
         # A laptop asking to share, or on stage, shows here whatever tab is open.
         self.share_bar = share_mod.ShareBar(Icons, THEME)
@@ -524,11 +536,13 @@ class ControlPanel(QMainWindow):
         root.addWidget(self.preset_bar)
 
         self.tabs = desk_mod.PageTabs()
-        self.tabs.addTab(self._build_live_tab(), tr('  Live  '))
+        self.live_page = self._build_live_tab()
+        self.tabs.addTab(self.live_page, tr('  Live  '))
         self.tabs.addTab(self._build_show_tab(), tr('  Show  '))
         self.tabs.addTab(self._build_presentation_tab(), tr('  Slides  '))
         self.tabs.addTab(self._build_library_tab(), tr('  Library  '))
-        self.tabs.addTab(self._build_text_tab(), tr('  Text  '))
+        self.text_page = self._build_text_tab()
+        self.tabs.addTab(self.text_page, tr('  Text  '))
         # The DJ desk is built the first time its tab opens: it starts an audio
         # engine, and a show that never uses it should not pay for one.
         self.dj_panel = None
@@ -538,7 +552,24 @@ class ControlPanel(QMainWindow):
         self.tabs.addTab(self.dj_page, tr('  DJ  '), scroll=False)   # the DJ desk sizes itself
         # "&&" because a single & would be swallowed as a keyboard mnemonic.
         self.screens_page = self._build_screens_tab()
-        self.tabs.addTab(self.screens_page, tr('  Screens && Setup  '))
+        self.tabs.addTab(self.screens_page, tr('  Settings  '))
+        self.simple_page = self._build_simple_page()
+        self.tabs.addTab(self.simple_page, tr('  Stage  '))
+        # The rail is the navigation now; the tab bar would only repeat it.
+        self.tabs.tabBar().hide()
+        for page, icon, label, lower in ((self.simple_page, "home", tr("Stage"), False),
+                                         (self.live_page, "broadcast", tr("Live"), False),
+                                         (self.show_tab, "list", tr("Show"), False),
+                                         (self.presentation_tab, "slides", tr("Slides"), False),
+                                         (self.library, "folder", tr("Library"), False),
+                                         (self.text_page, "text", tr("Text"), False),
+                                         (self.dj_page, "disc", "DJ", False),
+                                         (self.screens_page, "gear", tr("Settings"), True)):
+            self.nav.add_page(self.tabs.indexOf(page), icon, label, lower)
+        self.nav.finish()
+        self.nav.pageRequested.connect(self.tabs.setCurrentIndex)
+        self.nav.accountRequested.connect(self._on_account)
+        self.nav.helpRequested.connect(self._show_shortcuts)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
         # NOW / NEXT follows the operator onto every tab.
@@ -581,6 +612,7 @@ class ControlPanel(QMainWindow):
         except (TypeError, ValueError):
             self._set_dark_room(0)
         self._set_mode(str(self.settings.value("ui/mode", "setup")), check=False)
+        self._set_role("user" if self.access.start_simple() else "admin")
         self._refresh_show_strip()
         # What is on stage is written down every few seconds; after a crash it is offered back.
         self._session_timer = QTimer(self)
@@ -596,7 +628,7 @@ class ControlPanel(QMainWindow):
         self._health_timer.start(2000)
         self._refresh_health()
         self.statusBar().showMessage(
-            tr('Screens & Setup → assign monitors → OPEN OUTPUTS.   Then drop media onto a card, or build a playlist.')
+            tr('Settings → Screens → assign monitors → Open outputs.   Then drop media onto a card, or build a playlist.')
         )
 
     # ------------------------------------------------------------------ UI -- #
@@ -614,17 +646,7 @@ class ControlPanel(QMainWindow):
         layout.setSpacing(16)
 
         left = QVBoxLayout()
-        left.setSpacing(3)
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(8)
-        mark = QLabel()
-        mark.setPixmap(Icons.get("monitor", CLR_ACCENT, 19).pixmap(19, 19))
-        brand_row.addWidget(mark)
-        title = QLabel(tr('Stage Display'))
-        title.setObjectName("brand")
-        brand_row.addWidget(title)
-        brand_row.addStretch(1)
-        left.addLayout(brand_row)
+        left.setSpacing(2)
         # A wall clock the operator can glance at without leaving the app.
         self.clock = QLabel()
         self.clock.setObjectName("clock")
@@ -671,14 +693,6 @@ class ControlPanel(QMainWindow):
         self.mode_switch = desk_mod.ModeSwitch(THEME)
         self.mode_switch.modeChanged.connect(self._set_mode)
         top_row.addWidget(self.mode_switch)
-        self.preview_btn = QPushButton(tr('  PREVIEW → TAKE'))
-        self.preview_btn.setCheckable(True)
-        self.preview_btn.setIcon(Icons.get("target", CLR_TEXT, 15))
-        self.preview_btn.setToolTip(
-            tr('On: a file, preset or name chosen by hand waits in PREVIEW until you press TAKE,\nso nothing reaches the stage by accident. NEXT in the running order goes straight on.'))
-        self.preview_btn.setChecked(self.preview_first)
-        self.preview_btn.toggled.connect(self._set_preview_first)
-        top_row.addWidget(self.preview_btn)
         self.rehearse_btn = QPushButton(tr('  Rehearse'))
         self.rehearse_btn.setCheckable(True)
         self.rehearse_btn.setIcon(Icons.get("play", CLR_TEXT, 15))
@@ -779,6 +793,7 @@ class ControlPanel(QMainWindow):
             state = desk_mod.STATE_REHEARSAL if rehearsing else (
                 desk_mod.STATE_LIVE if live else desk_mod.STATE_BLACK)
             tile.set_state(state, pixmap, caption)
+        self._refresh_simple()
 
     @Slot(str)
     def _on_tile_clicked(self, role: str) -> None:
@@ -820,15 +835,9 @@ class ControlPanel(QMainWindow):
         self.settings.setValue("ui/mode", mode)
         show = mode == "show"
         self.mode_switch.set_mode(mode)
-        setup_pages = (self.library, self.screens_page)
-        if show and self.tabs.currentWidget() in setup_pages:
-            self.tabs.setCurrentIndex(0)      # before hiding: Qt would pick a neighbour
-        for page in setup_pages:
-            index = self.tabs.indexOf(page)
-            if index >= 0:
-                self.tabs.setTabVisible(index, not show)
-        self.open_btn.setVisible(not show)
-        self.rehearse_btn.setVisible(not show)
+        self._apply_page_visibility()
+        self.open_btn.setVisible(not show or self.role == "user")
+        self.rehearse_btn.setVisible(not show and self.role != "user")
         for widget in getattr(self, "_preset_edit_widgets", []):
             widget.setVisible(not show)
         self.show_tab.set_locked(show)
@@ -838,8 +847,163 @@ class ControlPanel(QMainWindow):
         else:
             self.mode_note.setText(tr('SETUP  ·  preparing'))
             self.mode_note.setStyleSheet("")
+        if self.role == "user":
+            self.mode_note.setText(tr('SIMPLE DESK'))
+            self.mode_note.setStyleSheet(f"color: {CLR_ACCENT}; font-weight: 700;")
         if show and check and any(row["status"] == "fail" for row in self._ready_checks()):
             self._open_ready_check()
+
+    # -- who is at the desk ---------------------------------------------------- #
+
+    def _apply_page_visibility(self) -> None:
+        """The pages that may be opened now: by who is at the desk, and by SETUP / SHOW."""
+        if not hasattr(self, "simple_page"):
+            return
+        simple = self.role == "user"
+        show = self.ui_mode == "show"
+        rules = {
+            self.tabs.indexOf(self.live_page): not simple,
+            self.tabs.indexOf(self.show_tab): True,
+            self.tabs.indexOf(self.presentation_tab): True,
+            self.tabs.indexOf(self.library): not simple and not show,
+            self.tabs.indexOf(self.text_page): not simple,
+            self.tabs.indexOf(self.dj_page): not simple,
+            self.tabs.indexOf(self.screens_page): not simple and not show,
+            self.tabs.indexOf(self.simple_page): simple,
+        }
+        if not rules.get(self.tabs.currentIndex(), True):
+            # move first: Qt would pick a neighbour of a page it hides
+            self.tabs.setCurrentWidget(self.simple_page if simple else self.live_page)
+        for index, visible in rules.items():
+            if index >= 0 and self.tabs.isTabVisible(index) != visible:
+                self.tabs.setTabVisible(index, visible)
+        self.nav.sync(self.tabs)
+
+    def _set_role(self, role: str) -> None:
+        """
+        "admin": everything. "user": the simple desk - SHOW mode, editing locked,
+        and only the pages a rehearsal needs.
+        """
+        simple = role == "user"
+        if simple and self.role != "user":
+            self._mode_before_simple = self.ui_mode
+        self.role = role
+        if simple:
+            self._set_mode("show", check=False)
+        elif getattr(self, "_mode_before_simple", None):
+            self._set_mode(self._mode_before_simple, check=False)
+            self._mode_before_simple = None
+        else:
+            self._set_mode(self.ui_mode, check=False)
+        self.mode_switch.setVisible(not simple)
+        self.nav.set_account(not simple, self.access.has_pin())
+        self._apply_page_visibility()
+        if simple:
+            self.tabs.setCurrentWidget(self.simple_page)
+            self._refresh_simple()
+        self._describe_security()
+
+    @Slot()
+    def _on_account(self) -> None:
+        """The rail's lock: hand the desk over (simple), or take it back (the admin PIN)."""
+        if self.role == "user":
+            if not self.access.has_pin() or access_mod.ask_pin(THEME, self.access, self):
+                self._set_role("admin")
+                self.statusBar().showMessage(tr('Administrator - everything is open.'), 5000)
+            return
+        if not self.access.has_pin():
+            pin = access_mod.choose_pin(THEME, self, tr('Choose an admin PIN'))
+            if not pin:
+                return
+            self.access.set_pin(pin)
+        self._set_role("user")
+        self.statusBar().showMessage(tr('The simple desk. The admin PIN opens everything else.'), 6000)
+
+    def _set_admin_pin(self) -> None:
+        if self.access.has_pin() and not access_mod.ask_pin(THEME, self.access, self):
+            return
+        pin = access_mod.choose_pin(THEME, self, tr('Choose an admin PIN'))
+        if pin:
+            self.access.set_pin(pin)
+            self.statusBar().showMessage(tr('Admin PIN saved.'), 5000)
+        self._describe_security()
+
+    def _remove_admin_pin(self) -> None:
+        if self.access.has_pin() and access_mod.ask_pin(THEME, self.access, self):
+            self.access.clear_pin()
+            self.statusBar().showMessage(tr('Admin PIN removed - the simple desk can be left by anyone.'), 6000)
+        self._describe_security()
+
+    def _describe_security(self) -> None:
+        if not hasattr(self, "pin_status"):
+            return
+        has = self.access.has_pin()
+        self.pin_status.setText(
+            tr('Set. Leaving the simple desk, and changing this PIN, need it.') if has else
+            tr('Not set: the simple desk can be left by anyone. Set a PIN before handing the desk over.'))
+        self.pin_status.setStyleSheet("" if has else f"color: {CLR_WARN};")
+        self.pin_set_btn.setText(tr('  Change PIN…') if has else tr('  Set a PIN…'))
+        self.pin_remove_btn.setVisible(has)
+        self.nav.set_account(self.role != "user", has)
+
+    # -- the simple desk -------------------------------------------------------- #
+
+    def _build_simple_page(self) -> QWidget:
+        strip = desk_mod.PresetStrip(THEME)
+        self.simple_presets = strip
+        page = simple_mod.SimplePage([(role, ROLE_LABELS[role]) for role in STAGE_ROLES], Icons, THEME, strip)
+        page.presetChosen.connect(self._on_preset_tile)
+        page.fileRequested.connect(self._simple_pick_file)
+        page.blackRequested.connect(lambda role: self.cards[role].clearRequested.emit())
+        page.slidesOpenRequested.connect(self._simple_open_slides)
+        page.slideNext.connect(lambda: self.presenter.next())
+        page.slideBack.connect(lambda: self.presenter.back())
+        page.slidesLive.connect(lambda: self.presenter.go_live_when_ready(ROLE_MAIN))
+        page.slidesEnd.connect(self.presenter.end)
+        page.cueClicked.connect(self._fire_cue)
+        page.stopSoundRequested.connect(self._stop_all_sound)
+        page.masterChanged.connect(self.sound_master.setValue)
+        page.laptopRequested.connect(self._open_share_dialog)
+        page.openScreensRequested.connect(self._apply_routing)
+        return page
+
+    def _simple_pick_file(self, role: str) -> None:
+        start = str(self.settings.value("simple/folder", "") or os.path.expanduser("~/Desktop"))
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr('Show a file on the {0}').format(ROLE_LABELS[role]), start, MEDIA_FILTER)
+        if path:
+            self.settings.setValue("simple/folder", os.path.dirname(path))
+            self.cards[role].loadRequested.emit(os.path.normpath(path))
+
+    def _simple_open_slides(self) -> None:
+        before = self.presenter.deck
+        self.presentation_tab._open_file()
+        if self.presenter.deck is not None and self.presenter.deck is not before:
+            self.presenter.go_live_when_ready(ROLE_MAIN)
+
+    def _refresh_simple(self) -> None:
+        if self.role != "user" or self.tabs.currentWidget() is not self.simple_page:
+            return
+        page = self.simple_page
+        for role, tile in self.multiview.tiles.items():
+            page.set_screen(role, tile.pixmap, tile.caption, tile.state)
+        page.set_screens_closed([ROLE_LABELS[role] for role in STAGE_ROLES if self._show_output(role) is None])
+        presenter = self.presenter
+        if presenter.deck is None:
+            page.set_slides(tr('Nothing open.'), False, False)
+        else:
+            name = os.path.basename(str(getattr(presenter.deck, "path", "")).rstrip("\\/"))
+            text = tr('{0}  ·  slide {1} of {2}').format(name, presenter.index + 1, presenter.count() or "…")
+            if presenter.live:
+                text += "  ·  " + tr('on the {0}').format(ROLE_LABELS.get(presenter.role, ""))
+            page.set_slides(text, True, presenter.live)
+        page.set_cues([(cue.label() if cue.path else "", cue.is_playing(), cue.is_paused()) for cue in self.sound.cues])
+        page.set_master(self.sound_master.value())
+        if self.share.running and self.share.addresses():
+            page.set_laptop(tr('On the laptop, open {0} in Chrome or Edge and type the code {1}.').format(
+                self.share.addresses()[0], self.share.code))
+        else:
+            page.set_laptop(tr('The laptop share is off - the administrator switches it on in Settings.'))
 
     # -- dark room ------------------------------------------------------------ #
 
@@ -1570,6 +1734,9 @@ class ControlPanel(QMainWindow):
         elif key == "open":
             self._apply_routing()
         elif key == "screens":
+            if self.role == "user":
+                self.statusBar().showMessage(tr('The screens are set up by the administrator.'), 6000)
+                return
             self._set_mode("setup", check=False)
             self.tabs.setCurrentWidget(self.screens_page)
         elif key == "hall_audio":
@@ -1622,9 +1789,8 @@ class ControlPanel(QMainWindow):
         self.preset_strip.menuRequested.connect(self._preset_menu)
         layout.addWidget(self.preset_strip, 1)
 
-        edit = QGridLayout()
-        edit.setHorizontalSpacing(6)
-        edit.setVerticalSpacing(6)
+        edit = QHBoxLayout()
+        edit.setSpacing(6)
         new_btn = QPushButton(tr('  Save as new…'))
         new_btn.setIcon(Icons.get("plus", CLR_TEXT, 15))
         new_btn.setToolTip(tr('Store what is set up now under a new name'))
@@ -1641,10 +1807,8 @@ class ControlPanel(QMainWindow):
         delete_btn.setIcon(Icons.get("trash", CLR_TEXT, 15))
         delete_btn.setToolTip(tr('Remove the chosen preset - hold to confirm'))
         delete_btn.clicked.connect(self._delete_preset)
-        edit.addWidget(new_btn, 0, 0)
-        edit.addWidget(save_btn, 0, 1)
-        edit.addWidget(new_preset_btn, 1, 0)
-        edit.addWidget(delete_btn, 1, 1)
+        for button in (new_btn, save_btn, new_preset_btn, delete_btn):
+            edit.addWidget(button, 0, Qt.AlignVCenter)
         layout.addLayout(edit)
         # hidden in SHOW mode
         self._preset_edit_widgets = [new_preset_btn, save_btn, new_btn, delete_btn]
@@ -1690,12 +1854,17 @@ class ControlPanel(QMainWindow):
     def _rebuild_preset_strip(self) -> None:
         items = [(name, self._preset_picture(self.presets.get(name) or {})) for name in self.presets.names()]
         self.preset_strip.set_presets(items)
+        if hasattr(self, "simple_presets"):
+            self.simple_presets.set_presets(items)
+            self.simple_page.set_has_scenes(bool(items))
         self._mark_preset_strip()
 
     def _mark_preset_strip(self) -> None:
         if hasattr(self, "preset_strip"):
             chosen = self.preset_combo.currentText() if self.preset_combo.isEnabled() else None
             self.preset_strip.mark(self.loaded_preset, self._preset_dirty, chosen)
+            if hasattr(self, "simple_presets"):
+                self.simple_presets.mark(self.loaded_preset, self._preset_dirty, chosen)
 
     @Slot(str)
     def _on_preset_tile(self, name: str) -> None:
@@ -2298,6 +2467,12 @@ class ControlPanel(QMainWindow):
             self._share_dialog.refresh()
 
     def _describe_share(self) -> None:
+        if hasattr(self, "share_status"):
+            self.share_status.setText(
+                tr('On  ·  {0}  ·  code {1}').format(self.share.addresses()[0] if self.share.addresses() else "",
+                                                     self.share.code)
+                if self.share.running else tr('Off'))
+            self.share_status.setStyleSheet(f"color: {CLR_OK};" if self.share.running else "")
         tab = getattr(self, "presentation_tab", None)
         if tab is None:
             return
@@ -2434,6 +2609,13 @@ class ControlPanel(QMainWindow):
             bar.hide()
 
     def _describe_remote(self) -> None:
+        if hasattr(self, "remote_status"):
+            count = self.remote.clients()
+            self.remote_status.setText(
+                (tr('On  ·  {0}').format(self.remote.addresses()[0] if self.remote.addresses() else "")
+                 + (tr('  ·  {0} phone(s) connected').format(count) if count else ""))
+                if self.remote.running else tr('Off'))
+            self.remote_status.setStyleSheet(f"color: {CLR_OK};" if self.remote.running else "")
         if self.remote.running:
             count = self.remote.clients()
             self.show_tab.remote_btn.setText(tr('  Phone remote · ON').format() + (f" ({count})" if count else ""))
@@ -3497,6 +3679,9 @@ class ControlPanel(QMainWindow):
         if on_dj and self.dj_panel is None:
             self._build_dj_panel()
         self._refresh_show_strip()
+        self.nav.sync(self.tabs)
+        if self.tabs.widget(index) is self.simple_page:
+            self._refresh_simple()
 
     def _build_dj_panel(self) -> None:
         try:
@@ -3528,21 +3713,89 @@ class ControlPanel(QMainWindow):
             window.engine.play()
 
     def _build_screens_tab(self) -> QWidget:
+        """
+        Settings: everything that sets the hall up, in sections down the left -
+        none of it needed while a show runs.
+        """
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(11)
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(0, 6, 0, 0)
+        outer.setSpacing(26)
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        title = QLabel(tr('Settings'))
+        title.setObjectName("pageTitle")
+        left.addWidget(title)
+        left.addSpacing(10)
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settingsNav")
+        self.settings_nav.setFixedWidth(264)
+        self.settings_nav.setIconSize(QSize(18, 18))
+        self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_nav.setTextElideMode(Qt.ElideRight)
+        left.addWidget(self.settings_nav, 1)
+        outer.addLayout(left)
+        self.settings_stack = QStackedWidget()
+        outer.addWidget(self.settings_stack, 1)
+        sections = (
+            ("monitor", tr('Screens'), tr('Which monitor is which stage screen, and the stage windows themselves.'),
+             (self._build_routing_card(),)),
+            ("image", tr('Picture & show'), tr('How pictures change on the stage, and how carefully.'),
+             (self._build_transition_card(),)),
+            ("phone", tr('Phone & laptops'), tr('Running the show from a phone, and laptops on the Main Stage.'),
+             (self._build_remote_card(), self._build_laptop_card())),
+            ("power", tr('Start with Windows'), tr('The app and a preset come up by themselves when the PC starts.'),
+             (self._build_autostart_card(),)),
+            ("palette", tr('Interface'), tr('Language, and controls sized for fingers.'),
+             (self._build_touch_card(),)),
+            ("lock", tr('Admin & simple desk'), tr('Keep the setup safe while others use the hall.'),
+             (self._build_security_card(),)),
+            ("save", tr('Backups'), tr('Copies of the presets and running orders, taken before they change.'),
+             (self._build_backups_card(),)),
+            ("help", tr('Help'), tr('Keys, and how a show is run.'),
+             (self._build_help_card(),)),
+        )
+        for icon, name, lead, cards in sections:
+            self.settings_nav.addItem(QListWidgetItem(Icons.get(icon, CLR_DIM, 18), name))
+            section = QWidget()
+            box = QVBoxLayout(section)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(12)
+            heading = QLabel(name)
+            heading.setObjectName("pageTitle")
+            box.addWidget(heading)
+            text = QLabel(lead)
+            text.setObjectName("pageLead")
+            text.setWordWrap(True)
+            box.addWidget(text)
+            box.addSpacing(4)
+            for card in cards:
+                box.addWidget(card)
+            box.addStretch(1)
+            self.settings_stack.addWidget(section)
+        self.settings_nav.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
+        self.settings_nav.setCurrentRow(0)
+        return page
 
+    def open_settings(self, section: int) -> None:
+        self.tabs.setCurrentWidget(self.screens_page)
+        self.settings_nav.setCurrentRow(section)
+
+    @staticmethod
+    def _settings_card(title: str = "") -> tuple:
         card = QFrame()
         card.setObjectName("card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(16, 14, 16, 16)
-        card_layout.setSpacing(10)
+        box = QVBoxLayout(card)
+        box.setContentsMargins(18, 16, 18, 16)
+        box.setSpacing(10)
+        if title:
+            heading = QLabel(title)
+            heading.setObjectName("cardTitle")
+            box.addWidget(heading)
+        return card, box
 
-        heading = QLabel(tr('Display routing'))
-        heading.setObjectName("sectionTitle")
-        card_layout.addWidget(heading)
-
+    def _build_routing_card(self) -> QWidget:
+        card, card_layout = self._settings_card(tr('Display routing'))
         note = QLabel(
             tr("Assign each role to a monitor. Use “Custom size” when an LED processor's mapped canvas differs from the resolution Windows reports — the ceiling strip is driven at {0}×{1}.").format(DEFAULT_TOP_WIDTH, DEFAULT_TOP_HEIGHT)
         )
@@ -3560,10 +3813,10 @@ class ControlPanel(QMainWindow):
         self.routing_rows[ROLE_MAIN].on_top_check.setChecked(False)
 
         buttons = QHBoxLayout()
-        buttons.setSpacing(7)
+        buttons.setSpacing(8)
         apply_btn = QPushButton(tr('  Apply routing / Open outputs'))
         apply_btn.setObjectName("primary")
-        apply_btn.setIcon(Icons.get("monitor", "#0b0e13", 16))
+        apply_btn.setIcon(Icons.get("monitor", CLR_INK, 16))
         apply_btn.clicked.connect(self._apply_routing)
         buttons.addWidget(apply_btn)
 
@@ -3583,17 +3836,20 @@ class ControlPanel(QMainWindow):
         use_reported.setToolTip(tr('Fill the W/H boxes with what Windows reports for each monitor'))
         use_reported.clicked.connect(self._copy_reported_sizes)
         buttons.addWidget(use_reported)
+        buttons.addStretch(1)
 
         close_outputs = desk_mod.HoldButton(tr('  Close outputs'), THEME)
         close_outputs.setIcon(Icons.get("close", CLR_TEXT, 16))
         close_outputs.setToolTip(tr('Close every stage output window (the app keeps running) - hold to confirm'))
         close_outputs.clicked.connect(self._close_all_outputs)
         buttons.addWidget(close_outputs)
+        card_layout.addLayout(buttons)
+        return card
 
-        buttons.addSpacing(14)
-        fade_label = QLabel(tr('Transition'))
-        fade_label.setObjectName("cardHint")
-        buttons.addWidget(fade_label)
+    def _build_transition_card(self) -> QWidget:
+        card, box = self._settings_card(tr('Transitions'))
+        row = QHBoxLayout()
+        row.setSpacing(10)
         self.fade_combo = QComboBox()
         for caption, milliseconds in FADE_PRESETS:
             self.fade_combo.addItem(tr(caption), milliseconds)
@@ -3601,8 +3857,7 @@ class ControlPanel(QMainWindow):
             tr('How long a change of picture takes.\nApplies to every screen, to playlist steps and to blackouts.')
         )
         self.fade_combo.currentIndexChanged.connect(self._on_fade_changed)
-        buttons.addWidget(self.fade_combo)
-
+        row.addWidget(self.fade_combo)
         self.style_combo = QComboBox()
         for caption, value in TRANSITION_STYLES:
             self.style_combo.addItem(tr(caption), value)
@@ -3610,42 +3865,128 @@ class ControlPanel(QMainWindow):
             tr('Crossfade dissolves the old picture into the new one - the hall never goes dark.\nThrough black fades out, swaps, then fades in.')
         )
         self.style_combo.currentIndexChanged.connect(self._on_fade_changed)
-        buttons.addWidget(self.style_combo)
+        row.addWidget(self.style_combo)
+        row.addStretch(1)
+        box.addLayout(row)
+        hint = QLabel(tr('How long a change of picture takes, on every screen, in playlists and for blackouts.'))
+        hint.setObjectName("cardHint")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
 
-        buttons.addStretch(1)
-        card_layout.addLayout(buttons)
-        layout.addWidget(card)
-        layout.addWidget(self._build_autostart_card())
-        layout.addWidget(self._build_touch_card())
-        layout.addWidget(self._build_backups_card())
+        careful, careful_box = self._settings_card(tr('PREVIEW → TAKE'))
+        self.preview_btn = QCheckBox(tr('Hand-picked changes wait in PREVIEW until TAKE'))
+        self.preview_btn.setChecked(self.preview_first)
+        self.preview_btn.toggled.connect(self._set_preview_first)
+        careful_box.addWidget(self.preview_btn)
+        hint = QLabel(tr('On: a file, preset or name chosen by hand waits in the header until you press TAKE, so nothing reaches the stage by accident. NEXT in the running order goes straight on.'))
+        hint.setObjectName("cardHint")
+        hint.setWordWrap(True)
+        careful_box.addWidget(hint)
+        holder = QWidget()
+        stack = QVBoxLayout(holder)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(12)
+        stack.addWidget(card)
+        stack.addWidget(careful)
+        return holder
 
-        tips = QFrame()
-        tips.setObjectName("card")
-        tips_layout = QVBoxLayout(tips)
-        tips_layout.setContentsMargins(16, 14, 16, 16)
-        tips_layout.setSpacing(8)
-        tip_title = QLabel(tr('Running a show'))
-        tip_title.setObjectName("sectionTitle")
-        tips_layout.addWidget(tip_title)
+    def _build_remote_card(self) -> QWidget:
+        card, box = self._settings_card(tr('Phone remote'))
+        hint = QLabel(tr('NEXT, BLACKOUT, the sound cues and the presets from any phone on the Wi-Fi, behind a PIN - and a slides-only QR code for a guest speaker.'))
+        hint.setObjectName("cardHint")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
+        self.remote_status = QLabel(tr('Off'))
+        box.addWidget(self.remote_status)
+        row = QHBoxLayout()
+        open_btn = QPushButton(tr('  Phone remote…'))
+        open_btn.setIcon(Icons.get("phone", CLR_TEXT, 15))
+        open_btn.clicked.connect(self._open_remote_dialog)
+        row.addWidget(open_btn)
+        guest = QPushButton(tr('  Guest slide clicker…'))
+        guest.setIcon(Icons.get("slides", CLR_TEXT, 15))
+        guest.clicked.connect(self._open_guest_dialog)
+        row.addWidget(guest)
+        row.addStretch(1)
+        box.addLayout(row)
+        return card
+
+    def _build_laptop_card(self) -> QWidget:
+        card, box = self._settings_card(tr('Laptop screen share'))
+        hint = QLabel(tr('A laptop on the same network shows its screen - with its sound - on the Main Stage, from a page in Chrome or Edge. The desk approves each one.'))
+        hint.setObjectName("cardHint")
+        hint.setWordWrap(True)
+        box.addWidget(hint)
+        self.share_status = QLabel(tr('Off'))
+        box.addWidget(self.share_status)
+        row = QHBoxLayout()
+        open_btn = QPushButton(tr('  Laptop screen share…'))
+        open_btn.setIcon(Icons.get("monitor", CLR_TEXT, 15))
+        open_btn.clicked.connect(self._open_share_dialog)
+        row.addWidget(open_btn)
+        row.addStretch(1)
+        box.addLayout(row)
+        return card
+
+    def _build_security_card(self) -> QWidget:
+        holder = QWidget()
+        stack = QVBoxLayout(holder)
+        stack.setContentsMargins(0, 0, 0, 0)
+        stack.setSpacing(12)
+        card, box = self._settings_card(tr('Admin PIN'))
+        self.pin_status = QLabel()
+        self.pin_status.setObjectName("cardHint")
+        self.pin_status.setWordWrap(True)
+        box.addWidget(self.pin_status)
+        row = QHBoxLayout()
+        self.pin_set_btn = QPushButton(tr('  Set a PIN…'))
+        self.pin_set_btn.setIcon(Icons.get("lock", CLR_TEXT, 15))
+        self.pin_set_btn.clicked.connect(self._set_admin_pin)
+        row.addWidget(self.pin_set_btn)
+        self.pin_remove_btn = desk_mod.HoldButton(tr('  Remove PIN'), THEME)
+        self.pin_remove_btn.setToolTip(tr('Asks for the PIN, then removes it - hold to confirm'))
+        self.pin_remove_btn.clicked.connect(self._remove_admin_pin)
+        row.addWidget(self.pin_remove_btn)
+        row.addStretch(1)
+        box.addLayout(row)
+        stack.addWidget(card)
+
+        card, box = self._settings_card(tr('The simple desk'))
+        text = QLabel(tr('For whoever uses the hall without setting it up - a rehearsal, a guest. It shows what is on the screens, the scenes (presets), a file or a presentation for a screen, the sound cues and a laptop, big and plain. The wiring, presets, running-order editor, library, DJ desk and these settings stay with the administrator; leaving the simple desk takes the PIN.'))
+        text.setObjectName("cardHint")
+        text.setWordWrap(True)
+        box.addWidget(text)
+        self.start_simple_check = QCheckBox(tr('Open the app on the simple desk (once a PIN is set)'))
+        self.start_simple_check.setChecked(str(self.settings.value("security/start_simple", "true")).lower() == "true")
+        self.start_simple_check.toggled.connect(
+            lambda on: self.settings.setValue("security/start_simple", "true" if on else "false"))
+        box.addWidget(self.start_simple_check)
+        row = QHBoxLayout()
+        go = QPushButton(tr('  Switch to the simple desk now'))
+        go.setIcon(Icons.get("lock", CLR_TEXT, 15))
+        go.clicked.connect(self._on_account)
+        row.addWidget(go)
+        row.addStretch(1)
+        box.addLayout(row)
+        stack.addWidget(card)
+        return holder
+
+    def _build_help_card(self) -> QWidget:
+        card, box = self._settings_card(tr('Running a show'))
         tip_text = QLabel(
             tr("Prepare the event by dropping several backgrounds onto a card — they land in that screen's playlist.\nDuring the show, click a playlist entry, or use the ‹ › arrows, to switch instantly.\nRepeat is on by default, so videos loop; switch it off per screen to play once.\n“On top” is off for the Main Stage, so a PowerPoint deck or a browser can be shown over its background — the side and ceiling screens stay above everything.\nSave everything as a preset, and the next assembly is one click away.\nStage windows stay out of the taskbar, so only this dashboard appears there.")
         )
-        lines = tip_text.text().split("\n")
-        tip_text.setText("\n".join(lines[:len(lines) // 2]))
         tip_text.setObjectName("cardHint")
         tip_text.setWordWrap(True)
-        tip_more = QLabel("\n".join(lines[len(lines) // 2:]))
-        tip_more.setObjectName("cardHint")
-        tip_more.setWordWrap(True)
-        columns = QHBoxLayout()
-        columns.setSpacing(28)
-        columns.addWidget(tip_text, 1, Qt.AlignTop)
-        columns.addWidget(tip_more, 1, Qt.AlignTop)
-        tips_layout.addLayout(columns)
-        layout.addWidget(tips)
-
-        layout.addStretch(1)
-        return page
+        box.addWidget(tip_text)
+        row = QHBoxLayout()
+        keys = QPushButton(tr('  Keyboard shortcuts'))
+        keys.setIcon(Icons.get("keyboard", CLR_TEXT, 15))
+        keys.clicked.connect(self._show_shortcuts)
+        row.addWidget(keys)
+        row.addStretch(1)
+        box.addLayout(row)
+        return card
 
     def _build_touch_card(self) -> QWidget:
         card = QFrame()

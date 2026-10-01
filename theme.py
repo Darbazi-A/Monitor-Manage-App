@@ -106,40 +106,41 @@ from PySide6.QtWidgets import (
 from config import *  # noqa: F401,F403
 from i18n import language
 
-# Palette. Navy ground and a gold accent, taken from the school's own colours -
-# a generic dark-grey-and-blue theme looked like every other dark-grey-and-blue
-# theme. One accent only; green, amber and red are kept for state, nothing else.
-CLR_BG = "#0c1018"
-CLR_CARD = "#141a26"
-CLR_RAISED = "#1a2130"
-CLR_INPUT = "#111724"
-CLR_HOVER = "#1f2838"
-CLR_LINE = "#232c3d"
-CLR_LINE_SOFT = "#1b2230"
-# Edges: a lit hairline on top, a darker one elsewhere. Depth without shadows.
-CLR_EDGE = "#222b3c"
-CLR_EDGE_SOFT = "#1a2130"
-CLR_EDGE_HI = "#2c3750"
-CLR_EDGE_LIT = "#313d55"
-CLR_WELL = "#0f141e"
-CLR_BTN_TOP = "#212a3a"
-CLR_BTN_BOTTOM = "#182030"
-CLR_TEXT = "#e9edf5"
-CLR_DIM = "#9aa6bb"
-CLR_MUTED = "#6c7891"
-CLR_ACCENT = "#e3b23c"
-CLR_ACCENT_SOFT = "rgba(227, 178, 60, 0.14)"
-CLR_INK = "#12161f"
-CLR_OK = "#57c98a"
-CLR_WARN = "#d9853f"
-CLR_DANGER = "#e0605c"
+# Palette. A quiet graphite-navy ground, flat surfaces told apart by a step in
+# lightness and a hairline - no gradients, no lit edges. One accent, a soft gold,
+# for the one action that matters and for what is selected; green, amber and red
+# are kept for state (on air, needs attention, live / blackout), nothing else.
+CLR_BG = "#0d1016"
+CLR_NAV = "#090b10"
+CLR_CARD = "#141820"
+CLR_RAISED = "#1a1f29"
+CLR_INPUT = "#10131a"
+CLR_HOVER = "#1e2430"
+CLR_LINE = "#232937"
+CLR_LINE_SOFT = "#1b202a"
+CLR_EDGE = "#21262f"
+CLR_EDGE_SOFT = "#1a1e27"
+CLR_EDGE_HI = "#2f3644"
+CLR_EDGE_LIT = "#262c37"
+CLR_WELL = "#0f1218"
+CLR_BTN_TOP = "#1a1f29"
+CLR_BTN_BOTTOM = "#1a1f29"
+CLR_TEXT = "#e6e9ef"
+CLR_DIM = "#a1a9b8"
+CLR_MUTED = "#6c7484"
+CLR_ACCENT = "#d6ad52"
+CLR_ACCENT_SOFT = "rgba(214, 173, 82, 0.13)"
+CLR_INK = "#16120a"
+CLR_OK = "#4cbb83"
+CLR_WARN = "#d8994a"
+CLR_DANGER = "#df5d58"
 
 # The palette as handed to the modules that cannot import this one.
 THEME = {
     "accent": CLR_ACCENT, "text": CLR_TEXT, "dim": CLR_DIM, "muted": CLR_MUTED,
     "ok": CLR_OK, "warn": CLR_WARN, "danger": CLR_DANGER, "card": CLR_CARD,
     "raised": CLR_RAISED, "well": CLR_WELL, "edge": CLR_EDGE, "ink": CLR_INK,
-    "rehearse": "#7c9cf0",
+    "rehearse": "#7d97e0", "nav": CLR_NAV, "bg": CLR_BG,
 }
 
 
@@ -461,6 +462,115 @@ class Icons:
         tri.closeSubpath()
         p.drawPath(tri)
 
+    @staticmethod
+    def _gear(p: QPainter) -> None:
+        p.drawEllipse(QPointF(12, 12), 3.2, 3.2)
+        path = QPainterPath()
+        import math
+        for i in range(16):
+            angle = math.pi * 2 * i / 16 - math.pi / 2
+            radius = 8.6 if i % 2 == 0 else 6.6
+            point = QPointF(12 + radius * math.cos(angle), 12 + radius * math.sin(angle))
+            if i == 0:
+                path.moveTo(point)
+            else:
+                path.lineTo(point)
+        path.closeSubpath()
+        p.drawPath(path)
+
+    @staticmethod
+    def _lock(p: QPainter) -> None:
+        body = QPainterPath()
+        body.addRoundedRect(QRectF(5.5, 10.5, 13, 9.5), 2, 2)
+        p.drawPath(body)
+        p.drawArc(QRectF(8, 4, 8, 10), 0, 180 * 16)
+        p.drawLine(QPointF(8, 9), QPointF(8, 10.5))
+        p.drawLine(QPointF(16, 9), QPointF(16, 10.5))
+
+    @staticmethod
+    def _unlock(p: QPainter) -> None:
+        body = QPainterPath()
+        body.addRoundedRect(QRectF(5.5, 10.5, 13, 9.5), 2, 2)
+        p.drawPath(body)
+        p.drawArc(QRectF(8, 3.5, 8, 10), 0, 180 * 16)
+        p.drawLine(QPointF(16, 8.5), QPointF(16, 10.5))
+
+    @staticmethod
+    def _user(p: QPainter) -> None:
+        p.drawEllipse(QPointF(12, 8.5), 3.6, 3.6)
+        path = QPainterPath()
+        path.moveTo(5, 20)
+        path.cubicTo(5.5, 15.5, 8.5, 13.6, 12, 13.6)
+        path.cubicTo(15.5, 13.6, 18.5, 15.5, 19, 20)
+        p.drawPath(path)
+
+    @staticmethod
+    def _home(p: QPainter) -> None:
+        path = QPainterPath()
+        path.moveTo(4, 11)
+        path.lineTo(12, 4.5)
+        path.lineTo(20, 11)
+        p.drawPath(path)
+        body = QPainterPath()
+        body.moveTo(6.5, 9.5)
+        body.lineTo(6.5, 19.5)
+        body.lineTo(17.5, 19.5)
+        body.lineTo(17.5, 9.5)
+        p.drawPath(body)
+
+    @staticmethod
+    def _broadcast(p: QPainter) -> None:
+        """The Live page: a screen with waves - what goes out to the hall."""
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(4, 7, 16, 11), 2, 2)
+        p.drawPath(path)
+        dot = QPainterPath()
+        dot.addEllipse(QPointF(12, 12.5), 1.8, 1.8)
+        p.fillPath(dot, p.pen().brush())
+        p.drawArc(QRectF(8, 3, 8, 6), 30 * 16, 120 * 16)
+
+    @staticmethod
+    def _slides(p: QPainter) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(3.5, 4.5, 17, 11.5), 1.6, 1.6)
+        p.drawPath(path)
+        p.drawLine(QPointF(12, 16), QPointF(12, 18.5))
+        p.drawLine(QPointF(8, 20), QPointF(12, 18.5))
+        p.drawLine(QPointF(16, 20), QPointF(12, 18.5))
+        p.drawLine(QPointF(7.5, 12.5), QPointF(10.5, 9.5))
+        p.drawLine(QPointF(10.5, 9.5), QPointF(13, 11.5))
+        p.drawLine(QPointF(13, 11.5), QPointF(16.5, 8))
+
+    @staticmethod
+    def _disc(p: QPainter) -> None:
+        p.drawEllipse(QPointF(12, 12), 8.2, 8.2)
+        p.drawEllipse(QPointF(12, 12), 2.2, 2.2)
+        p.drawArc(QRectF(6.5, 6.5, 11, 11), 100 * 16, 70 * 16)
+
+    @staticmethod
+    def _help(p: QPainter) -> None:
+        p.drawEllipse(QPointF(12, 12), 8.4, 8.4)
+        path = QPainterPath()
+        path.moveTo(9.4, 9.6)
+        path.cubicTo(9.4, 7.6, 10.7, 6.8, 12.1, 6.8)
+        path.cubicTo(13.7, 6.8, 14.8, 7.9, 14.8, 9.3)
+        path.cubicTo(14.8, 11.4, 12.2, 11.6, 12.2, 13.8)
+        p.drawPath(path)
+        dot = QPainterPath()
+        dot.addEllipse(QPointF(12.2, 16.8), 1.1, 1.1)
+        p.fillPath(dot, p.pen().brush())
+
+    @staticmethod
+    def _keyboard(p: QPainter) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(3, 6.5, 18, 11), 2, 2)
+        p.drawPath(path)
+        p.drawLine(QPointF(8, 14), QPointF(16, 14))
+        for x in (7, 10.3, 13.6, 17):
+            dot = QPainterPath()
+            dot.addEllipse(QPointF(x, 10.3), 0.9, 0.9)
+            p.fillPath(dot, p.pen().brush())
+
     # -- factory ------------------------------------------------------------ #
 
     @classmethod
@@ -509,312 +619,228 @@ def icon_button(name: str, tooltip: str, colour: str = CLR_TEXT, size: int = 18)
 # --------------------------------------------------------------------------- #
 
 STYLESHEET = f"""
-QMainWindow {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #111725, stop:0.35 {CLR_BG}, stop:1 {CLR_BG});
-}}
+QMainWindow {{ background: {CLR_BG}; }}
 QWidget {{
     background-color: {CLR_BG};
     color: {CLR_TEXT};
     font-family: "Segoe UI Variable Text", "Segoe UI", "Noto Sans Georgian", sans-serif;
     font-size: 13px;
 }}
+QLabel {{ background: transparent; }}
 
-/* Tabs read as navigation, not as buttons. */
+/* -- navigation ----------------------------------------------------------- */
+QFrame#navRail {{ background: {CLR_NAV}; border: none; border-right: 1px solid {CLR_EDGE_SOFT}; }}
+QFrame#navRail QWidget {{ background: transparent; }}
+QToolButton#navButton {{
+    background: transparent; border: none; border-radius: 10px;
+    color: {CLR_MUTED}; font-size: 11px; font-weight: 500;
+    padding: 9px 2px 8px 2px;
+}}
+QToolButton#navButton:hover {{ background: {CLR_CARD}; color: {CLR_DIM}; }}
+QToolButton#navButton:checked {{ background: {CLR_RAISED}; color: {CLR_TEXT}; font-weight: 600; }}
+QLabel#navRole {{ color: {CLR_MUTED}; font-size: 10px; font-weight: 600; }}
+QLabel#pageTitle {{ font-size: 20px; font-weight: 600; }}
+QLabel#pageLead {{ color: {CLR_DIM}; font-size: 13px; }}
+
+/* Tabs that still show (dialogs, the DJ desk) read as navigation, not buttons. */
 QTabWidget::pane {{ border: none; background: {CLR_BG}; }}
 QTabBar::tab {{
-    background: transparent;
-    color: {CLR_MUTED};
-    padding: 9px 20px 10px 4px;
-    margin-right: 22px;
-    border: none;
-    font-size: 14px;
-    font-weight: 500;
+    background: transparent; color: {CLR_MUTED};
+    padding: 8px 18px 9px 4px; margin-right: 18px; border: none;
+    font-size: 13px; font-weight: 500;
 }}
 QTabBar::tab:hover {{ color: {CLR_DIM}; }}
-QTabBar::tab:selected {{
-    color: {CLR_TEXT};
-    font-weight: 600;
-    border-bottom: 2px solid {CLR_ACCENT};
-}}
+QTabBar::tab:selected {{ color: {CLR_TEXT}; font-weight: 600; border-bottom: 2px solid {CLR_ACCENT}; }}
 
-/* Surfaces: a hairline lit from above, and the faintest vertical gradient, so a
-   card reads as a raised sheet rather than a flat rectangle with a box around it. */
+/* -- surfaces ------------------------------------------------------------- */
 QFrame#card, QFrame#bar {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {CLR_RAISED}, stop:0.55 {CLR_CARD}, stop:1 {CLR_CARD});
+    background: {CLR_CARD};
     border: 1px solid {CLR_EDGE};
-    border-top: 1px solid {CLR_EDGE_LIT};
-    border-radius: 15px;
+    border-radius: 12px;
 }}
-QFrame#card[active="true"] {{
-    border: 1px solid rgba(227, 178, 60, 0.42);
-    border-top: 1px solid rgba(227, 178, 60, 0.58);
-}}
+QFrame#card[active="true"] {{ border: 1px solid rgba(214, 173, 82, 0.45); }}
+QFrame#plain {{ background: transparent; border: none; }}
 
-QLabel#cardTitle {{ font-size: 15px; font-weight: 600; letter-spacing: 0.2px; }}
+QLabel#cardTitle {{ font-size: 14px; font-weight: 600; }}
 QLabel#cardSub {{ color: {CLR_MUTED}; font-size: 11px; }}
 QLabel#cardHint {{ color: {CLR_DIM}; }}
-QLabel#sectionTitle {{ color: {CLR_MUTED}; font-size: 11px; font-weight: 600; }}
-QLabel#brand {{ font-size: 14px; font-weight: 700; letter-spacing: 0.4px; }}
+QLabel#sectionTitle {{ color: {CLR_MUTED}; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }}
+QLabel#brand {{ font-size: 13px; font-weight: 700; letter-spacing: 0.3px; }}
 QLabel#clock {{
-    color: {CLR_DIM}; font-size: 16px; font-weight: 500;
+    color: {CLR_TEXT}; font-size: 20px; font-weight: 500;
     font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
 }}
 QLabel#timecode {{ color: {CLR_MUTED}; font-family: "Consolas", monospace; font-size: 11px; }}
 QLabel#keyHint {{ color: {CLR_MUTED}; font-size: 11px; }}
-QLabel {{ background: transparent; }}
 
 QLabel#badgeLive, QLabel#badgeOff {{
     font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
-    padding: 3px 10px; border-radius: 10px;
+    padding: 3px 9px; border-radius: 9px;
 }}
-QLabel#badgeLive {{
-    color: {CLR_OK};
-    background: rgba(87, 201, 138, 0.13);
-    border: 1px solid rgba(87, 201, 138, 0.28);
-}}
-QLabel#badgeOff {{
-    color: {CLR_MUTED};
-    background: rgba(108, 120, 145, 0.10);
-    border: 1px solid rgba(108, 120, 145, 0.22);
-}}
+QLabel#badgeLive {{ color: {CLR_OK}; background: rgba(76, 187, 131, 0.12); border: none; }}
+QLabel#badgeOff {{ color: {CLR_MUTED}; background: rgba(108, 116, 132, 0.12); border: none; }}
 
-QFrame#dropZone {{
-    background: {CLR_WELL};
-    border: 1px solid {CLR_EDGE};
-    border-radius: 12px;
-}}
-QFrame#dropZone[dragActive="true"] {{
-    background: {CLR_ACCENT_SOFT};
-    border: 1px solid rgba(227, 178, 60, 0.6);
-}}
+QFrame#dropZone {{ background: {CLR_WELL}; border: 1px dashed {CLR_EDGE_HI}; border-radius: 10px; }}
+QFrame#dropZone[dragActive="true"] {{ background: {CLR_ACCENT_SOFT}; border: 1px dashed {CLR_ACCENT}; }}
 
-/* Buttons: a hairline, a whisper of a gradient, and a lit top edge. */
-QPushButton {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {CLR_BTN_TOP}, stop:1 {CLR_BTN_BOTTOM});
-    border: 1px solid {CLR_EDGE};
-    border-top: 1px solid {CLR_EDGE_LIT};
-    border-radius: 10px;
-    padding: 8px 15px;
+/* -- buttons -------------------------------------------------------------- */
+QPushButton, QToolButton {{
+    background: {CLR_RAISED};
+    border: 1px solid {CLR_EDGE_HI};
+    border-radius: 8px;
+    padding: 7px 14px;
     color: {CLR_TEXT};
     font-weight: 500;
 }}
-QPushButton:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #262f42, stop:1 #1d2533);
-    border-color: {CLR_EDGE_HI};
+QPushButton:hover, QToolButton:hover {{ background: {CLR_HOVER}; border-color: #3a4252; }}
+QPushButton:pressed, QToolButton:pressed {{ background: {CLR_WELL}; }}
+QPushButton:disabled, QToolButton:disabled {{
+    background: {CLR_WELL}; color: #485062; border-color: {CLR_EDGE_SOFT};
 }}
-QPushButton:pressed {{
-    background: {CLR_WELL};
-    border-top: 1px solid {CLR_EDGE};
-}}
-QPushButton:disabled {{
-    background: {CLR_WELL}; color: #48526640; color: #485266;
-    border-color: {CLR_EDGE_SOFT}; border-top-color: {CLR_EDGE_SOFT};
-}}
-QPushButton:checked {{
-    background: {CLR_ACCENT_SOFT};
-    border: 1px solid rgba(227, 178, 60, 0.45);
-    border-top: 1px solid rgba(227, 178, 60, 0.6);
+QPushButton:checked, QToolButton:checked {{
+    background: {CLR_ACCENT_SOFT}; border: 1px solid rgba(214, 173, 82, 0.42); color: {CLR_TEXT};
 }}
 
 QPushButton#primary {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 #f2c556, stop:1 {CLR_ACCENT});
-    color: {CLR_INK};
-    font-weight: 600;
-    border: 1px solid #c9992f;
-    border-top: 1px solid #f7d783;
+    background: {CLR_ACCENT}; color: {CLR_INK}; font-weight: 600; border: 1px solid {CLR_ACCENT};
 }}
-QPushButton#primary:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7ce63, stop:1 #e8ba46);
-}}
-QPushButton#primary:pressed {{ background: {CLR_ACCENT}; border-top-color: #c9992f; }}
-QPushButton#primary:disabled {{
-    background: {CLR_WELL}; color: #485266; border-color: {CLR_EDGE_SOFT};
-}}
+QPushButton#primary:hover {{ background: #e0b85e; border-color: #e0b85e; }}
+QPushButton#primary:pressed {{ background: #c39a42; }}
+QPushButton#primary:disabled {{ background: {CLR_WELL}; color: #485062; border-color: {CLR_EDGE_SOFT}; }}
 
 QPushButton#danger {{
-    background: transparent;
-    color: {CLR_DANGER};
-    border: 1px solid rgba(224, 96, 92, 0.32);
-    border-top: 1px solid rgba(224, 96, 92, 0.45);
-    font-weight: 600;
+    background: rgba(223, 93, 88, 0.08); color: {CLR_DANGER};
+    border: 1px solid rgba(223, 93, 88, 0.38); font-weight: 600;
 }}
-QPushButton#danger:hover {{ background: rgba(224, 96, 92, 0.1); }}
-QPushButton#ghost {{ background: transparent; border: none; padding: 5px; }}
-QPushButton#ghost:hover {{ background: {CLR_HOVER}; border: none; }}
-QPushButton#ghost:disabled {{ background: transparent; border: none; }}
+QPushButton#danger:hover {{ background: rgba(223, 93, 88, 0.16); border-color: rgba(223, 93, 88, 0.6); }}
+QPushButton#ghost, QToolButton#ghost {{ background: transparent; border: 1px solid transparent; padding: 5px; }}
+QPushButton#ghost:hover, QToolButton#ghost:hover {{ background: {CLR_HOVER}; border-color: transparent; }}
+QPushButton#ghost:checked {{ background: {CLR_ACCENT_SOFT}; border-color: transparent; }}
+QPushButton#ghost:disabled {{ background: transparent; border-color: transparent; }}
 QPushButton#transport {{ font-size: 15px; font-weight: 600; padding: 9px 0px; }}
+QFrame#segment {{ background: {CLR_INPUT}; border: 1px solid {CLR_EDGE}; border-radius: 9px; }}
+QPushButton#segmentButton {{ background: transparent; border: none; border-radius: 6px; padding: 5px 0px; }}
+QPushButton#segmentButton:hover {{ background: {CLR_HOVER}; }}
+QPushButton#segmentButton:pressed {{ background: {CLR_WELL}; }}
 QPushButton#healthChip {{
     background: transparent; border: 1px solid {CLR_EDGE}; border-radius: 9px;
     padding: 2px 10px; font-size: 11px; font-weight: 600; color: {CLR_MUTED};
 }}
 QPushButton#healthChip:hover {{ background: {CLR_HOVER}; border-color: {CLR_EDGE_HI}; }}
+QPushButton#tile {{
+    background: {CLR_CARD}; border: 1px solid {CLR_EDGE}; border-radius: 12px;
+    padding: 14px; font-size: 14px; font-weight: 600; text-align: left;
+}}
+QPushButton#tile:hover {{ background: {CLR_RAISED}; border-color: {CLR_EDGE_HI}; }}
+QPushButton#big {{ font-size: 15px; font-weight: 600; padding: 12px 18px; border-radius: 10px; }}
 
-/* Inputs sit in a well: recessed, no outline until they matter. */
+/* -- inputs --------------------------------------------------------------- */
 QComboBox, QSpinBox, QLineEdit, QFontComboBox, QPlainTextEdit {{
-    background: {CLR_WELL};
-    border: 1px solid {CLR_EDGE_SOFT};
-    border-top: 1px solid #0c1119;
-    border-radius: 10px;
-    padding: 7px 11px;
+    background: {CLR_INPUT};
+    border: 1px solid {CLR_EDGE};
+    border-radius: 8px;
+    padding: 6px 10px;
     selection-background-color: {CLR_ACCENT};
     selection-color: {CLR_INK};
 }}
-QComboBox:hover, QSpinBox:hover, QLineEdit:hover, QFontComboBox:hover {{
-    border-color: {CLR_EDGE_HI};
-}}
+QComboBox:hover, QSpinBox:hover, QLineEdit:hover, QFontComboBox:hover {{ border-color: {CLR_EDGE_HI}; }}
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{
-    border: 1px solid rgba(227, 178, 60, 0.55);
+    border: 1px solid rgba(214, 173, 82, 0.6);
 }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
-    background: {CLR_RAISED};
-    border: 1px solid {CLR_EDGE};
-    border-radius: 10px;
-    padding: 5px;
-    selection-background-color: {CLR_ACCENT};
-    selection-color: {CLR_INK};
-    outline: none;
+    background: {CLR_RAISED}; border: 1px solid {CLR_EDGE_HI}; border-radius: 8px; padding: 4px;
+    selection-background-color: {CLR_HOVER}; selection-color: {CLR_TEXT}; outline: none;
 }}
-QSpinBox:disabled, QComboBox:disabled {{ color: #485266; background: #0e131c; }}
+QSpinBox:disabled, QComboBox:disabled, QLineEdit:disabled {{ color: #485062; background: {CLR_WELL}; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none; background: transparent; }}
 
 QListWidget {{
-    background: {CLR_WELL};
-    border: 1px solid {CLR_EDGE_SOFT};
-    border-radius: 11px;
-    outline: none;
-    padding: 5px;
+    background: {CLR_WELL}; border: 1px solid {CLR_EDGE_SOFT}; border-radius: 10px;
+    outline: none; padding: 4px;
 }}
-QListWidget::item {{ padding: 6px 8px; border-radius: 8px; color: {CLR_DIM}; }}
+QListWidget::item {{ padding: 6px 8px; border-radius: 7px; color: {CLR_DIM}; }}
 QListWidget::item:hover {{ background: {CLR_HOVER}; color: {CLR_TEXT}; }}
-QListWidget::item:selected {{
-    background: {CLR_ACCENT_SOFT};
-    color: {CLR_TEXT};
-    border: 1px solid rgba(227, 178, 60, 0.3);
-}}
+QListWidget::item:selected {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; border: none; }}
 
-QSlider::groove:horizontal {{ height: 4px; background: #1b2231; border-radius: 2px; }}
+QListWidget#settingsNav {{ background: transparent; border: none; padding: 0px; }}
+QListWidget#settingsNav::item {{ padding: 10px 12px; margin: 1px 0px; border-radius: 8px; color: {CLR_DIM}; }}
+QListWidget#settingsNav::item:hover {{ background: {CLR_CARD}; color: {CLR_TEXT}; }}
+QListWidget#settingsNav::item:selected {{ background: {CLR_RAISED}; color: {CLR_TEXT}; font-weight: 600; }}
+
+QSlider::groove:horizontal {{ height: 4px; background: {CLR_LINE}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #c9d2e2);
-    width: 13px; height: 13px; margin: -5px 0; border-radius: 7px;
-    border: 1px solid #0c1119;
+    background: {CLR_TEXT}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; border: none;
 }}
-QSlider::sub-page:horizontal {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #c79a32, stop:1 {CLR_ACCENT});
-    border-radius: 2px;
-}}
-QSlider#scrub::groove:horizontal {{ height: 3px; background: #1b2231; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: #8d96a8; border-radius: 2px; }}
+QSlider::groove:horizontal:disabled {{ background: {CLR_EDGE_SOFT}; }}
+QSlider::sub-page:horizontal:disabled {{ background: #3a404d; }}
+QSlider#scrub::groove:horizontal {{ height: 3px; background: {CLR_LINE}; border-radius: 2px; }}
 QSlider#scrub::sub-page:horizontal {{ background: {CLR_ACCENT}; border-radius: 2px; }}
 QSlider#scrub::handle:horizontal {{
     background: transparent; border: none; width: 10px; margin: -4px 0; border-radius: 5px;
 }}
-QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; border: none; }}
-QSlider#scrub:disabled::sub-page:horizontal {{ background: #1b2231; }}
+QSlider#scrub:hover::handle:horizontal {{ background: {CLR_TEXT}; }}
+QSlider#scrub:disabled::sub-page:horizontal {{ background: {CLR_LINE}; }}
 
-QCheckBox {{ background: transparent; color: {CLR_DIM}; }}
+QCheckBox {{ background: transparent; color: {CLR_DIM}; spacing: 8px; }}
 QCheckBox::indicator {{
     width: 16px; height: 16px; border-radius: 5px;
-    border: 1px solid {CLR_EDGE_HI}; background: {CLR_WELL};
+    border: 1px solid {CLR_EDGE_HI}; background: {CLR_INPUT};
 }}
-QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: #c9992f; }}
-QCheckBox:disabled {{ color: #485266; }}
-QCheckBox::indicator:disabled {{ background: #0e131c; border-color: {CLR_EDGE_SOFT}; }}
-QCheckBox::indicator:checked:disabled {{ background: #3a3f4a; border-color: {CLR_EDGE}; }}
+QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: {CLR_ACCENT}; }}
+QCheckBox:disabled {{ color: #485062; }}
+QCheckBox::indicator:disabled {{ background: {CLR_WELL}; border-color: {CLR_EDGE_SOFT}; }}
+QCheckBox::indicator:checked:disabled {{ background: #3a404d; border-color: {CLR_EDGE}; }}
 
-QFrame#cuePad {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {CLR_BTN_TOP}, stop:1 {CLR_WELL});
-    border: 1px solid {CLR_EDGE};
-    border-top: 1px solid {CLR_EDGE_LIT};
-    border-radius: 12px;
-}}
-QFrame#cuePad[filled="false"] {{
-    background: transparent;
-    border: 1px dashed {CLR_EDGE_HI};
-    border-top: 1px dashed {CLR_EDGE_HI};
-}}
+/* -- sound pads ----------------------------------------------------------- */
+QFrame#cuePad {{ background: {CLR_RAISED}; border: 1px solid {CLR_EDGE}; border-radius: 10px; }}
+QFrame#cuePad[filled="false"] {{ background: transparent; border: 1px dashed {CLR_EDGE_HI}; }}
 QFrame#cuePad[filled="true"]:hover {{ border-color: {CLR_EDGE_HI}; }}
-QFrame#cuePad[playing="true"] {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 rgba(87, 201, 138, 0.17), stop:1 rgba(87, 201, 138, 0.07));
-    border: 1px solid rgba(87, 201, 138, 0.45);
-    border-top: 1px solid rgba(87, 201, 138, 0.6);
-}}
-QFrame#cuePad[paused="true"] {{
-    background: {CLR_ACCENT_SOFT};
-    border: 1px solid rgba(227, 178, 60, 0.42);
-    border-top: 1px solid rgba(227, 178, 60, 0.55);
-}}
+QFrame#cuePad[playing="true"] {{ background: rgba(76, 187, 131, 0.12); border: 1px solid rgba(76, 187, 131, 0.5); }}
+QFrame#cuePad[paused="true"] {{ background: {CLR_ACCENT_SOFT}; border: 1px solid rgba(214, 173, 82, 0.45); }}
 QLabel#cueKey {{ color: {CLR_MUTED}; font-size: 10px; font-weight: 700; }}
 QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
 QFrame#cuePad[paused="true"] QLabel#cueKey {{ color: {CLR_ACCENT}; }}
 QLabel#cueName {{ font-size: 12px; font-weight: 500; }}
-QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #465063; }}
+QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #4a5264; }}
 
-/* The floating strip. */
-QFrame#miniCard {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {CLR_RAISED}, stop:1 {CLR_CARD});
-    border: 1px solid {CLR_EDGE_HI};
-    border-top: 1px solid {CLR_EDGE_LIT};
-    border-radius: 14px;
-}}
-QPushButton#miniScreen {{
-    padding: 6px 12px; font-size: 12px; font-weight: 600; color: {CLR_MUTED};
-}}
-QPushButton#miniScreen:checked {{
-    background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT};
-    border-color: rgba(227, 178, 60, 0.5);
-}}
+/* -- the floating strip --------------------------------------------------- */
+QFrame#miniCard {{ background: {CLR_CARD}; border: 1px solid {CLR_EDGE_HI}; border-radius: 12px; }}
+QPushButton#miniScreen {{ padding: 6px 12px; font-size: 12px; font-weight: 600; color: {CLR_MUTED}; }}
+QPushButton#miniScreen:checked {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; border-color: rgba(214, 173, 82, 0.5); }}
 QPushButton#miniScreen[live="true"] {{ color: {CLR_OK}; }}
 QLabel#miniNow {{ color: {CLR_DIM}; font-size: 12px; }}
-QPushButton#miniCue {{
-    padding: 7px 0px; font-size: 11px; font-weight: 600; color: {CLR_DIM};
-}}
-QPushButton#miniCue[playing="true"] {{
-    background: rgba(87, 201, 138, 0.18); color: {CLR_OK};
-    border-color: rgba(87, 201, 138, 0.45);
-}}
-QPushButton#miniCue[paused="true"] {{
-    background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT};
-    border-color: rgba(227, 178, 60, 0.45);
-}}
+QPushButton#miniCue {{ padding: 7px 0px; font-size: 11px; font-weight: 600; color: {CLR_DIM}; }}
+QPushButton#miniCue[playing="true"] {{ background: rgba(76, 187, 131, 0.16); color: {CLR_OK}; border-color: rgba(76, 187, 131, 0.45); }}
+QPushButton#miniCue[paused="true"] {{ background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT}; border-color: rgba(214, 173, 82, 0.45); }}
 
-/* SETUP / SHOW: one control, two halves. */
-QFrame#modeSwitch {{
-    background: {CLR_WELL}; border: 1px solid {CLR_EDGE}; border-radius: 12px;
-}}
+/* -- SETUP / SHOW, TAKE --------------------------------------------------- */
+QFrame#modeSwitch {{ background: {CLR_WELL}; border: 1px solid {CLR_EDGE}; border-radius: 10px; }}
 QPushButton#modeButton {{
-    background: transparent; border: 1px solid transparent; border-radius: 9px;
-    padding: 7px 18px; color: {CLR_MUTED}; font-weight: 700; letter-spacing: 1px;
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 6px 16px; color: {CLR_MUTED}; font-weight: 700; letter-spacing: 0.8px;
 }}
 QPushButton#modeButton:hover {{ color: {CLR_DIM}; background: transparent; }}
-QPushButton#modeButton:checked {{
-    background: {CLR_RAISED}; color: {CLR_TEXT}; border: 1px solid {CLR_EDGE_HI};
-}}
-/* A change waiting for TAKE, or one that can still be undone. */
-QFrame#takeBar {{
-    background: rgba(227, 178, 60, 0.07);
-    border: 1px solid rgba(227, 178, 60, 0.35);
-    border-radius: 12px;
-}}
+QPushButton#modeButton:checked {{ background: {CLR_RAISED}; color: {CLR_TEXT}; border: 1px solid {CLR_EDGE_HI}; }}
+QFrame#takeBar {{ background: rgba(214, 173, 82, 0.06); border: 1px solid rgba(214, 173, 82, 0.32); border-radius: 10px; }}
 
+QMenu {{ background: {CLR_RAISED}; border: 1px solid {CLR_EDGE_HI}; border-radius: 8px; padding: 4px; }}
+QMenu::item {{ padding: 7px 22px; border-radius: 6px; }}
+QMenu::item:selected {{ background: {CLR_HOVER}; }}
+QMenu::separator {{ height: 1px; background: {CLR_EDGE}; margin: 4px 6px; }}
+QDialog {{ background: {CLR_BG}; }}
 QStatusBar {{ background: transparent; color: {CLR_MUTED}; border: none; }}
 QStatusBar::item {{ border: none; }}
 QToolTip {{
     background: {CLR_RAISED}; color: {CLR_TEXT};
-    border: 1px solid {CLR_EDGE_HI}; padding: 6px 9px; border-radius: 8px;
+    border: 1px solid {CLR_EDGE_HI}; padding: 6px 9px; border-radius: 6px;
 }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #2b3547; border-radius: 5px; min-height: 28px; }}
-QScrollBar::handle:vertical:hover {{ background: #3a4659; }}
+QScrollBar::handle:vertical {{ background: #2a3140; border-radius: 4px; min-height: 28px; }}
+QScrollBar::handle:vertical:hover {{ background: #384052; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: #2b3547; border-radius: 5px; min-width: 28px; }}
+QScrollBar::handle:horizontal {{ background: #2a3140; border-radius: 4px; min-width: 28px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 """
@@ -831,6 +857,7 @@ QComboBox QAbstractItemView::item {{ min-height: 40px; }}
 QSpinBox::up-button, QSpinBox::down-button {{ width: 24px; }}
 QListWidget::item {{ padding: 9px 10px; }}
 QTabBar::tab {{ padding: 10px 22px 11px 6px; }}
+QToolButton#navButton {{ padding: 12px 2px 11px 2px; }}
 QSlider::groove:horizontal {{ height: 6px; border-radius: 3px; }}
 QSlider::handle:horizontal {{ width: 24px; height: 24px; margin: -10px 0; border-radius: 12px; }}
 QSlider#scrub::groove:horizontal {{ height: 5px; }}
@@ -859,7 +886,7 @@ def _switch_images() -> Dict[str, str]:
     paths = {}
     for name, on, enabled in (("off", False, True), ("on", True, True),
                               ("off_dis", False, False), ("on_dis", True, False)):
-        path = os.path.join(folder, f"switch_v1_{name}.png")
+        path = os.path.join(folder, f"switch_v2_{name}.png")
         if not os.path.exists(path):
             os.makedirs(folder, exist_ok=True)
             picture = QPixmap(92, 52)
@@ -868,8 +895,8 @@ def _switch_images() -> Dict[str, str]:
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setOpacity(1.0 if enabled else 0.4)
             track = QRectF(2, 4, 88, 44)
-            painter.setPen(QPen(QColor("#c9992f" if on else CLR_EDGE_HI), 2))
-            painter.setBrush(QColor(CLR_ACCENT if on else "#1b2231"))
+            painter.setPen(QPen(QColor(CLR_ACCENT if on else CLR_EDGE_HI), 2))
+            painter.setBrush(QColor(CLR_ACCENT if on else CLR_LINE))
             painter.drawRoundedRect(track, 22, 22)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(CLR_INK if on else "#c9d2e2"))

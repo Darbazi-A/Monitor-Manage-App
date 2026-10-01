@@ -15,6 +15,14 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 
 ## Features
 
+- **A calm, modern desk** — the pages down a navigation rail on the left, one
+  **Settings** page (gear icon) for everything that sets the hall up, a quiet
+  graphite palette with gold only for the action that matters. See
+  [The interface](#the-interface).
+- **Admin PIN and a simple desk** — whoever rehearses in the hall gets a big,
+  plain page (screens, scenes, a presentation, sound, a laptop) and nothing that
+  could undo the setup; everything else takes the administrator's PIN. See
+  [Admin and the simple desk](#admin-and-the-simple-desk).
 - **The desk** — a live picture of every stage screen in the header (red frame
   = on air), **SETUP / SHOW** modes (SHOW locks editing and deleting),
   **PREVIEW → TAKE** so nothing reaches the stage by accident, **Undo** for a
@@ -112,7 +120,7 @@ MP4 is the safe choice).
 
 ## Running a show
 
-1. **Screens & Setup** → assign the monitors → **Apply routing / Open outputs**.
+1. **Settings → Screens** → assign the monitors → **Apply routing / Open outputs**.
    Use *Identify monitors* if Windows has shuffled the order.
 2. Back on **Live**, drop the prepared media onto each card (or onto a screen in
    the header).
@@ -130,6 +138,53 @@ to one side before every show.
 bring it back. Quitting while outputs are live asks first — closing the app
 blacks out the hall.
 
+## The interface
+
+The pages run down a **navigation rail** on the left — Live, Show, Slides,
+Library, Text, DJ — with **Settings**, Help and the person at the desk at its
+foot. The header above every page keeps what matters during a show: the time,
+SETUP / SHOW, the live pictures of the stage screens, TAKE and Undo, Rehearse,
+Ready check, Open outputs and BLACKOUT. NOW / NEXT runs along the bottom.
+
+The palette is deliberately quiet: graphite-navy surfaces told apart by a step
+in lightness and a hairline, no gradients. **Gold** marks the one primary action
+on a page and what is selected; **red** is only for on air and BLACKOUT, **green**
+only for "fine", **amber** only for "look at this". Sliders are neutral; the
+transport of each screen is one segmented control rather than five boxes.
+
+![Settings](docs/settings.png)
+
+**Settings** (the gear) gathers everything that sets the hall up, in sections:
+*Screens* (routing, identify, close outputs), *Picture & show* (transitions,
+PREVIEW → TAKE), *Phone & laptops* (the phone remote, the guest clicker, the
+laptop share), *Start with Windows*, *Interface* (language, touch), *Admin &
+simple desk*, *Backups* and *Help*. None of it is needed while a show runs, so
+in SHOW mode Settings steps away like the Library.
+
+## Admin and the simple desk
+
+![The simple desk](docs/simple.png)
+
+Two kinds of people sit at this desk. The **administrator** prepares the hall
+and sees everything. **Anyone else** — a teacher rehearsing, a guest's helper —
+gets the **simple desk**: one page with the three screens (each with *Show a
+file…* and *Black*), the **scenes** (the administrator's presets, one tap each),
+a **presentation** (open, next / previous slide, show on the Main Stage, end),
+the **sound** cues with the volume and *Stop all sound*, and how to connect a
+**laptop**. The Show and Slides pages stay available (the running order cannot
+be edited); Live, Library, Text, DJ and Settings are hidden, editing is locked,
+and the header's SETUP / SHOW switch is gone.
+
+![The PIN pad](docs/pin.png)
+
+The lock at the foot of the rail switches between the two. Handing the desk
+over asks for an **admin PIN** the first time (4–8 digits, typed twice); taking
+it back asks for that PIN on a pad sized for a finger (the keyboard works too).
+Five wrong tries lock the pad for half a minute. The PIN is stored only as a
+salted PBKDF2-SHA256 hash. Once a PIN is set, the app **opens on the simple
+desk** — unless *Settings → Admin & simple desk* says otherwise; that page also
+changes or removes the PIN (each asks for the current one first).
+
 ## The desk
 
 ![The desk](docs/live.png)
@@ -142,14 +197,14 @@ there and it goes on that screen. During a PowerPoint show the tile shows the
 current slide.
 
 **SETUP / SHOW.** SETUP is for preparing: everything can be edited. SHOW is for
-the event: the Library and Screens & Setup tabs step away, the running order
+the event: the Library and Settings step away, the running order
 cannot be edited, moved or deleted, preset saving and deleting disappear, and
 Rehearse and Open outputs are hidden — a stray tap cannot undo an evening's
 preparation. Switching to SHOW runs the ready check and opens it if something
 is wrong. The choice is remembered.
 
 **PREVIEW → TAKE.** With it on, a file, preset or name chosen by hand does not
-go on stage at once: it waits in a bar under the header with a picture of what
+go on stage at once (*Settings → Picture & show*): it waits in the header with a picture of what
 it is and where it goes, until **TAKE** (`Ctrl`+`Enter`) or **Cancel** (`Esc`).
 Running-order steps still go straight on — NEXT is their TAKE.
 
@@ -401,7 +456,11 @@ picture of the Main Stage, and the phone remote's, show the laptop while it is o
 
 How it works: the page captures the screen with `getDisplayMedia` and sends it
 over **WebRTC** straight across the LAN — about a second to connect, full frame
-rate, up to 8 Mbit/s for the picture and 256 kbit/s stereo Opus for the sound
+rate, up to 12 Mbit/s for the picture. It starts sharp: the stage asks for 6
+Mbit/s from the first second instead of letting the browser ramp up from a few
+hundred kbit/s, the picture goes at full size from the first frame, *Slides and
+documents* prefers VP9 and keeps the resolution (dropping frames rather than
+sharpness when the laptop is busy), *Video* keeps the movement smooth. The sound goes as 256 kbit/s stereo Opus
 (echo cancelling and noise suppression off, for music). The app plays it in
 Chromium (QtWebEngine) inside the Main Stage window, through the PC's default
 sound device — the hall mixer. The offer and answer travel through a small
@@ -523,7 +582,7 @@ used at every assembly, one click away.
 
 ![A crossfade between two backgrounds](docs/crossfade.png)
 
-Set the length and style in **Screens & Setup → Transition**.
+Set the length and style in **Settings → Picture & show → Transitions**.
 
 **Crossfade** takes a still of what is on screen, swaps the media behind it, then
 dissolves the still away — the hall never goes dark. This is why every output is
@@ -647,7 +706,7 @@ onto decks.
 
 ## Touch screens
 
-**Screens & Setup → Touch screen** — *Automatic* (the default) switches to
+**Settings → Interface → Touch screen** — *Automatic* (the default) switches to
 finger-sized controls when Windows reports a touch screen; *Larger controls* and
 *Mouse sizes* force it either way. It enlarges what is hard to hit with a finger
 — slider handles, check boxes, scroll bars, list rows, tabs — and makes lists
@@ -681,12 +740,12 @@ answers, for an unattended restart. A proper close offers nothing.
 
 **A preset or running order is overwritten.** `presets.json` and `shows.json`
 are copied into `backups/` before they change (at most one copy every two
-minutes, the newest ten of each). **Screens & Setup → Backups** puts a copy back
+minutes, the newest ten of each). **Settings → Backups** puts a copy back
 with a hold to confirm; what was there is kept as a copy too.
 
 ## Language
 
-**Screens & Setup → Language / ენა**: English or ქართული. The choice is used from
+**Settings → Interface → Language / ენა**: English or ქართული. The choice is used from
 the next start — the app offers to restart at once (it still asks first if the
 screens are live). Everything the operator reads is translated: tabs, buttons,
 hints, messages, the ready check and the phone pages. Names, file names and
@@ -725,9 +784,13 @@ What made the difference:
 - **numpy's maths library is held to one thread**; it used to reserve ~180 MB
   on import for threads the desk never uses.
 - **The Library fills its thumbnails when first opened**, not at start-up.
-- **Video is decoded on the graphics card** (DXVA2) where Windows offers it:
-  three playing screens went from about 67 % to 47 % of a CPU core (FFmpeg
-  falls back to the processor by itself).
+- **Video is decoded on the graphics card** (D3D11VA) where Windows offers it:
+  three playing screens take about 65 % of a CPU core instead of 76 % (FFmpeg
+  falls back to the processor by itself). DXVA2 was cheaper still (47 %) but
+  draws from a small fixed pool of frames: a second in which the dashboard was
+  busy used it up and froze the stage screens for good. A test now stalls the
+  dashboard six times for a second while three screens play, and checks they
+  all keep going.
 - **Start-up 1.5 s → 0.9 s**: the stylesheet is set once, before any widget
   exists, instead of re-styling the finished window.
 - **Clean cuts**: a cut or a dissolve waits for the new video's first frame, so
@@ -763,7 +826,7 @@ installing. A full set of 18 clips takes about four minutes.
 
 ## Starting with Windows
 
-**Screens & Setup → Start with Windows** ticks a per-user `HKCU\…\Run` entry
+**Settings → Start with Windows** ticks a per-user `HKCU\…\Run` entry
 (no administrator rights, this account only) that launches:
 
 ```
@@ -793,7 +856,9 @@ still works. The rest is split by what it does:
 | `cards.py` | `OutputCard`, `TopCard`, `DropZone`, `Playlist` — the Live tab |
 | `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
-| `routing.py` | `RoutingRow`: the Screens & Setup rows |
+| `routing.py` | `RoutingRow`: the rows of Settings → Screens |
+| `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |
+| `simple.py` | `SimplePage`, the simple desk |
 | `minibar.py` | `MiniBar`, the floating strip the dashboard shrinks to |
 | `backups.py` | the copies of `presets.json` and `shows.json` |
 
@@ -817,7 +882,7 @@ The running order and the remote are separate modules too; the dashboard
 | `selfcert.py` | a self-signed TLS certificate in pure Python, for the share's HTTPS |
 | `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |
 | `qr.py` | a small QR code encoder (no extra packages) for the phone links |
-| `desk.py` | the desk: `MultiView` / `ScreenTile`, `ModeSwitch`, `TakeBar` (preview, TAKE, undo), `ShowStrip`, `ReadyCheckDialog`, `PresetStrip`, `HealthBar`, `ShortcutsDialog`, `HoldButton`, and `PageTabs`, whose pages scroll instead of outgrowing the screen |
+| `desk.py` | the desk: `NavRail` (the pages down the left), `MultiView` / `ScreenTile`, `ModeSwitch`, `TakeBar` (preview, TAKE, undo), `ShowStrip`, `ReadyCheckDialog`, `PresetStrip`, `HealthBar`, `ShortcutsDialog`, `HoldButton`, and `PageTabs`, whose pages scroll instead of outgrowing the screen |
 
 `presets.json` and `shows.json` are deliberately git-ignored: they hold absolute
 paths to media on one particular machine.

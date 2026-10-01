@@ -2,6 +2,7 @@
 The operator's desk: the parts of the dashboard that are about running the
 event rather than about any one screen.
 
+    NavRail          the pages down the left edge; settings and who is at the desk below
     MultiView        a live picture of every stage screen, in the header
     ModeSwitch       SETUP (prepare, edit) / SHOW (run it, editing locked)
     TakeBar          preview-then-TAKE, and the undo that follows a change
@@ -21,7 +22,8 @@ from typing import Callable, Dict, List, Optional
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSizePolicy, QTabWidget, QToolTip, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QTabWidget, QToolButton, QToolTip, QVBoxLayout,
+                               QWidget)
 
 STATE_CLOSED = "closed"        # no window on that screen
 STATE_BLACK = "black"          # window open, nothing on it
@@ -34,6 +36,119 @@ def _font(pixels: int, weight: int = QFont.Normal) -> QFont:
     font.setPixelSize(pixels)
     font.setWeight(QFont.Weight(weight))
     return font
+
+
+# --------------------------------------------------------------------------- #
+# Navigation
+# --------------------------------------------------------------------------- #
+
+class NavRail(QFrame):
+    """
+    The pages down the left edge, as in any modern desktop app: an icon and a
+    word each, the open one lit. Settings and the person at the desk (administrator
+    or the simple desk) sit at the bottom, away from the pages used during a show.
+    It drives a PageTabs whose own tab bar is hidden, and follows it back.
+    """
+
+    pageRequested = Signal(int)
+    accountRequested = Signal()
+    helpRequested = Signal()
+
+    WIDTH = 100
+
+    def __init__(self, icons, theme: dict, parent=None) -> None:
+        super().__init__(parent)
+        self.icons = icons
+        self.theme = theme
+        self.setObjectName("navRail")
+        self.setFixedWidth(self.WIDTH)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(8, 16, 8, 12)
+        box.setSpacing(4)
+        logo = QLabel()
+        logo.setPixmap(icons.get("monitor", theme["accent"], 26).pixmap(26, 26))
+        logo.setAlignment(Qt.AlignHCenter)
+        logo.setToolTip("Stage Display Controller")
+        box.addWidget(logo)
+        box.addSpacing(18)
+        self._pages = QVBoxLayout()
+        self._pages.setSpacing(4)
+        box.addLayout(self._pages)
+        box.addStretch(1)
+        self._lower = QVBoxLayout()
+        self._lower.setSpacing(4)
+        box.addLayout(self._lower)
+        self.buttons: Dict[int, tuple] = {}         # page index -> (button, icon name)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(False)             # the rail follows the pages, it does not lead them
+        self.help_btn = self._button("help", tr("Help"))
+        self.help_btn.setCheckable(False)
+        self.help_btn.setToolTip(tr("Keyboard shortcuts and how things work"))
+        self.help_btn.clicked.connect(self.helpRequested.emit)
+        self.account_btn = self._button("unlock", tr("Admin"))
+        self.account_btn.setCheckable(False)
+        self.account_btn.clicked.connect(self.accountRequested.emit)
+        self._lower_items: List[QWidget] = []
+
+    def _button(self, icon: str, label: str) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("navButton")
+        button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        button.setIcon(self.icons.get(icon, self.theme["muted"], 22))
+        button.setIconSize(QSize(22, 22))
+        button.setText(label)
+        button.setCheckable(True)
+        button.setFixedWidth(self.WIDTH - 16)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setFocusPolicy(Qt.NoFocus)
+        return button
+
+    def add_page(self, index: int, icon: str, label: str, lower: bool = False) -> QToolButton:
+        button = self._button(icon, label)
+        button.setToolTip(label)
+        button.clicked.connect(lambda _checked=False, i=index: self.pageRequested.emit(i))
+        self._group.addButton(button)
+        self.buttons[index] = (button, icon)
+        if lower:
+            self._lower.addWidget(button, 0, Qt.AlignHCenter)
+        else:
+            self._pages.addWidget(button, 0, Qt.AlignHCenter)
+        return button
+
+    def finish(self) -> None:
+        """Help and the account go last, under the lower pages."""
+        self._lower.addWidget(self.help_btn, 0, Qt.AlignHCenter)
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {self.theme['edge']};")
+        self._lower.addSpacing(4)
+        self._lower.addWidget(line)
+        self._lower.addSpacing(4)
+        self._lower.addWidget(self.account_btn, 0, Qt.AlignHCenter)
+
+    def sync(self, tabs: QTabWidget) -> None:
+        """Show the buttons of the pages that can be opened; light the open one."""
+        current = tabs.currentIndex()
+        for index, (button, icon) in self.buttons.items():
+            visible = tabs.isTabVisible(index)
+            button.setVisible(visible)
+            on = index == current
+            if button.isChecked() != on or getattr(button, "_lit", None) != on:
+                button.setChecked(on)
+                button.setIcon(self.icons.get(icon, self.theme["accent"] if on else self.theme["muted"], 22))
+                button._lit = on
+
+    def set_account(self, admin: bool, has_pin: bool) -> None:
+        if admin:
+            self.account_btn.setIcon(self.icons.get("unlock", self.theme["muted"], 22))
+            self.account_btn.setText(tr("Admin"))
+            self.account_btn.setToolTip(tr("Administrator: everything is open.\nClick to hand the desk over in the simple mode.")
+                                        if has_pin else
+                                        tr("Administrator: everything is open, and no PIN is set.\nClick to set one and switch to the simple mode."))
+        else:
+            self.account_btn.setIcon(self.icons.get("lock", self.theme["accent"], 22))
+            self.account_btn.setText(tr("Simple"))
+            self.account_btn.setToolTip(tr("The simple desk. Click and type the admin PIN for everything else."))
 
 
 # --------------------------------------------------------------------------- #

@@ -99,6 +99,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -106,11 +107,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# Video decoding on the graphics card where Windows offers it (DXVA2). Measured
-# with the hall's three screens at their real sizes it takes 10-15 points of a
-# CPU core off the playback; FFmpeg falls back to the processor by itself on a
+# Video decoding on the graphics card where Windows offers it, through D3D11VA.
+# Not DXVA2, though it was cheaper (47% of a core for three screens against 65%
+# here and 76% in software): its decoders draw from a small fixed pool of frames,
+# and a second in which the dashboard is busy - a big file opening, a dialog -
+# used the pool up and froze the stage screens for good. D3D11VA rides that out,
+# like software decoding does. FFmpeg falls back to the processor by itself on a
 # machine that cannot. Set before any player exists; an explicit setting wins.
-os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "dxva2")
+os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "d3d11va")
 
 # The laptop screen share plays in Chromium (QtWebEngine), started the first time
 # it is used. Its WebRTC must offer this PC's real LAN address - by default

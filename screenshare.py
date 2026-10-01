@@ -853,7 +853,7 @@ async function share() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { status(t("This browser cannot share its screen here. Use Chrome or Edge on a laptop."), "bad"); return; }
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {frameRate: {ideal: 30, max: 30}, width: {max: 1920}, height: {max: 1080}},
+      video: {frameRate: {ideal: 30, max: 30}, width: {ideal: 1920, max: 1920}, height: {ideal: 1080, max: 1080}},
       audio: {echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false},
       systemAudio: "include", surfaceSwitching: "include", selfBrowserSurface: "exclude", monitorTypeSurfaces: "include"
     });
@@ -866,7 +866,12 @@ async function share() {
   $("sound").className = audio ? "" : "bad";
   video.addEventListener("ended", () => stop(true));
   pc = new RTCPeerConnection({iceServers: []});
-  stream.getTracks().forEach(track => pc.addTrack(track, stream));
+  // The picture is sent at full size from the first frame: a high bitrate allowed at
+  // once, and - for slides and text - the resolution kept even if frames must drop.
+  const transceiver = pc.addTransceiver(video, {direction: "sendonly", streams: [stream],
+    sendEncodings: [{maxBitrate: kind === "detail" ? 12000000 : 10000000, maxFramerate: 30, scaleResolutionDownBy: 1}]});
+  preferCodecs(transceiver, kind === "detail" ? ["video/VP9", "video/VP8"] : ["video/VP8", "video/VP9"]);
+  stream.getAudioTracks().forEach(track => pc.addTransceiver(track, {direction: "sendonly", streams: [stream]}));
   pc.addEventListener("connectionstatechange", () => {
     if (pc && pc.connectionState === "connected") { status("● " + t("You are on the stage screen"), "ok"); tune(kind); }
     if (pc && pc.connectionState === "failed") { status(t("Connection lost."), "bad"); stop(true); }
@@ -883,13 +888,21 @@ async function share() {
   poll();
 }
 
+function preferCodecs(transceiver, order) {
+  if (!transceiver.setCodecPreferences || !window.RTCRtpSender || !RTCRtpSender.getCapabilities) return;
+  const codecs = RTCRtpSender.getCapabilities("video").codecs;
+  const rank = c => { const i = order.indexOf(c.mimeType); return i < 0 ? order.length : i; };
+  try { transceiver.setCodecPreferences(codecs.slice().sort((a, b) => rank(a) - rank(b))); } catch (e) {}
+}
+
 async function tune(kind) {
   const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
   if (!sender) return;
   const p = sender.getParameters();
   if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-  p.encodings[0].maxBitrate = 8000000;
+  p.encodings[0].maxBitrate = kind === "detail" ? 12000000 : 10000000;
   p.encodings[0].maxFramerate = 30;
+  p.encodings[0].scaleResolutionDownBy = 1;
   p.degradationPreference = kind === "detail" ? "maintain-resolution" : "balanced";
   try { await sender.setParameters(p); } catch (e) {}
 }
@@ -958,6 +971,16 @@ function tuneOpus(sdp) {
   if (line.test(sdp)) return sdp.replace(line, (all, params) => "a=fmtp:" + m[1] + " " + params + ";" + extra);
   return sdp.replace(new RegExp("(a=rtpmap:" + m[1] + " [^\\r\\n]*)"), "$1\r\na=fmtp:" + m[1] + " " + extra);
 }
+function tuneVideo(sdp) {
+  const extra = "x-google-start-bitrate=6000;x-google-min-bitrate=2500;x-google-max-bitrate=12000";
+  const types = [...sdp.matchAll(/a=rtpmap:(\d+) (VP8|VP9|AV1)\/90000/gi)].map(m => m[1]);
+  for (const pt of types) {
+    const line = new RegExp("a=fmtp:" + pt + " ([^\r\n]*)");
+    if (line.test(sdp)) sdp = sdp.replace(line, (all, params) => "a=fmtp:" + pt + " " + params + ";" + extra);
+    else sdp = sdp.replace(new RegExp("(a=rtpmap:" + pt + " [^\r\n]*)"), "$1\r\na=fmtp:" + pt + " " + extra);
+  }
+  return sdp;
+}
 function gathered(peer, ms) {
   return new Promise(done => {
     if (peer.iceGatheringState === "complete") return done();
@@ -984,7 +1007,7 @@ async function receive(id, sdp, opts) {
     peer.onconnectionstatechange = () => { if (peer === pc) say("state", {id, state: peer.connectionState}); };
     await peer.setRemoteDescription({type: "offer", sdp});
     const answer = await peer.createAnswer();
-    answer.sdp = tuneOpus(answer.sdp);
+    answer.sdp = tuneVideo(tuneOpus(answer.sdp));
     await peer.setLocalDescription(answer);
     await gathered(peer, 2500);
     if (peer !== pc) return;

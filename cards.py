@@ -529,20 +529,25 @@ class OutputCard(QFrame):
         options.addWidget(self.scale_combo, 1)
 
         self.repeat_btn = icon_button("repeat", tr('Repeat / loop video'), CLR_TEXT)
+        self.repeat_btn.setObjectName("ghost")
         self.repeat_btn.setCheckable(True)
         self.repeat_btn.setChecked(True)  # repeat is ON by default
         self.repeat_btn.toggled.connect(self._on_repeat_toggled)
         options.addWidget(self.repeat_btn)
 
         self.mute_btn = icon_button("volume", tr('Mute audio'), CLR_TEXT)
+        self.mute_btn.setObjectName("ghost")
         self.mute_btn.setCheckable(True)
         self.mute_btn.toggled.connect(self._on_mute_toggled)
         options.addWidget(self.mute_btn)
         self.root.addLayout(options)
 
-        # --- transport ----------------------------------------------------- #
-        transport = QHBoxLayout()
-        transport.setSpacing(6)
+        # --- transport: one control, not five boxes -------------------------- #
+        segment = QFrame()
+        segment.setObjectName("segment")
+        transport = QHBoxLayout(segment)
+        transport.setContentsMargins(3, 3, 3, 3)
+        transport.setSpacing(2)
         for icon_name, tip, signal in (
             ("prev", "Previous item in the playlist", None),
             ("play", "Play", self.playRequested),
@@ -550,8 +555,9 @@ class OutputCard(QFrame):
             ("stop", "Stop (rewind to first frame)", self.stopRequested),
             ("next", "Next item in the playlist", None),
         ):
-            button = icon_button(icon_name, tr(tip))
-            button.setMinimumHeight(32)
+            button = icon_button(icon_name, tr(tip), CLR_DIM)
+            button.setObjectName("segmentButton")
+            button.setMinimumHeight(30)
             if signal is not None:
                 button.clicked.connect(signal.emit)
             transport.addWidget(button, 1)
@@ -559,7 +565,7 @@ class OutputCard(QFrame):
                 self.prev_btn = button
             elif icon_name == "next":
                 self.next_btn = button
-        self.root.addLayout(transport)
+        self.root.addWidget(segment)
 
         # --- volume + blackout --------------------------------------------- #
         bottom = QHBoxLayout()
