@@ -167,6 +167,7 @@ import presentation as pres_mod  # noqa: E402 - PDF / PowerPoint slides
 import remote as remote_mod  # noqa: E402 - the phone remote (QtNetwork)
 import screenshare as share_mod  # noqa: E402 - laptops on the Main Stage (WebRTC)
 import access as access_mod  # noqa: E402 - the admin PIN
+import winplatform  # noqa: E402 - Windows 11: title bars, corners, power and sleep
 import simple as simple_mod  # noqa: E402 - the simple desk
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
@@ -452,6 +453,12 @@ class ControlPanel(QMainWindow):
         # The administrator sees everything; anyone else gets the simple desk.
         self.access = access_mod.Access(self.settings)
         self.role = "admin"
+        # Windows 11: full speed and real timers even when the desk is minimised or
+        # behind PowerPoint, and dark title bars on every window of the app.
+        self.windows_tuning = winplatform.tune_process()
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "setColorScheme"):
+            hints.setColorScheme(Qt.ColorScheme.Dark)
         # The look - touch-sized or not - goes on once, before a single widget
         # exists: re-styling the finished window cost over half a second of start-up.
         app = QApplication.instance()
@@ -1167,11 +1174,13 @@ class ControlPanel(QMainWindow):
             self._session_written = text
             self.settings.setValue("session/state", text)
             self.settings.setValue("session/time", QTime.currentTime().toString("HH:mm"))
+            self.settings.sync()        # now, not later: a crash or a power cut must find it written
 
     def _offer_recovery(self) -> None:
         raw = str(self.settings.value("session/state", "") or "")
         clean = str(self.settings.value("session/clean", "true")).lower() == "true"
         self.settings.setValue("session/clean", "false")     # until this run closes properly
+        self.settings.sync()
         self._session_timer.start(3000)
         if clean or not raw:
             return
@@ -4780,7 +4789,15 @@ class ControlPanel(QMainWindow):
     def _outputs(self):
         return [w for w in (self.main_output, self.sides_output, self.top_output) if w is not None]
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # The caption in the desk's own colours, Windows 11's rounded corners and hairline.
+        winplatform.style_window(int(self.winId()), CLR_BG, CLR_DIM, CLR_EDGE)
+
     def _update_output_status(self) -> None:
+        # While a stage window is open the displays and the PC stay awake: an hour-long
+        # show can pass without a touch of the mouse, and Windows dims screens after ten minutes.
+        winplatform.keep_awake(bool(self._outputs()))
         for role in STAGE_ROLES:
             is_open = getattr(self, self.OUTPUT_ATTRS[role], None) is not None
             if role in getattr(self, "cards", {}):
@@ -5189,6 +5206,7 @@ class ControlPanel(QMainWindow):
             window.force_close()
             window.deleteLater()
         self.main_output = self.sides_output = self.top_output = None
+        winplatform.keep_awake(False)
         event.accept()
         QApplication.quit()
 

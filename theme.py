@@ -148,9 +148,35 @@ THEME = {
 # Icons
 # --------------------------------------------------------------------------- #
 
+# On Windows 11 the icons come from Segoe Fluent Icons, the system's own icon
+# font, so the desk looks like the rest of Windows; anywhere else (Windows 10)
+# they are drawn below. Not every drawn icon has a Fluent twin: "target" and
+# "grip" stay drawn.
+FLUENT_GLYPHS = {
+    "play": 0xE768, "pause": 0xE769, "stop": 0xE71A, "prev": 0xE892, "next": 0xE893, "plus": 0xE710,
+    "minus": 0xE738, "close": 0xE711, "trash": 0xE74D, "folder": 0xE8B7, "save": 0xE74E, "open": 0xE898,
+    "monitor": 0xE7F4, "phone": 0xE8EA, "moon": 0xE708, "power": 0xE7E8, "refresh": 0xE72C,
+    "repeat": 0xE8EE, "volume": 0xE767, "mute": 0xE74F, "palette": 0xE790, "text": 0xE8D2, "list": 0xE8FD,
+    "image": 0xE91B, "compress": 0xE73F, "expand": 0xE740, "warning": 0xE7BA, "video": 0xE714,
+    "gear": 0xE713, "lock": 0xE72E, "unlock": 0xE785, "user": 0xE77B, "home": 0xE80F, "broadcast": 0xE93E,
+    "slides": 0xE786, "disc": 0xE8D6, "help": 0xE897, "keyboard": 0xE765,
+}
+_fluent_family: Optional[str] = None
+
+
+def fluent_family() -> str:
+    """'Segoe Fluent Icons' when the system has it (Windows 11), else ""."""
+    global _fluent_family
+    if _fluent_family is None:
+        from PySide6.QtGui import QFontDatabase
+        _fluent_family = "Segoe Fluent Icons" if "Segoe Fluent Icons" in QFontDatabase.families() else ""
+    return _fluent_family
+
+
 class Icons:
     """
-    Minimal line icons drawn with QPainter on a 24x24 grid.
+    Line icons: Segoe Fluent Icons on Windows 11, drawn with QPainter on a 24x24
+    grid elsewhere.
 
     Drawing them keeps the app a single file with no image assets, and every
     icon inherits the palette, so there is never a mismatched PNG.
@@ -580,11 +606,28 @@ class Icons:
         if cached is not None:
             return cached
 
+        scale = 2  # render at 2x so the icon stays crisp on HiDPI screens
+        if name in FLUENT_GLYPHS and fluent_family():
+            pixmap = QPixmap(size * scale, size * scale)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.TextAntialiasing, True)
+            font = QFont(fluent_family())
+            font.setPixelSize(int(size * scale * 0.92))
+            painter.setFont(font)
+            painter.setPen(QColor(colour))
+            painter.drawText(QRectF(0, 0, size * scale, size * scale), Qt.AlignCenter, chr(FLUENT_GLYPHS[name]))
+            painter.end()
+            pixmap.setDevicePixelRatio(float(scale))
+            icon = QIcon(pixmap)
+            cls._cache[key] = icon
+            return icon
+
         draw: Optional[Callable] = getattr(cls, "_" + name, None)
         if draw is None:
             return QIcon()
 
-        scale = 2  # render at 2x so the icon stays crisp on HiDPI screens
         pixmap = QPixmap(size * scale, size * scale)
         pixmap.fill(Qt.transparent)
 
@@ -632,14 +675,16 @@ QLabel {{ background: transparent; }}
 QFrame#navRail {{ background: {CLR_NAV}; border: none; border-right: 1px solid {CLR_EDGE_SOFT}; }}
 QFrame#navRail QWidget {{ background: transparent; }}
 QToolButton#navButton {{
-    background: transparent; border: none; border-radius: 10px;
+    background: transparent; border: none; border-radius: 6px;
     color: {CLR_MUTED}; font-size: 11px; font-weight: 500;
     padding: 9px 2px 8px 2px;
 }}
 QToolButton#navButton:hover {{ background: {CLR_CARD}; color: {CLR_DIM}; }}
 QToolButton#navButton:checked {{ background: {CLR_RAISED}; color: {CLR_TEXT}; font-weight: 600; }}
 QLabel#navRole {{ color: {CLR_MUTED}; font-size: 10px; font-weight: 600; }}
-QLabel#pageTitle {{ font-size: 20px; font-weight: 600; }}
+QLabel#pageTitle {{
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif; font-size: 20px; font-weight: 600;
+}}
 QLabel#pageLead {{ color: {CLR_DIM}; font-size: 13px; }}
 
 /* Tabs that still show (dialogs, the DJ desk) read as navigation, not buttons. */
@@ -656,7 +701,7 @@ QTabBar::tab:selected {{ color: {CLR_TEXT}; font-weight: 600; border-bottom: 2px
 QFrame#card, QFrame#bar {{
     background: {CLR_CARD};
     border: 1px solid {CLR_EDGE};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 QFrame#card[active="true"] {{ border: 1px solid rgba(214, 173, 82, 0.45); }}
 QFrame#plain {{ background: transparent; border: none; }}
@@ -680,14 +725,14 @@ QLabel#badgeLive, QLabel#badgeOff {{
 QLabel#badgeLive {{ color: {CLR_OK}; background: rgba(76, 187, 131, 0.12); border: none; }}
 QLabel#badgeOff {{ color: {CLR_MUTED}; background: rgba(108, 116, 132, 0.12); border: none; }}
 
-QFrame#dropZone {{ background: {CLR_WELL}; border: 1px dashed {CLR_EDGE_HI}; border-radius: 10px; }}
+QFrame#dropZone {{ background: {CLR_WELL}; border: 1px dashed {CLR_EDGE_HI}; border-radius: 6px; }}
 QFrame#dropZone[dragActive="true"] {{ background: {CLR_ACCENT_SOFT}; border: 1px dashed {CLR_ACCENT}; }}
 
 /* -- buttons -------------------------------------------------------------- */
 QPushButton, QToolButton {{
     background: {CLR_RAISED};
     border: 1px solid {CLR_EDGE_HI};
-    border-radius: 8px;
+    border-radius: 5px;
     padding: 7px 14px;
     color: {CLR_TEXT};
     font-weight: 500;
@@ -718,8 +763,8 @@ QPushButton#ghost:hover, QToolButton#ghost:hover {{ background: {CLR_HOVER}; bor
 QPushButton#ghost:checked {{ background: {CLR_ACCENT_SOFT}; border-color: transparent; }}
 QPushButton#ghost:disabled {{ background: transparent; border-color: transparent; }}
 QPushButton#transport {{ font-size: 15px; font-weight: 600; padding: 9px 0px; }}
-QFrame#segment {{ background: {CLR_INPUT}; border: 1px solid {CLR_EDGE}; border-radius: 9px; }}
-QPushButton#segmentButton {{ background: transparent; border: none; border-radius: 6px; padding: 5px 0px; }}
+QFrame#segment {{ background: {CLR_INPUT}; border: 1px solid {CLR_EDGE}; border-radius: 6px; }}
+QPushButton#segmentButton {{ background: transparent; border: none; border-radius: 4px; padding: 5px 0px; }}
 QPushButton#segmentButton:hover {{ background: {CLR_HOVER}; }}
 QPushButton#segmentButton:pressed {{ background: {CLR_WELL}; }}
 QPushButton#healthChip {{
@@ -728,24 +773,25 @@ QPushButton#healthChip {{
 }}
 QPushButton#healthChip:hover {{ background: {CLR_HOVER}; border-color: {CLR_EDGE_HI}; }}
 QPushButton#tile {{
-    background: {CLR_CARD}; border: 1px solid {CLR_EDGE}; border-radius: 12px;
+    background: {CLR_CARD}; border: 1px solid {CLR_EDGE}; border-radius: 8px;
     padding: 14px; font-size: 14px; font-weight: 600; text-align: left;
 }}
 QPushButton#tile:hover {{ background: {CLR_RAISED}; border-color: {CLR_EDGE_HI}; }}
-QPushButton#big {{ font-size: 15px; font-weight: 600; padding: 12px 18px; border-radius: 10px; }}
+QPushButton#big {{ font-size: 15px; font-weight: 600; padding: 12px 18px; border-radius: 6px; }}
 
 /* -- inputs --------------------------------------------------------------- */
 QComboBox, QSpinBox, QLineEdit, QFontComboBox, QPlainTextEdit {{
     background: {CLR_INPUT};
     border: 1px solid {CLR_EDGE};
-    border-radius: 8px;
+    border-bottom: 1px solid #3a4252;
+    border-radius: 5px;
     padding: 6px 10px;
     selection-background-color: {CLR_ACCENT};
     selection-color: {CLR_INK};
 }}
 QComboBox:hover, QSpinBox:hover, QLineEdit:hover, QFontComboBox:hover {{ border-color: {CLR_EDGE_HI}; }}
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{
-    border: 1px solid rgba(214, 173, 82, 0.6);
+    border: 1px solid {CLR_EDGE}; border-bottom: 2px solid {CLR_ACCENT};
 }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
@@ -756,22 +802,24 @@ QSpinBox:disabled, QComboBox:disabled, QLineEdit:disabled {{ color: #485062; bac
 QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none; background: transparent; }}
 
 QListWidget {{
-    background: {CLR_WELL}; border: 1px solid {CLR_EDGE_SOFT}; border-radius: 10px;
+    background: {CLR_WELL}; border: 1px solid {CLR_EDGE_SOFT}; border-radius: 8px;
     outline: none; padding: 4px;
 }}
-QListWidget::item {{ padding: 6px 8px; border-radius: 7px; color: {CLR_DIM}; }}
+QListWidget::item {{ padding: 6px 8px; border-radius: 5px; color: {CLR_DIM}; }}
 QListWidget::item:hover {{ background: {CLR_HOVER}; color: {CLR_TEXT}; }}
 QListWidget::item:selected {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; border: none; }}
 
 QListWidget#settingsNav {{ background: transparent; border: none; padding: 0px; }}
-QListWidget#settingsNav::item {{ padding: 10px 12px; margin: 1px 0px; border-radius: 8px; color: {CLR_DIM}; }}
+QListWidget#settingsNav::item {{ padding: 10px 12px; margin: 1px 0px; border-radius: 5px; color: {CLR_DIM}; }}
 QListWidget#settingsNav::item:hover {{ background: {CLR_CARD}; color: {CLR_TEXT}; }}
 QListWidget#settingsNav::item:selected {{ background: {CLR_RAISED}; color: {CLR_TEXT}; font-weight: 600; }}
 
 QSlider::groove:horizontal {{ height: 4px; background: {CLR_LINE}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    background: {CLR_TEXT}; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; border: none;
+    background: {CLR_ACCENT}; width: 8px; height: 8px; margin: -6px 0; border-radius: 8px;
+    border: 4px solid #39404e;
 }}
+QSlider::handle:horizontal:hover {{ background: #e0b85e; border-width: 3px; width: 10px; height: 10px; }}
 QSlider::sub-page:horizontal {{ background: #8d96a8; border-radius: 2px; }}
 QSlider::groove:horizontal:disabled {{ background: {CLR_EDGE_SOFT}; }}
 QSlider::sub-page:horizontal:disabled {{ background: #3a404d; }}
@@ -785,7 +833,7 @@ QSlider#scrub:disabled::sub-page:horizontal {{ background: {CLR_LINE}; }}
 
 QCheckBox {{ background: transparent; color: {CLR_DIM}; spacing: 8px; }}
 QCheckBox::indicator {{
-    width: 16px; height: 16px; border-radius: 5px;
+    width: 16px; height: 16px; border-radius: 4px;
     border: 1px solid {CLR_EDGE_HI}; background: {CLR_INPUT};
 }}
 QCheckBox::indicator:checked {{ background: {CLR_ACCENT}; border-color: {CLR_ACCENT}; }}
@@ -794,7 +842,7 @@ QCheckBox::indicator:disabled {{ background: {CLR_WELL}; border-color: {CLR_EDGE
 QCheckBox::indicator:checked:disabled {{ background: #3a404d; border-color: {CLR_EDGE}; }}
 
 /* -- sound pads ----------------------------------------------------------- */
-QFrame#cuePad {{ background: {CLR_RAISED}; border: 1px solid {CLR_EDGE}; border-radius: 10px; }}
+QFrame#cuePad {{ background: {CLR_RAISED}; border: 1px solid {CLR_EDGE}; border-radius: 8px; }}
 QFrame#cuePad[filled="false"] {{ background: transparent; border: 1px dashed {CLR_EDGE_HI}; }}
 QFrame#cuePad[filled="true"]:hover {{ border-color: {CLR_EDGE_HI}; }}
 QFrame#cuePad[playing="true"] {{ background: rgba(76, 187, 131, 0.12); border: 1px solid rgba(76, 187, 131, 0.5); }}
@@ -806,7 +854,7 @@ QLabel#cueName {{ font-size: 12px; font-weight: 500; }}
 QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #4a5264; }}
 
 /* -- the floating strip --------------------------------------------------- */
-QFrame#miniCard {{ background: {CLR_CARD}; border: 1px solid {CLR_EDGE_HI}; border-radius: 12px; }}
+QFrame#miniCard {{ background: {CLR_CARD}; border: 1px solid {CLR_EDGE_HI}; border-radius: 8px; }}
 QPushButton#miniScreen {{ padding: 6px 12px; font-size: 12px; font-weight: 600; color: {CLR_MUTED}; }}
 QPushButton#miniScreen:checked {{ background: {CLR_ACCENT_SOFT}; color: {CLR_TEXT}; border-color: rgba(214, 173, 82, 0.5); }}
 QPushButton#miniScreen[live="true"] {{ color: {CLR_OK}; }}
@@ -816,17 +864,17 @@ QPushButton#miniCue[playing="true"] {{ background: rgba(76, 187, 131, 0.16); col
 QPushButton#miniCue[paused="true"] {{ background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT}; border-color: rgba(214, 173, 82, 0.45); }}
 
 /* -- SETUP / SHOW, TAKE --------------------------------------------------- */
-QFrame#modeSwitch {{ background: {CLR_WELL}; border: 1px solid {CLR_EDGE}; border-radius: 10px; }}
+QFrame#modeSwitch {{ background: {CLR_WELL}; border: 1px solid {CLR_EDGE}; border-radius: 6px; }}
 QPushButton#modeButton {{
-    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
     padding: 6px 16px; color: {CLR_MUTED}; font-weight: 700; letter-spacing: 0.8px;
 }}
 QPushButton#modeButton:hover {{ color: {CLR_DIM}; background: transparent; }}
 QPushButton#modeButton:checked {{ background: {CLR_RAISED}; color: {CLR_TEXT}; border: 1px solid {CLR_EDGE_HI}; }}
-QFrame#takeBar {{ background: rgba(214, 173, 82, 0.06); border: 1px solid rgba(214, 173, 82, 0.32); border-radius: 10px; }}
+QFrame#takeBar {{ background: rgba(214, 173, 82, 0.06); border: 1px solid rgba(214, 173, 82, 0.32); border-radius: 8px; }}
 
 QMenu {{ background: {CLR_RAISED}; border: 1px solid {CLR_EDGE_HI}; border-radius: 8px; padding: 4px; }}
-QMenu::item {{ padding: 7px 22px; border-radius: 6px; }}
+QMenu::item {{ padding: 7px 22px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {CLR_HOVER}; }}
 QMenu::separator {{ height: 1px; background: {CLR_EDGE}; margin: 4px 6px; }}
 QDialog {{ background: {CLR_BG}; }}
@@ -834,10 +882,10 @@ QStatusBar {{ background: transparent; color: {CLR_MUTED}; border: none; }}
 QStatusBar::item {{ border: none; }}
 QToolTip {{
     background: {CLR_RAISED}; color: {CLR_TEXT};
-    border: 1px solid {CLR_EDGE_HI}; padding: 6px 9px; border-radius: 6px;
+    border: 1px solid {CLR_EDGE_HI}; padding: 6px 9px; border-radius: 4px;
 }}
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #2a3140; border-radius: 4px; min-height: 28px; }}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: #3a4252; border-radius: 2px; min-height: 28px; }}
 QScrollBar::handle:vertical:hover {{ background: #384052; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: #2a3140; border-radius: 4px; min-width: 28px; }}

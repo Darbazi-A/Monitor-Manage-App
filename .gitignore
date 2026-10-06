@@ -11,3 +11,6 @@ backups/
 
 # The screen share's self-signed certificate and key, made on this machine.
 share_cert/
+
+# The regression tests stay on this PC: they use the hall's own media folders and devices.
+tests/

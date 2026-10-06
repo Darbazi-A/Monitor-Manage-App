@@ -161,6 +161,40 @@ laptop share), *Start with Windows*, *Interface* (language, touch), *Admin &
 simple desk*, *Backups* and *Help*. None of it is needed while a show runs, so
 in SHOW mode Settings steps away like the Library.
 
+## Windows 11
+
+The app is at home on Windows 11 (and still runs on Windows 10, without the
+extras):
+
+- **Looks** — the desk's title bar is drawn in its own graphite (Windows 11 lets
+  an app colour its caption, caption text and border), every window has a dark
+  title bar, and dialogs keep Windows 11's rounded corners. Icons come from
+  **Segoe Fluent Icons**, the system's own icon font; text is set in **Segoe UI
+  Variable**. Controls follow Fluent's geometry (4–5 px corners on controls, 8 px
+  on surfaces, an accent underline on the focused field, a ring thumb on
+  sliders), and the open page has the rail's gold selection pill.
+- **Stage windows stay square** — Windows 11 rounds window corners and draws a
+  hairline border round them; on a projector or an LED wall that would clip
+  the picture's corners. Every stage window asks for square corners and no
+  border, again whenever it is re-created.
+- **Full speed in the background** — Windows 11 slows down apps it thinks are in
+  the background (EcoQoS, "efficiency mode") and ignores the timers of windows
+  that are minimised or covered. The desk is often exactly that — shrunk to the
+  compact bar, or behind PowerPoint — while it drives three screens, so the app
+  opts out of both for its own process, and runs at above-normal priority so a
+  busy PowerPoint or a laptop's browser does not starve the stage's video.
+- **No sleep during a show** — while any stage window is open the app asks
+  Windows to keep the displays and the PC awake (an hour-long show can pass
+  without a touch of the mouse, and the stock power plan turns displays off
+  after ten minutes). It lets go when the stage windows close.
+- **The session is written at once** — what is on stage is flushed to the
+  settings straight away, so a crash or a power cut finds it.
+
+None of this needs administrator rights or changes a Windows setting; it all
+lives in `winplatform.py`. Mica (the translucent Windows 11 backdrop) was left
+out on purpose: it needs a layered window, and the dashboard repaints several
+times a second.
+
 ## Admin and the simple desk
 
 ![The simple desk](docs/simple.png)
@@ -877,6 +911,7 @@ still works. The rest is split by what it does:
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
 | `routing.py` | `RoutingRow`: the rows of Settings → Screens |
 | `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |
+| `winplatform.py` | Windows 11: caption colours and corners (DWM), square borderless stage windows, no background throttling, above-normal priority, keeping the displays awake during a show |
 | `simple.py` | `SimplePage`, the simple desk |
 | `minibar.py` | `MiniBar`, the floating strip the dashboard shrinks to |
 | `backups.py` | the copies of `presets.json` and `shows.json` |

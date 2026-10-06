@@ -7,6 +7,7 @@ Part of Stage Display Controller; main.py builds the dashboard from these.
 from __future__ import annotations
 
 from i18n import caps, tr  # noqa: E402 - the interface's language
+import winplatform  # noqa: E402 - square, borderless stage windows on Windows 11
 
 # noqa: F401 - one import block for every module of the app
 import argparse
@@ -494,6 +495,9 @@ class BaseOutputWindow(QWidget):
         self.setGeometry(target)
         if rect is None:
             self.showFullScreen()
+        # Windows 11 rounds window corners and draws a hairline border round them:
+        # neither may reach a projector or an LED wall.
+        winplatform.style_stage(int(self.winId()))
         self.raise_()
 
     def set_always_on_top(self, on_top: bool) -> None:

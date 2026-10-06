@@ -416,6 +416,8 @@ class ShareReceiver(QObject):
                         receiver._from_page(link, kind, json.loads(payload) if payload else None)
                     except ValueError:
                         pass
+                    except RuntimeError:
+                        pass        # a last word from a page whose receiver is already gone (quitting)
 
         page = Page(view)
         link.page = page

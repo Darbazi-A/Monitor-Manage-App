@@ -126,6 +126,20 @@ class NavRail(QFrame):
         self._lower.addSpacing(4)
         self._lower.addWidget(self.account_btn, 0, Qt.AlignHCenter)
 
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """The open page gets Windows 11's selection pill beside it."""
+        super().paintEvent(event)
+        for button, _icon in self.buttons.values():
+            if button.isChecked() and button.isVisible():
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(self.theme["accent"]))
+                top = button.mapTo(self, button.rect().topLeft())
+                painter.drawRoundedRect(QRectF(2, top.y() + button.height() / 2 - 9, 3.5, 18), 1.75, 1.75)
+                painter.end()
+                break
+
     def sync(self, tabs: QTabWidget) -> None:
         """Show the buttons of the pages that can be opened; light the open one."""
         current = tabs.currentIndex()
@@ -137,6 +151,7 @@ class NavRail(QFrame):
                 button.setChecked(on)
                 button.setIcon(self.icons.get(icon, self.theme["accent"] if on else self.theme["muted"], 22))
                 button._lit = on
+        self.update()
 
     def set_account(self, admin: bool, has_pin: bool) -> None:
         if admin:
