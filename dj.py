@@ -14,6 +14,7 @@ with a right-click, a finger does with a long press; double-tap resets a knob.
 from __future__ import annotations
 
 from i18n import tr  # noqa: E402 - the interface's language
+from widgets import ElidedLabel  # noqa: E402
 
 import json
 import math
@@ -1394,7 +1395,7 @@ class DeckView(QFrame):
         header.addWidget(badge)
         names = QVBoxLayout()
         names.setSpacing(0)
-        self.title = QLabel(tr('Empty deck'))
+        self.title = ElidedLabel(tr('Empty deck'), mode=Qt.ElideRight)    # a long track name ends in …
         self.title.setObjectName("djTrack")
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.sub = QLabel(tr('drop a track, or double-tap one in the crate'))

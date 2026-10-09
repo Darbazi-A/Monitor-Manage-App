@@ -17,6 +17,8 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider,
                                QVBoxLayout, QWidget)
 
+from widgets import ElidedLabel
+
 
 def _card() -> Tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
@@ -62,7 +64,7 @@ class ScreenPanel(QFrame):
         self.picture.setAlignment(Qt.AlignCenter)
         self.picture.setStyleSheet("background: #05070b; border-radius: 8px;")
         box.addWidget(self.picture)
-        self.caption = QLabel()
+        self.caption = ElidedLabel()
         self.caption.setObjectName("cardHint")
         box.addWidget(self.caption)
         row = QHBoxLayout()
@@ -114,6 +116,7 @@ class SimplePage(QWidget):
     slideBack = Signal()
     slidesEnd = Signal()
     slidesLive = Signal()
+    videoRequested = Signal()           # a video in the middle of the talk
     cueClicked = Signal(int)
     stopSoundRequested = Signal()
     masterChanged = Signal(int)
@@ -209,6 +212,11 @@ class SimplePage(QWidget):
         self.live_btn = QPushButton(tr("Show on the Main Stage"))
         self.live_btn.clicked.connect(self.slidesLive.emit)
         ends.addWidget(self.live_btn, 1)
+        self.video_btn = QPushButton(tr("  Video…"))
+        self.video_btn.setIcon(icons.get("video", theme["text"], 15))
+        self.video_btn.setToolTip(tr("Play a video: the slides wait, and come back where they were when it ends"))
+        self.video_btn.clicked.connect(self.videoRequested.emit)
+        ends.addWidget(self.video_btn)
         self.end_btn = QPushButton(tr("End"))
         self.end_btn.clicked.connect(self.slidesEnd.emit)
         ends.addWidget(self.end_btn)
@@ -277,7 +285,8 @@ class SimplePage(QWidget):
         self.preset_strip.setVisible(any_scenes)
         self.no_scenes.setVisible(not any_scenes)
 
-    def set_slides(self, text: str, opened: bool, live: bool) -> None:
+    def set_slides(self, text: str, opened: bool, live: bool, paused: bool = False) -> None:
+        self.next_btn.setText(tr("  Back to slides") if paused else tr("  Next slide"))
         self.slides_state.setText(text)
         self.next_btn.setEnabled(opened)
         self.back_btn.setEnabled(opened)

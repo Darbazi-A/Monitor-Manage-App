@@ -107,6 +107,7 @@ from PySide6.QtWidgets import (
 )
 from config import *  # noqa: F401,F403
 from theme import *  # noqa: F401,F403
+from widgets import ElidedLabel  # noqa: E402
 from media import *  # noqa: F401,F403
 from outputs import *  # noqa: F401,F403
 from sound import *  # noqa: F401,F403
@@ -147,7 +148,7 @@ class DropZone(QFrame):
         self.thumb.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.thumb, 1)
 
-        self.caption = QLabel()
+        self.caption = ElidedLabel()
         self.caption.setObjectName("cardHint")
         self.caption.setAlignment(Qt.AlignCenter)
         self.caption.setWordWrap(False)
@@ -194,7 +195,7 @@ class DropZone(QFrame):
             self.thumb.setPixmap(
                 poster.scaled(self.THUMB, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-        self.caption.setText(self._elide(os.path.basename(path)))
+        self.caption.setText(os.path.basename(path))
         self.caption.setToolTip(path)
         self.setProperty("loaded", "true")
         self._restyle()
@@ -208,7 +209,7 @@ class DropZone(QFrame):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         if self._path:
-            self.caption.setText(self._elide(os.path.basename(self._path)))
+            self.caption.setText(os.path.basename(self._path))
 
     def clear(self) -> None:
         self.caption.setToolTip("")

@@ -30,6 +30,7 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QProcess, Q
                             QRectF, QSize, QSizeF, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QImageReader, QPainter, QPen, QPixmap
 from desk import HoldButton
+from widgets import ElidedLabel
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFrame, QHBoxLayout, QLabel, QListView, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
@@ -160,6 +161,8 @@ try {
     $show.Left = [double]$env:SDC_PX; $show.Top = [double]$env:SDC_PY
     $show.Width = [double]$env:SDC_PW; $show.Height = [double]$env:SDC_PH
   }
+  # where the show sits, so "back" can put it there again after a video ("away")
+  $homeLeft = $show.Left; $homeTop = $show.Top
   # the last slide the audience sees; NEXT stops there instead of PowerPoint's
   # "End of slide show" screen
   $last = 1
@@ -185,6 +188,8 @@ try {
       elseif ($cmd -eq 'black') { $show.View.State = 3 }
       elseif ($cmd -eq 'unblack') { $show.View.State = 1 }
       elseif ($cmd -eq 'end') { $show.View.Exit(); $done = $true }
+      elseif ($cmd -eq 'away') { $show.Left = -32000; $show.Top = -32000 }
+      elseif ($cmd -eq 'back') { $show.Left = $homeLeft; $show.Top = $homeTop }
     } catch { }
     if ($done) { Say "ENDED" } else { State }
   }
@@ -668,10 +673,12 @@ class Presenter(QObject):
 
     changed = Signal()
     note = Signal(str)
+    resumeRequested = Signal()          # NEXT / BACK while a video plays in the slides' place
 
     def __init__(self, stage, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self.stage = stage
+        self.paused = False                 # a video is playing where the slides were
         self.deck: Optional[Deck] = None
         self.index = 0
         self.live = False
@@ -750,8 +757,36 @@ class Presenter(QObject):
             self._stop_show()
             self.live = False
             self.black = False
+            self.paused = False
             self._waiting = False
             self.changed.emit()
+
+    # -- a video in the middle of the talk ------------------------------------ #
+    def pause_for_media(self) -> bool:
+        """
+        The slides wait while a video plays on their screen: PowerPoint's show
+        steps aside (still running - slide, animations and clock kept), pictures
+        simply stay where they are. Back with resume().
+        """
+        if not self.live or self.paused:
+            return False
+        self.paused = True
+        if self.show is not None:
+            self.show.send("away")
+        self.changed.emit()
+        return True
+
+    def resume(self) -> None:
+        """The slides come back exactly where they were."""
+        if not self.paused:
+            return
+        self.paused = False
+        if self.show is not None:
+            self.show.send("back")
+            self.stage.refocus()
+        elif self.live and not self.black:
+            self._show()
+        self.changed.emit()
 
     def _on_failed(self, message: str) -> None:
         self.note.emit(message)
@@ -771,6 +806,9 @@ class Presenter(QObject):
         self.changed.emit()
 
     def next(self) -> bool:
+        if self.paused:                       # the clicker brings the slides back first
+            self.resumeRequested.emit()
+            return True
         if self.show is not None:
             # PowerPoint decides: the next animation, or the next slide
             self.show.send("unblack" if self.black else "next")
@@ -787,6 +825,9 @@ class Presenter(QObject):
         return True
 
     def back(self) -> bool:
+        if self.paused:
+            self.resumeRequested.emit()
+            return True
         if self.show is not None:
             self.show.send("unblack" if self.black else "prev")
             return True
@@ -801,7 +842,7 @@ class Presenter(QObject):
         return True
 
     def toggle_black(self) -> None:
-        if not self.live:
+        if not self.live or self.paused:
             return
         self.black = not self.black
         if self.show is not None:
@@ -836,14 +877,15 @@ class Presenter(QObject):
         if not self.live:
             return
         in_powerpoint = self.show is not None
+        was_paused, self.paused = self.paused, False
         self._stop_show()
         self.live = False
         self.black = False
         self._waiting = False
         if in_powerpoint:
-            self.stage.give_back_room(self.role)     # the background never left its screen
-        else:
-            self.stage.restore(self.role, self.fade_ms)
+            self.stage.give_back_room(self.role)     # the background never left its screen ...
+        if was_paused or not in_powerpoint:
+            self.stage.restore(self.role, self.fade_ms)   # ... unless a video took its place
         self.changed.emit()
 
     def _show(self) -> None:
@@ -1042,6 +1084,137 @@ class LearnDialog(QDialog):
         self._advance()
 
 
+class MediaBreakPanel(QFrame):
+    """
+    Videos for the talk: dropped here before it starts, played with one press in
+    the middle of it. The slides wait, the video plays on their screen, and the
+    slides come back where they were - by themselves when the video ends, or with
+    Back to slides (the clicker's NEXT does it too).
+    """
+
+    playRequested = Signal(str)
+    backRequested = Signal()
+    filesChanged = Signal(list)
+    autoBackToggled = Signal(bool)
+
+    VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".webm", ".mpg", ".mpeg"}
+
+    def __init__(self, icons, theme: dict, height: int) -> None:
+        super().__init__()
+        self.icons = icons
+        self.theme = theme
+        self.setObjectName("card")
+        self.setFixedWidth(470)
+        self.setFixedHeight(height)
+        self.setAcceptDrops(True)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(12, 6, 12, 8)
+        box.setSpacing(4)
+        head = QHBoxLayout()
+        head.setSpacing(4)
+        title = QLabel(tr("VIDEOS DURING THE TALK"))
+        title.setObjectName("sectionTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        add = QPushButton()
+        add.setObjectName("ghost")
+        add.setIcon(icons.get("plus", theme["muted"], 15))
+        add.setToolTip(tr("Add videos for this talk (or drop them here)"))
+        add.clicked.connect(self._add)
+        head.addWidget(add)
+        remove = QPushButton()
+        remove.setObjectName("ghost")
+        remove.setIcon(icons.get("minus", theme["muted"], 15))
+        remove.setToolTip(tr("Remove the chosen video from the list"))
+        remove.clicked.connect(self._remove)
+        head.addWidget(remove)
+        box.addLayout(head)
+        self.list = QListWidget()
+        self.list.setTextElideMode(Qt.ElideMiddle)
+        self.list.setStyleSheet("QListWidget { padding: 2px; } QListWidget::item { padding: 2px 6px; }")
+        self.list.itemDoubleClicked.connect(lambda item: self.playRequested.emit(item.data(Qt.UserRole)))
+        body = QHBoxLayout()
+        body.setSpacing(8)
+        body.addWidget(self.list, 1)
+        row = QVBoxLayout()
+        row.setSpacing(6)
+        self.play_btn = QPushButton(tr("  Play video"))
+        self.play_btn.setIcon(icons.get("play", theme["text"], 15))
+        self.play_btn.setToolTip(tr("The slides wait, the video plays on their screen"))
+        self.play_btn.clicked.connect(self._play)
+        row.addWidget(self.play_btn)
+        self.back_btn = QPushButton(tr("  Back to slides"))
+        self.back_btn.setIcon(icons.get("slides", theme["accent"], 15))
+        self.back_btn.setToolTip(tr("Stop the video - the slides come back where they were (NEXT on the clicker does it too)"))
+        self.back_btn.clicked.connect(self.backRequested.emit)
+        row.addWidget(self.back_btn)
+        self.auto_check = QCheckBox(tr("back when it ends"))
+        self.auto_check.setChecked(True)
+        self.auto_check.setToolTip(tr("When the video ends, the slides come back by themselves"))
+        self.auto_check.toggled.connect(self.autoBackToggled.emit)
+        row.addWidget(self.auto_check)
+        row.addStretch(1)
+        body.addLayout(row)
+        box.addLayout(body, 1)
+        self.set_paused(False, False)
+
+    def set_files(self, paths: List[str]) -> None:
+        self.list.clear()
+        for path in paths:
+            if os.path.isfile(path):
+                self._append(path)
+
+    def files(self) -> List[str]:
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
+
+    def _append(self, path: str) -> None:
+        item = QListWidgetItem(self.icons.get("video", self.theme["dim"], 14), os.path.basename(path))
+        item.setData(Qt.UserRole, path)
+        item.setToolTip(path)
+        self.list.addItem(item)
+        if self.list.currentRow() < 0:
+            self.list.setCurrentRow(0)
+
+    def add_paths(self, paths: List[str]) -> None:
+        known = {os.path.normcase(p) for p in self.files()}
+        for path in paths:
+            if os.path.splitext(path)[1].lower() in self.VIDEO_EXTENSIONS and os.path.normcase(path) not in known:
+                self._append(os.path.normpath(path))
+                known.add(os.path.normcase(path))
+        self.filesChanged.emit(self.files())
+
+    def _add(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("Videos for this talk"), os.path.expanduser("~/Desktop"),
+                                                tr("Videos") + " (" + " ".join("*" + e for e in sorted(self.VIDEO_EXTENSIONS)) + ")")
+        if paths:
+            self.add_paths(paths)
+
+    def _remove(self) -> None:
+        row = self.list.currentRow()
+        if row >= 0:
+            self.list.takeItem(row)
+            self.filesChanged.emit(self.files())
+
+    def _play(self) -> None:
+        item = self.list.currentItem() or (self.list.item(0) if self.list.count() else None)
+        if item is None:
+            self._add()
+            return
+        self.playRequested.emit(item.data(Qt.UserRole))
+
+    def set_paused(self, paused: bool, live: bool) -> None:
+        self.play_btn.setVisible(not paused)
+        self.back_btn.setVisible(paused)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.add_paths([u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()])
+        event.acceptProposedAction()
+
+
 class PresentationTab(QWidget):
     """Current and next slide, notes, timer, thumbnails, and the clicker."""
 
@@ -1179,7 +1352,12 @@ class PresentationTab(QWidget):
         self.thumbs.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.thumbs.setSpacing(4)
         self.thumbs.itemClicked.connect(lambda item: self.presenter.goto(self.thumbs.row(item)))
-        outer.addWidget(self.thumbs)
+        lower = QHBoxLayout()
+        lower.setSpacing(10)
+        lower.addWidget(self.thumbs, 1)
+        self.breaks = MediaBreakPanel(icons, theme, self._thumb_width * 9 // 16 + 62)
+        lower.addWidget(self.breaks)
+        outer.addLayout(lower)
         outer.addWidget(self._build_clicker_bar())
 
         self.presenter.changed.connect(self.refresh)
@@ -1232,7 +1410,7 @@ class PresentationTab(QWidget):
         self.powerpoint_check.toggled.connect(self._on_powerpoint)
         row.addWidget(self.powerpoint_check)
         row.addStretch(1)
-        self.status = QLabel("")
+        self.status = ElidedLabel("")
         self.status.setObjectName("cardHint")
         row.addWidget(self.status)
         self.laptop_btn = QPushButton(tr('  Laptop screen share…'))
@@ -1251,7 +1429,7 @@ class PresentationTab(QWidget):
         caption = QLabel(tr('Clicker'))
         caption.setObjectName("sectionTitle")
         row.addWidget(caption)
-        self.key_label = QLabel(tr('press a clicker button to test it'))
+        self.key_label = ElidedLabel(tr('press a clicker button to test it'))
         self.key_label.setObjectName("cardHint")
         self.key_label.setMinimumWidth(260)
         row.addWidget(self.key_label)
@@ -1396,11 +1574,16 @@ class PresentationTab(QWidget):
         self.live_btn.style().unpolish(self.live_btn)
         self.live_btn.style().polish(self.live_btn)
         self.live_btn.setEnabled(presenter.can_go_live())
-        self.black_btn.setEnabled(presenter.live)
+        self.breaks.set_paused(presenter.paused, presenter.live)
+        if presenter.paused and deck is not None:
+            self.current.show_slide(deck.thumb(presenter.index, 1280) if count else None,
+                                    tr("VIDEO PLAYING  ·  the slides wait here"), self.theme["warn"], dimmed=True)
+        self.black_btn.setEnabled(presenter.live and not presenter.paused)
         self.black_btn.setChecked(presenter.live and presenter.black)
         # in PowerPoint the last slide may still have animations to play
         self.next_btn.setEnabled(bool(count) and (presenter.index + 1 < count or presenter.black
-                                                   or presenter.playing_in_powerpoint()))
+                                                   or presenter.playing_in_powerpoint() or presenter.paused))
+        self.next_btn.setText(tr('  Back to slides') if presenter.paused else tr('  NEXT'))
         self._tick()
 
     def _sync_thumbs(self) -> None:

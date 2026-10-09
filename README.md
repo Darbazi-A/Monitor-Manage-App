@@ -414,6 +414,24 @@ forward / back walk the running order instead.
 screen or *end the presentation*; a later step that puts something else on that
 screen takes it over.
 
+### A video in the middle of a talk
+
+Often a talk needs a clip halfway through. **Videos during the talk**, beside
+the slide thumbnails, holds the talk's videos (drop them there before it
+starts). **Play video** puts one on the slides' screen and the slides wait:
+with PowerPoint's own show the slide-show window steps aside — off the screen,
+still running, its slide, animations and clock kept — and pictures simply stay
+where they are. When the video ends the slides come back on the same slide by
+themselves (*back when it ends*), or at once with **Back to slides** — the big
+NEXT button says so while a video plays, and the clicker's NEXT does it too.
+The background stays quiet under the slides and plays on when the talk ends;
+ending the talk during a video puts the background back.
+
+A file sent to the talk's screen from its card (or the library) does the same:
+PowerPoint used to keep it hidden behind the slides. The header's picture of
+that screen names the video while it plays. The simple desk has a **Video…**
+button for it, and its Next slide button becomes *Back to slides*.
+
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
@@ -910,6 +928,7 @@ still works. The rest is split by what it does:
 | `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
 | `routing.py` | `RoutingRow`: the rows of Settings → Screens |
+| `widgets.py` | `ElidedLabel`: one line - usually a file name - that never asks for more width than it has, so a long name cannot push a page past the window's edge |
 | `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |
 | `winplatform.py` | Windows 11: caption colours and corners (DWM), square borderless stage windows, no background throttling, above-normal priority, keeping the displays awake during a show |
 | `simple.py` | `SimplePage`, the simple desk |

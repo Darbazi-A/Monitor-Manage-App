@@ -15,6 +15,7 @@ the colours and icons are handed in.
 from __future__ import annotations
 
 from i18n import caps, tr  # noqa: E402 - the interface's language
+from widgets import ElidedLabel  # noqa: E402
 
 import time
 from typing import Callable, Dict, List, Optional
@@ -428,13 +429,11 @@ class TakeBar(QFrame):
         self.tag = QLabel()
         self.tag.setObjectName("takeTag")
         texts.addWidget(self.tag, 0, Qt.AlignLeft)
-        self.title = QLabel()
+        self.title = ElidedLabel(mode=Qt.ElideRight)      # a long file name must not widen the header
         self.title.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         texts.addWidget(self.title)
-        self.detail = QLabel()
+        self.detail = ElidedLabel(mode=Qt.ElideRight)
         self.detail.setObjectName("cardHint")
-        self.detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         texts.addWidget(self.detail)
         row.addLayout(texts, 1)
         self.take_btn = QPushButton(tr('  TAKE'))

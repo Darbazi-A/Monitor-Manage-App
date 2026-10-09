@@ -124,6 +124,7 @@ class MediaEngine(QObject):
     """
 
     errorOccurred = Signal(str)
+    finished = Signal()             # a video that does not repeat reached its end
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -221,6 +222,9 @@ class MediaEngine(QObject):
         return getattr(QMediaPlayer, "EndOfMedia", None)
 
     def _on_media_status_changed(self, status) -> None:
+        if status == self._end_of_media_value() and not self._loop:
+            self.finished.emit()
+            return
         if self._has_set_loops or not self._loop:
             return
         if status == self._end_of_media_value():

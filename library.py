@@ -107,6 +107,7 @@ from PySide6.QtWidgets import (
 )
 from config import *  # noqa: F401,F403
 from theme import *  # noqa: F401,F403
+from widgets import ElidedLabel  # noqa: E402
 from media import *  # noqa: F401,F403
 from outputs import *  # noqa: F401,F403
 from sound import *  # noqa: F401,F403
@@ -254,7 +255,7 @@ class MediaLibrary(QWidget):
         # --- actions ------------------------------------------------------- #
         actions = QHBoxLayout()
         actions.setSpacing(7)
-        self.selection_label = QLabel(tr('nothing selected'))
+        self.selection_label = ElidedLabel(tr('nothing selected'))
         self.selection_label.setObjectName("cardHint")
         self.selection_label.setMinimumWidth(150)
         actions.addWidget(self.selection_label)

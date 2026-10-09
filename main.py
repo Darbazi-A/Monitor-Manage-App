@@ -392,6 +392,9 @@ class SlideStage:
                 self._lowered.append(window)
 
     def give_back_room(self, role: str) -> None:
+        window = self.panel._show_output(role)
+        if window is not None:
+            window.engine.play()          # a background paused under the slides plays on
         for window in getattr(self, "_lowered", []):
             try:
                 if window.isVisible() and window.windowFlags() & Qt.WindowStaysOnTopHint:
@@ -500,6 +503,9 @@ class ControlPanel(QMainWindow):
         self.presenter = pres_mod.Presenter(SlideStage(self), self)
         self.presenter.in_powerpoint = str(self.settings.value("slides/powerpoint", "true")).lower() == "true"
         self.presenter.note.connect(self._on_presenter_note)
+        self.presenter.resumeRequested.connect(self.end_break)
+        self._break: Optional[dict] = None      # a video playing where the slides were
+        self._break_watched: set = set()
         self.presenter.changed.connect(self._on_presenter_changed)
         self._hotkeys: Dict[int, tuple] = {}
         self._slide_shortcuts: List[QShortcut] = []
@@ -772,7 +778,8 @@ class ControlPanel(QMainWindow):
                     if not pixmap.isNull() else None
                 caption = tr("laptop  ·  {0}").format(self._share_names())
                 live = True
-            elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+            elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint() \
+                    and not presenter.paused:
                 pixmap = None
                 if presenter.deck is not None and presenter.count() and not presenter.black:
                     pixmap = presenter.deck.thumb(presenter.index, 256)
@@ -789,8 +796,10 @@ class ControlPanel(QMainWindow):
                     tile._drawn = key
                 live = window.has_picture()
                 parts = []
-                if presenter.live and presenter.role == role and presenter.deck is not None:
+                if presenter.live and presenter.role == role and presenter.deck is not None and not presenter.paused:
                     parts.append(tr("slides {0}/{1}").format(presenter.index + 1, presenter.count()))
+                elif self._break and self._break["role"] == role and not self._break["card"]:
+                    parts.append(tr("video · {0}").format(os.path.basename(self._break["path"])))
                 elif card is not None and card.current_path():
                     parts.append(os.path.basename(card.current_path()))
                 if window.slide_visible():
@@ -954,6 +963,77 @@ class ControlPanel(QMainWindow):
         self.pin_remove_btn.setVisible(has)
         self.nav.set_account(self.role != "user", has)
 
+    # -- a video in the middle of a talk -------------------------------------------- #
+
+    @Slot(str)
+    def play_break(self, path: str) -> None:
+        """
+        Play a video where the slides are: the slides wait (PowerPoint steps
+        aside, keeping its slide and animations), the video plays once, and the
+        slides come back where they were - when it ends, or on Back to slides.
+        """
+        if not path or not os.path.isfile(path):
+            self.statusBar().showMessage(tr("{0} is missing.").format(os.path.basename(path or "")), 8000)
+            return
+        presenter = self.presenter
+        role = presenter.role if presenter.live else ROLE_MAIN
+        window = self._show_output(role)
+        if window is None:
+            self.statusBar().showMessage(tr("Open the stage screens first."), 8000)
+            return
+        if presenter.live and presenter.role == role:
+            presenter.pause_for_media()
+        try:
+            window.engine.set_loop(False)
+            window.present(path, self.fade_ms(), self.fade_style())
+        except MediaProblem as problem:
+            window.engine.set_loop(self.cards[role].is_repeating())
+            if self._break is None:
+                presenter.resume()
+            self._report_media_problem(role, path, problem)
+            return
+        self._break = {"role": role, "path": path, "card": False}
+        if id(window) not in self._break_watched:
+            self._break_watched.add(id(window))
+            window.engine.finished.connect(self._on_break_finished)
+        self.statusBar().showMessage(
+            tr("{0} is playing - the slides wait.").format(os.path.basename(path)) if presenter.paused else
+            tr("{0} is playing.").format(os.path.basename(path)), 8000)
+
+    @Slot()
+    def _on_break_finished(self) -> None:
+        if self._break and not self._break["card"] and \
+                str(self.settings.value("slides/break_back", "true")).lower() == "true":
+            self.end_break()
+
+    @Slot()
+    def end_break(self) -> None:
+        """The slides back where they were; the background back under them."""
+        brk, self._break = self._break, None
+        presenter = self.presenter
+        role = brk["role"] if brk else presenter.role
+        window = self._show_output(role)
+        stage = presenter.stage
+        if window is not None:
+            window.engine.set_loop(self.cards[role].is_repeating())
+        if presenter.live and presenter.paused and presenter.role == role:
+            if presenter.playing_in_powerpoint() and window is not None:
+                if brk is None or not brk["card"]:
+                    stage.restore(role, 0)          # the background back under the slides ...
+                window.engine.pause()              # ... quiet while PowerPoint is in front
+            presenter.resume()
+            self.statusBar().showMessage(tr("Back to the slides."), 5000)
+        elif brk is not None and not brk["card"]:
+            stage.restore(role, self.fade_ms())    # no talk to return to: the background comes back
+
+    def _simple_pick_break(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, tr("A video for the talk"),
+                                              str(self.settings.value("simple/folder", "") or os.path.expanduser("~/Desktop")),
+                                              MEDIA_FILTER)
+        if path:
+            self.settings.setValue("simple/folder", os.path.dirname(path))
+            self.play_break(os.path.normpath(path))
+
     # -- the simple desk -------------------------------------------------------- #
 
     def _build_simple_page(self) -> QWidget:
@@ -968,6 +1048,7 @@ class ControlPanel(QMainWindow):
         page.slideBack.connect(lambda: self.presenter.back())
         page.slidesLive.connect(lambda: self.presenter.go_live_when_ready(ROLE_MAIN))
         page.slidesEnd.connect(self.presenter.end)
+        page.videoRequested.connect(self._simple_pick_break)
         page.cueClicked.connect(self._fire_cue)
         page.stopSoundRequested.connect(self._stop_all_sound)
         page.masterChanged.connect(self.sound_master.setValue)
@@ -1004,7 +1085,7 @@ class ControlPanel(QMainWindow):
             text = tr('{0}  ·  slide {1} of {2}').format(name, presenter.index + 1, presenter.count() or "…")
             if presenter.live:
                 text += "  ·  " + tr('on the {0}').format(ROLE_LABELS.get(presenter.role, ""))
-            page.set_slides(text, True, presenter.live)
+            page.set_slides(text, True, presenter.live, presenter.paused)
         page.set_cues([(cue.label() if cue.path else "", cue.is_playing(), cue.is_paused()) for cue in self.sound.cues])
         page.set_master(self.sound_master.value())
         if self.share.running and self.share.addresses():
@@ -3652,6 +3733,14 @@ class ControlPanel(QMainWindow):
         tab.learnRequested.connect(self._learn_clicker)
         tab.guestRequested.connect(self._open_guest_dialog)
         tab.laptopRequested.connect(self._open_share_dialog)
+        stored = self.settings.value("slides/breaks", [])
+        tab.breaks.set_files([stored] if isinstance(stored, str) and stored else list(stored or []))
+        tab.breaks.auto_check.setChecked(str(self.settings.value("slides/break_back", "true")).lower() == "true")
+        tab.breaks.filesChanged.connect(lambda paths: self.settings.setValue("slides/breaks", paths))
+        tab.breaks.autoBackToggled.connect(
+            lambda on: self.settings.setValue("slides/break_back", "true" if on else "false"))
+        tab.breaks.playRequested.connect(self.play_break)
+        tab.breaks.backRequested.connect(self.end_break)
         tab.global_check.setChecked(self._clicker_global())
         tab.globalToggled.connect(self._on_clicker_global)
         tab.powerpointToggled.connect(
@@ -3746,7 +3835,7 @@ class ControlPanel(QMainWindow):
         presenter = self.presenter
         if role == ROLE_MAIN and self._share_on(window):
             live, moving, version = True, True, "laptop"
-        elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint():
+        elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint() and not presenter.paused:
             live, moving, version = not presenter.black, False, f"ppt-{presenter.index}-{presenter.black}"
         else:
             live, moving, version = window.has_picture(), window.is_moving(), str(window.picture_version)
@@ -4367,6 +4456,14 @@ class ControlPanel(QMainWindow):
             card.show_loaded(path)
             self._mark_preset_dirty()
             self.statusBar().showMessage(f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000)
+            presenter = self.presenter
+            if presenter.live and presenter.role == role and not presenter.paused:
+                # PowerPoint would hide it: the slides step aside and wait
+                presenter.pause_for_media()
+                self._break = {"role": role, "path": path, "card": True}
+                self.statusBar().showMessage(
+                    tr("The slides wait while this plays - Back to slides (or NEXT on the clicker) brings them back."),
+                    10000)
             queued = card.playlist.paths()
             if path in queued and queued.index(path) + 1 < len(queued):
                 warm_file(queued[queued.index(path) + 1])     # the next one is ready too
