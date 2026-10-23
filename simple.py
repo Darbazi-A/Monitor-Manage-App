@@ -17,7 +17,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider,
                                QVBoxLayout, QWidget)
 
-from widgets import ElidedLabel
+from widgets import ElidedLabel, VideoTransport
 
 
 def _card() -> Tuple[QFrame, QVBoxLayout]:
@@ -112,6 +112,7 @@ class SimplePage(QWidget):
     blackRequested = Signal(str)
     presetChosen = Signal(str)
     slidesOpenRequested = Signal()
+    slidesCloseRequested = Signal()
     slideNext = Signal()
     slideBack = Signal()
     slidesEnd = Signal()
@@ -188,11 +189,20 @@ class SimplePage(QWidget):
         self.slides_state.setObjectName("cardHint")
         self.slides_state.setWordWrap(True)
         box.addWidget(self.slides_state)
+        opening = QHBoxLayout()
+        opening.setSpacing(8)
         open_btn = QPushButton(tr("  Open a presentation…"))
         open_btn.setObjectName("big")
         open_btn.setIcon(icons.get("open", theme["text"], 16))
         open_btn.clicked.connect(self.slidesOpenRequested.emit)
-        box.addWidget(open_btn)
+        opening.addWidget(open_btn, 1)
+        self.close_btn = QPushButton(tr("  Close"))
+        self.close_btn.setObjectName("big")
+        self.close_btn.setIcon(icons.get("close", theme["text"], 16))
+        self.close_btn.setToolTip(tr("Take this presentation out of the app (only when it is not on a screen)"))
+        self.close_btn.clicked.connect(self.slidesCloseRequested.emit)
+        opening.addWidget(self.close_btn)
+        box.addLayout(opening)
         steps = QHBoxLayout()
         steps.setSpacing(8)
         self.back_btn = QPushButton()
@@ -221,6 +231,20 @@ class SimplePage(QWidget):
         self.end_btn.clicked.connect(self.slidesEnd.emit)
         ends.addWidget(self.end_btn)
         box.addLayout(ends)
+        # the video playing in the talk's place: pause, wind, drag
+        self.video_box = QFrame()
+        self.video_box.setObjectName("videoBox")
+        self.video_box.setStyleSheet("QFrame#videoBox { background: transparent; }")
+        video = QVBoxLayout(self.video_box)
+        video.setContentsMargins(0, 4, 0, 0)
+        video.setSpacing(4)
+        self.video_name = ElidedLabel("")
+        self.video_name.setStyleSheet(f"color: {theme['warn']}; font-weight: 600;")
+        video.addWidget(self.video_name)
+        self.transport = VideoTransport(icons, theme, 40)
+        video.addWidget(self.transport)
+        self.video_box.hide()
+        box.addWidget(self.video_box)
         box.addStretch(1)
         lower.addWidget(slides, 3)
 
@@ -292,6 +316,13 @@ class SimplePage(QWidget):
         self.back_btn.setEnabled(opened)
         self.live_btn.setEnabled(opened and not live)
         self.end_btn.setEnabled(live)
+        self.close_btn.setEnabled(opened and not live)
+
+    def show_video(self, name: str, player) -> None:
+        """The video playing in the talk's place, with its controls - or "" / None."""
+        self.transport.attach(player if name else None)
+        self.video_name.setText(tr("Playing: {0}").format(name) if name else "")
+        self.video_box.setVisible(bool(name))
 
     def set_cues(self, cues: Sequence[Tuple[str, bool, bool]]) -> None:
         """(name, playing, paused) per cue."""

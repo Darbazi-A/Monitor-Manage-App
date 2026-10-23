@@ -160,6 +160,7 @@ FLUENT_GLYPHS = {
     "image": 0xE91B, "compress": 0xE73F, "expand": 0xE740, "warning": 0xE7BA, "video": 0xE714,
     "gear": 0xE713, "lock": 0xE72E, "unlock": 0xE785, "user": 0xE77B, "home": 0xE80F, "broadcast": 0xE93E,
     "slides": 0xE786, "disc": 0xE8D6, "help": 0xE897, "keyboard": 0xE765,
+    "rewind": 0xEB9E, "forward": 0xEB9D,
 }
 _fluent_family: Optional[str] = None
 
@@ -228,6 +229,28 @@ class Icons:
         path.lineTo(14.4, 12)
         path.closeSubpath()
         p.fillPath(path, brush)
+
+    @staticmethod
+    def _rewind(p: QPainter) -> None:
+        brush = p.pen().brush()
+        for tip in (3.5, 11.5):
+            path = QPainterPath()
+            path.moveTo(tip, 12)
+            path.lineTo(tip + 8.5, 6)
+            path.lineTo(tip + 8.5, 18)
+            path.closeSubpath()
+            p.fillPath(path, brush)
+
+    @staticmethod
+    def _forward(p: QPainter) -> None:
+        brush = p.pen().brush()
+        for tip in (12.5, 20.5):
+            path = QPainterPath()
+            path.moveTo(tip, 12)
+            path.lineTo(tip - 8.5, 6)
+            path.lineTo(tip - 8.5, 18)
+            path.closeSubpath()
+            p.fillPath(path, brush)
 
     @staticmethod
     def _plus(p: QPainter) -> None:

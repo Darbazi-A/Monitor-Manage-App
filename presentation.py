@@ -30,11 +30,11 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QObject, QProcess, Q
                             QRectF, QSize, QSizeF, Qt, QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QImageReader, QPainter, QPen, QPixmap
 from desk import HoldButton
-from widgets import ElidedLabel
+from widgets import ElidedLabel, VideoTransport
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFrame, QHBoxLayout, QLabel, QListView, QListWidget,
                                QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 try:
     from PySide6.QtPdf import QPdfDocument
@@ -716,6 +716,19 @@ class Presenter(QObject):
         self.changed.emit()
         return None
 
+    def close(self) -> bool:
+        """Put the presentation away - never while it is on a screen. False if it could not."""
+        if self.deck is None or self.live:
+            return False
+        self._live_when_ready = None
+        self.deck.stop()
+        self.deck.deleteLater()
+        self.deck = None
+        self.index = 0
+        self.at_end = False
+        self.changed.emit()
+        return True
+
     def count(self) -> int:
         return self.deck.count if self.deck else 0
 
@@ -1104,7 +1117,7 @@ class MediaBreakPanel(QFrame):
         self.icons = icons
         self.theme = theme
         self.setObjectName("card")
-        self.setFixedWidth(470)
+        self.setFixedWidth(530)
         self.setFixedHeight(height)
         self.setAcceptDrops(True)
         box = QVBoxLayout(self)
@@ -1116,26 +1129,43 @@ class MediaBreakPanel(QFrame):
         title.setObjectName("sectionTitle")
         head.addWidget(title)
         head.addStretch(1)
-        add = QPushButton()
-        add.setObjectName("ghost")
-        add.setIcon(icons.get("plus", theme["muted"], 15))
-        add.setToolTip(tr("Add videos for this talk (or drop them here)"))
-        add.clicked.connect(self._add)
-        head.addWidget(add)
-        remove = QPushButton()
-        remove.setObjectName("ghost")
-        remove.setIcon(icons.get("minus", theme["muted"], 15))
-        remove.setToolTip(tr("Remove the chosen video from the list"))
-        remove.clicked.connect(self._remove)
-        head.addWidget(remove)
+        self.add_btn = QPushButton()
+        self.add_btn.setObjectName("ghost")
+        self.add_btn.setIcon(icons.get("plus", theme["muted"], 15))
+        self.add_btn.setToolTip(tr("Add videos for this talk (or drop them here)"))
+        self.add_btn.clicked.connect(self._add)
+        head.addWidget(self.add_btn)
+        self.remove_btn = QPushButton()
+        self.remove_btn.setObjectName("ghost")
+        self.remove_btn.setIcon(icons.get("minus", theme["muted"], 15))
+        self.remove_btn.setToolTip(tr("Remove the chosen video from the list"))
+        self.remove_btn.clicked.connect(self._remove)
+        head.addWidget(self.remove_btn)
         box.addLayout(head)
         self.list = QListWidget()
         self.list.setTextElideMode(Qt.ElideMiddle)
         self.list.setStyleSheet("QListWidget { padding: 2px; } QListWidget::item { padding: 2px 6px; }")
         self.list.itemDoubleClicked.connect(lambda item: self.playRequested.emit(item.data(Qt.UserRole)))
+        # while one plays, the list makes way for its controls
+        playing = QWidget()
+        column = QVBoxLayout(playing)
+        column.setContentsMargins(0, 2, 0, 0)
+        column.setSpacing(4)
+        self.now_label = ElidedLabel("")
+        self.now_label.setStyleSheet(f"color: {theme['warn']}; font-weight: 600;")
+        column.addWidget(self.now_label)
+        self.transport = VideoTransport(icons, theme, 30)
+        column.addWidget(self.transport)
+        column.addStretch(1)
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("breakStack")
+        playing.setObjectName("breakPlaying")
+        self.stack.setStyleSheet("QStackedWidget#breakStack, QWidget#breakPlaying { background: transparent; }")
+        self.stack.addWidget(self.list)
+        self.stack.addWidget(playing)
         body = QHBoxLayout()
         body.setSpacing(8)
-        body.addWidget(self.list, 1)
+        body.addWidget(self.stack, 1)
         row = QVBoxLayout()
         row.setSpacing(6)
         self.play_btn = QPushButton(tr("  Play video"))
@@ -1156,7 +1186,9 @@ class MediaBreakPanel(QFrame):
         row.addStretch(1)
         body.addLayout(row)
         box.addLayout(body, 1)
-        self.set_paused(False, False)
+        self._paused = False
+        self._playing = ""
+        self._apply()
 
     def set_files(self, paths: List[str]) -> None:
         self.list.clear()
@@ -1203,8 +1235,25 @@ class MediaBreakPanel(QFrame):
         self.playRequested.emit(item.data(Qt.UserRole))
 
     def set_paused(self, paused: bool, live: bool) -> None:
-        self.play_btn.setVisible(not paused)
-        self.back_btn.setVisible(paused)
+        self._paused = paused
+        self._apply()
+
+    def show_video(self, name: str, player) -> None:
+        """The video playing in the talk (its name, and its player for the controls), or "" / None."""
+        self._playing = name
+        self.transport.attach(player if name else None)
+        self.now_label.setText(tr("Playing: {0}").format(name) if name else "")
+        self._apply()
+
+    def _apply(self) -> None:
+        busy = self._paused or bool(self._playing)
+        self.play_btn.setVisible(not busy)
+        self.back_btn.setVisible(busy)
+        # no talk waiting under it: the button just takes the video away
+        self.back_btn.setText(tr("  Back to slides") if self._paused else tr("  Stop the video"))
+        self.stack.setCurrentIndex(1 if self._playing else 0)
+        self.add_btn.setVisible(not self._playing)
+        self.remove_btn.setVisible(not self._playing)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasUrls():
@@ -1387,6 +1436,12 @@ class PresentationTab(QWidget):
         self.recent.setToolTip(tr('Recently opened'))
         self.recent.activated.connect(self._open_recent)
         row.addWidget(self.recent)
+        self.close_btn = QPushButton(tr('  Close'))
+        self.close_btn.setIcon(self.icons.get("close", self.theme["text"], 15))
+        self.close_btn.setToolTip(tr('Put this presentation away - out of the app and off the Recent list.\n'
+                                     'Only while it is not on a screen: end it first.'))
+        self.close_btn.clicked.connect(self.close_deck)
+        row.addWidget(self.close_btn)
         row.addSpacing(10)
         row.addWidget(QLabel(tr('Screen')))
         self.target = QComboBox()
@@ -1481,6 +1536,7 @@ class PresentationTab(QWidget):
             self.open_path(path)
 
     openedPath = Signal(str)
+    closedPath = Signal(str)
 
     def open_path(self, path: str) -> None:
         error = self.presenter.open(path)
@@ -1488,6 +1544,21 @@ class PresentationTab(QWidget):
             self.show_status(error, self.theme["danger"])
         else:
             self.openedPath.emit(os.path.normpath(path))
+
+    def close_deck(self) -> bool:
+        """The Close button: the presentation leaves the app (not while it is on a screen)."""
+        deck = self.presenter.deck
+        if deck is None:
+            return False
+        if self.presenter.live:
+            self.show_status(tr('It is on a screen - end it first, then close it.'), self.theme["warn"])
+            return False
+        path, name = deck.path, deck.name
+        if not self.presenter.close():
+            return False
+        self.closedPath.emit(path)
+        self.show_status(tr('{0} closed.').format(name))
+        return True
 
     def _on_target(self) -> None:
         role = self.target.currentData()
@@ -1533,6 +1604,7 @@ class PresentationTab(QWidget):
             self.current.show_slide(None)
             self.upcoming.show_slide(None)
             self.notes.setText("")
+            self._sync_thumbs()
         else:
             self.counter.setText(f"{presenter.index + 1} / {count}" if count else "…")
             pixmap = deck.thumb(presenter.index, 1280) if count else None
@@ -1574,6 +1646,7 @@ class PresentationTab(QWidget):
         self.live_btn.style().unpolish(self.live_btn)
         self.live_btn.style().polish(self.live_btn)
         self.live_btn.setEnabled(presenter.can_go_live())
+        self.close_btn.setEnabled(deck is not None and not presenter.live)
         self.breaks.set_paused(presenter.paused, presenter.live)
         if presenter.paused and deck is not None:
             self.current.show_slide(deck.thumb(presenter.index, 1280) if count else None,

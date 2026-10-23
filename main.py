@@ -992,10 +992,11 @@ class ControlPanel(QMainWindow):
                 presenter.resume()
             self._report_media_problem(role, path, problem)
             return
-        self._break = {"role": role, "path": path, "card": False}
+        self._break = {"role": role, "path": path, "card": False, "slides": presenter.paused}
         if id(window) not in self._break_watched:
             self._break_watched.add(id(window))
             window.engine.finished.connect(self._on_break_finished)
+        self._sync_break_controls()
         self.statusBar().showMessage(
             tr("{0} is playing - the slides wait.").format(os.path.basename(path)) if presenter.paused else
             tr("{0} is playing.").format(os.path.basename(path)), 8000)
@@ -1010,6 +1011,7 @@ class ControlPanel(QMainWindow):
     def end_break(self) -> None:
         """The slides back where they were; the background back under them."""
         brk, self._break = self._break, None
+        self._sync_break_controls()
         presenter = self.presenter
         role = brk["role"] if brk else presenter.role
         window = self._show_output(role)
@@ -1025,6 +1027,17 @@ class ControlPanel(QMainWindow):
             self.statusBar().showMessage(tr("Back to the slides."), 5000)
         elif brk is not None and not brk["card"]:
             stage.restore(role, self.fade_ms())    # no talk to return to: the background comes back
+
+    def _sync_break_controls(self) -> None:
+        """The video in the talk's place - its name and its controls - on the Slides page and the simple desk."""
+        brk = self._break
+        window = self._show_output(brk["role"]) if brk else None
+        video = window is not None and is_video(brk["path"])
+        name = os.path.basename(brk["path"]) if video else ""
+        player = window.engine.player if video else None
+        self.presentation_tab.breaks.show_video(name, player)
+        if getattr(self, "simple_page", None) is not None:
+            self.simple_page.show_video(name, player)
 
     def _simple_pick_break(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("A video for the talk"),
@@ -1044,6 +1057,7 @@ class ControlPanel(QMainWindow):
         page.fileRequested.connect(self._simple_pick_file)
         page.blackRequested.connect(lambda role: self.cards[role].clearRequested.emit())
         page.slidesOpenRequested.connect(self._simple_open_slides)
+        page.slidesCloseRequested.connect(self._simple_close_slides)
         page.slideNext.connect(lambda: self.presenter.next())
         page.slideBack.connect(lambda: self.presenter.back())
         page.slidesLive.connect(lambda: self.presenter.go_live_when_ready(ROLE_MAIN))
@@ -3730,6 +3744,7 @@ class ControlPanel(QMainWindow):
         self.presentation_tab = tab
         tab.set_recent(self._recent_decks())
         tab.openedPath.connect(self._remember_deck)
+        tab.closedPath.connect(self._forget_deck)
         tab.learnRequested.connect(self._learn_clicker)
         tab.guestRequested.connect(self._open_guest_dialog)
         tab.laptopRequested.connect(self._open_share_dialog)
@@ -3770,6 +3785,21 @@ class ControlPanel(QMainWindow):
         self.settings.setValue("slides/recent", recent[:8])
         self.presentation_tab.set_recent(recent[:8])
 
+    def _forget_deck(self, path: str) -> None:
+        """A presentation was closed: off the Recent list too, and not reopened after a restart."""
+        recent = [p for p in self._recent_decks() if os.path.normcase(p) != os.path.normcase(path)]
+        self.settings.setValue("slides/recent", recent)
+        self.presentation_tab.set_recent(recent)
+        self._save_session()
+        self.statusBar().showMessage(tr('{0} closed.').format(
+            os.path.splitext(os.path.basename(path.rstrip("\\/")))[0]), 5000)
+
+    def _simple_close_slides(self) -> None:
+        if self.presenter.live:
+            self.statusBar().showMessage(tr('It is on a screen - end it first, then close it.'), 6000)
+            return
+        self.presentation_tab.close_deck()
+
     @Slot(str)
     def _on_presenter_note(self, text: str) -> None:
         self.statusBar().showMessage(text, 6000)
@@ -3783,6 +3813,9 @@ class ControlPanel(QMainWindow):
         for shortcut in self._slide_shortcuts:
             shortcut.setEnabled(live)
         self._update_hotkeys()
+        if self._break and self._break.get("slides") and not self.presenter.paused:
+            self._break = None              # the talk ended (or something took its screen) during the video
+            self._sync_break_controls()
         if live != self._was_live:
             self._was_live = live
             deck = self.presenter.deck
@@ -4457,10 +4490,17 @@ class ControlPanel(QMainWindow):
             self._mark_preset_dirty()
             self.statusBar().showMessage(f"{ROLE_LABELS[role]}: {os.path.basename(path)}", 6000)
             presenter = self.presenter
-            if presenter.live and presenter.role == role and not presenter.paused:
+            if self._break and self._break["role"] == role:
+                if self._break.get("slides") and presenter.paused:
+                    self._break.update(path=path, card=True)    # it takes the video's place in the talk
+                else:
+                    self._break = None                          # no talk waiting: just the card's file now
+                self._sync_break_controls()
+            elif presenter.live and presenter.role == role and not presenter.paused:
                 # PowerPoint would hide it: the slides step aside and wait
                 presenter.pause_for_media()
-                self._break = {"role": role, "path": path, "card": True}
+                self._break = {"role": role, "path": path, "card": True, "slides": True}
+                self._sync_break_controls()
                 self.statusBar().showMessage(
                     tr("The slides wait while this plays - Back to slides (or NEXT on the clicker) brings them back."),
                     10000)

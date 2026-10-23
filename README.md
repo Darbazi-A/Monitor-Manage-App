@@ -432,6 +432,21 @@ PowerPoint used to keep it hidden behind the slides. The header's picture of
 that screen names the video while it plays. The simple desk has a **Video…**
 button for it, and its Next slide button becomes *Back to slides*.
 
+**Controlling the video.** While it plays, the list makes way for its
+controls — on the Slides page and on the simple desk alike: **Pause** / **Play**
+(the picture waits on the screen, the slides keep waiting too), **10 s** back
+and on, and a bar with the time and length: press anywhere on it to jump there,
+or drag. The controls never take the keyboard focus, so the clicker keeps
+working, and NEXT brings the slides back whether the video is playing or
+paused. A video played with no talk on screen gets the same controls, and its
+button reads *Stop the video* (the background comes back).
+
+**Closing a presentation.** **Close** (beside *Recent…* on the Slides page, and
+beside *Open a presentation…* on the simple desk) takes the open presentation
+out of the app: off the page, off the Recent list, and not reopened after a
+restart. It works only while the presentation is not on a screen — end it
+first. The file itself is never touched.
+
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
@@ -928,7 +943,7 @@ still works. The rest is split by what it does:
 | `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
 | `routing.py` | `RoutingRow`: the rows of Settings → Screens |
-| `widgets.py` | `ElidedLabel`: one line - usually a file name - that never asks for more width than it has, so a long name cannot push a page past the window's edge |
+| `widgets.py` | `ElidedLabel`: one line - usually a file name - that never asks for more width than it has, so a long name cannot push a page past the window's edge; `VideoTransport`: pause / play, 10 s back and on, and a seek bar for the video playing in a talk |
 | `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |
 | `winplatform.py` | Windows 11: caption colours and corners (DWM), square borderless stage windows, no background throttling, above-normal priority, keeping the displays awake during a show |
 | `simple.py` | `SimplePage`, the simple desk |
