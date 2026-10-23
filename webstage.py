@@ -25,10 +25,11 @@ import json
 import os
 import re
 import subprocess
+import time
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap, QWheelEvent
+from PySide6.QtCore import QEvent, QKeyCombination, QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QFocusEvent, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
 
@@ -40,6 +41,7 @@ DEFAULT_LINKS: List[Tuple[str, str]] = [
 ]
 PROFILE_NAME = "StageDisplayWeb"
 MIRROR_MS = 180                 # the desk's live picture of the stage page, about five a second
+BOUNCE_S = 0.4                  # a key handed back by the page this soon after we sent it is ours
 
 # Keys a web page should get even though the dashboard has a shortcut for them -
 # typing "b" into a login form must not black out the hall. The clicker's keys
@@ -107,12 +109,15 @@ class WebStage(QObject):
         self.loading = False
         self.progress = 0
         self._filtered: set = set()
-        self._desk_window: Optional[QWidget] = None
+        self._delivering = False
+        self._sent: dict = {}                       # key -> when it was last handed to the page
+        self._stepped_aside: set = set()            # dashboard shortcuts off for a moment (_deliver_key)
+        self._restore_shortcuts = QTimer(self)
+        self._restore_shortcuts.setSingleShot(True)
+        self._restore_shortcuts.timeout.connect(self._shortcuts_back)
+        self.shortcut_owner: Optional[QWidget] = None    # the dashboard, whose shortcuts step aside for keys
         self._mirror_timer = QTimer(self)
         self._mirror_timer.timeout.connect(self._refresh_mirror)
-        self._back_to_desk = QTimer(self)
-        self._back_to_desk.setSingleShot(True)
-        self._back_to_desk.timeout.connect(self._refocus_desk)
 
     def available(self) -> bool:
         try:
@@ -127,7 +132,6 @@ class WebStage(QObject):
             return
         from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
         from PySide6.QtWebEngineWidgets import QWebEngineView
-
         # A profile of its own, kept on disk: Canva and Kahoot stay logged in.
         profile = QWebEngineProfile(PROFILE_NAME, self)
         profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
@@ -331,6 +335,9 @@ class WebStage(QObject):
         if target is None or self.where != "stage":
             return
         local = self.map_from_mirror(point)
+        if kind == QEvent.MouseButtonPress and not target.hasFocus():
+            # as for keys: a page that believes itself focused puts the caret where it is clicked
+            QApplication.sendEvent(target, QFocusEvent(QEvent.FocusIn, Qt.MouseFocusReason))
         event = QMouseEvent(kind, local, QPointF(target.mapToGlobal(local.toPoint())), button, buttons, modifiers)
         QApplication.sendEvent(target, event)
 
@@ -345,7 +352,7 @@ class WebStage(QObject):
         QApplication.sendEvent(target, wheel)
 
     def send_key(self, key: int, modifiers=Qt.NoModifier, text: str = "") -> None:
-        """A key for the stage page: it is given the focus for a moment, then the desk has it back."""
+        """A key for the stage page; the desk keeps the keyboard."""
         self._with_focus(lambda: self._deliver_key(key, modifiers, text))
 
     def press(self, direction: str) -> None:
@@ -354,36 +361,49 @@ class WebStage(QObject):
 
     def _deliver_key(self, key: int, modifiers, text: str) -> None:
         target = self._target()
-        if target is None:
+        if target is None or self._delivering:
             return
-        QApplication.sendEvent(target, QKeyEvent(QEvent.KeyPress, key, modifiers, text))
-        QApplication.sendEvent(target, QKeyEvent(QEvent.KeyRelease, key, modifiers, text))
+        self._delivering = True             # a key the page leaves would climb to the stage window's
+        try:                                # clicker routing - and come straight back here
+            if not target.hasFocus():
+                # Chromium reads keys only in a page it believes focused; the desk keeps the
+                # real focus, so the page is told it has it (nothing changes on the stage)
+                QApplication.sendEvent(target, QFocusEvent(QEvent.FocusIn, Qt.OtherFocusReason))
+            # A made-up key is tried as a shortcut first - and → ← Space B are the
+            # dashboard's own. Those step aside while the page has the key, and a moment
+            # longer: a key the page does not use comes back up from Chromium, and must
+            # not then black out the hall or send the key round again.
+            for shortcut in self._shortcuts_for(key, modifiers):
+                shortcut.setEnabled(False)
+                self._stepped_aside.add(shortcut)
+            self._sent[int(key)] = time.monotonic()
+            self._restore_shortcuts.start(int(BOUNCE_S * 1000))
+            for kind in (QEvent.KeyPress, QEvent.KeyRelease):
+                QApplication.sendEvent(target, QKeyEvent(kind, key, modifiers, text))
+        finally:
+            self._delivering = False
+
+    def _shortcuts_back(self) -> None:
+        stepped, self._stepped_aside = self._stepped_aside, set()
+        for shortcut in stepped:
+            try:
+                shortcut.setEnabled(True)
+            except RuntimeError:
+                pass                            # gone meanwhile
+
+    def _shortcuts_for(self, key: int, modifiers) -> list:
+        """The dashboard's enabled shortcuts that this key would fire."""
+        if self.shortcut_owner is None:
+            return []
+        from PySide6.QtGui import QKeySequence, QShortcut
+        wanted = QKeySequence(QKeyCombination(Qt.KeyboardModifiers(modifiers), Qt.Key(key)))
+        return [s for s in self.shortcut_owner.findChildren(QShortcut)
+                if s.isEnabled() and s.key().matches(wanted) == QKeySequence.ExactMatch]
 
     def _with_focus(self, action) -> None:
-        target = self._target()
-        if target is None or self.window is None or self.where != "stage":
+        if self._target() is None or self.window is None or self.where != "stage":
             return
-        if target.hasFocus():
-            action()
-        else:
-            # Chromium only reads keys in a focused page: the stage window takes the
-            # focus for a moment (nothing changes on its screen), then the desk has it back.
-            active = QApplication.activeWindow()
-            if active is not None and active is not self.window:
-                self._desk_window = active
-            self.window.activateWindow()
-            target.setFocus(Qt.OtherFocusReason)
-            QTimer.singleShot(120, action)
-        self._back_to_desk.start(700)
-
-    def _refocus_desk(self) -> None:
-        if self._desk_window is not None:
-            try:
-                self._desk_window.activateWindow()
-                if self.mirror is not None and self.mirror.isVisible():
-                    self.mirror.setFocus(Qt.OtherFocusReason)
-            except RuntimeError:
-                self._desk_window = None
+        action()
 
     # -- keys typed into the page itself, on the desk ------------------------------------ #
     def _watch_keys(self) -> None:
@@ -399,6 +419,11 @@ class WebStage(QObject):
                 event.accept()                  # typing goes to the page, not to a dashboard shortcut
             return False
         if self.window is not None and watched is self.window:
+            if kind in (QEvent.KeyPress, QEvent.KeyRelease) and \
+                    time.monotonic() - self._sent.get(int(event.key()), -10.0) < BOUNCE_S:
+                # a key the page did not use, handed back up by Chromium: had it reached the
+                # stage window's clicker routing it would be sent to the page again, for ever
+                return True
             if kind == QEvent.Resize and self.where == "stage" and self.view is not None:
                 self.view.setGeometry(QRect(QPoint(0, 0), self.window.size()))
             elif kind == QEvent.DeferredDelete or (kind == QEvent.Close and getattr(watched, "_allow_close", True)):

@@ -500,8 +500,10 @@ class ControlPanel(QMainWindow):
         self._share_dialog = None
         # A web page (Canva, Kahoot) got ready on the desk, then shown on the Main Stage.
         self.web = web_mod.WebStage(self)
+        self.web.shortcut_owner = self
         self.web.detached.connect(self._on_web_detached)
         self._web_background_was_playing = False
+        self._web_watched: set = set()          # stage windows whose new pictures take the page off
 
         # Presentations: one presenter, driven by the dashboard, the clicker,
         # the keyboard, the phone and the running order alike.
@@ -1093,11 +1095,9 @@ class ControlPanel(QMainWindow):
         states = getattr(QMediaPlayer, "PlaybackState", None)
         self._web_background_was_playing = window.engine.player.playbackState() == getattr(states, "PlayingState", None)
         window.engine.pause()
-        try:
-            window.pictureReplaced.disconnect(self._on_web_covered)
-        except (RuntimeError, TypeError):
-            pass                            # was not connected
-        window.pictureReplaced.connect(self._on_web_covered)
+        if id(window) not in self._web_watched:
+            self._web_watched.add(id(window))
+            window.pictureReplaced.connect(self._on_web_covered)
         self.statusBar().showMessage(tr("{0} is on the Main Stage.").format(self.web.title()), 6000)
 
     def _web_off_stage(self, message: str = "") -> None:
@@ -1105,13 +1105,8 @@ class ControlPanel(QMainWindow):
             return
         window = self.web.window
         self.web.off_stage()
-        if window is not None:
-            try:
-                window.pictureReplaced.disconnect(self._on_web_covered)
-            except (RuntimeError, TypeError):
-                pass
-            if self._web_background_was_playing:
-                window.engine.play()
+        if window is not None and self._web_background_was_playing:
+            window.engine.play()
         self._web_background_was_playing = False
         if message:
             self.statusBar().showMessage(message, 6000)
@@ -1120,14 +1115,8 @@ class ControlPanel(QMainWindow):
     def _on_web_covered(self) -> None:
         """A file, a colour or black was sent to the Main Stage: the page makes way (back to the desk)."""
         if self.web.on_stage():
-            window = self.web.window
             self._web_background_was_playing = False      # the new picture plays as it was sent
             self.web.off_stage()
-            if window is not None:
-                try:
-                    window.pictureReplaced.disconnect(self._on_web_covered)
-                except (RuntimeError, TypeError):
-                    pass
             self.statusBar().showMessage(tr("The web page came off the Main Stage for the new picture."), 6000)
 
     @Slot()
