@@ -447,6 +447,35 @@ out of the app: off the page, off the Recent list, and not reopened after a
 restart. It works only while the presentation is not on a screen — end it
 first. The file itself is never touched.
 
+## Canva, Kahoot and other web pages
+
+The **Web** page (on the simple desk too) puts a web page on the Main Stage
+without a browser to wrestle onto the right screen:
+
+1. **Get it ready on the desk.** Click a saved link (*Canva* and *Kahoot* are
+   there to start with; **+** saves the page that is open, **−** removes one) or
+   type an address. The page opens in the desk's own picture, laid out exactly
+   as the stage will show it — **silent, on no screen**. Log in, open the quiz,
+   press Canva's *Present*. Logins are remembered between runs (the pages have
+   their own browser profile in AppData); passwords are typed into the sites
+   themselves and never stored by the app. Typing in the page is safe: letters
+   like B or Space go to the page, not to the dashboard's shortcuts.
+2. **Show on the Main Stage** moves that same page — login, game and all — onto
+   the Main Stage, full screen, its sound going to the hall. The background
+   waits under it, paused, and plays on when the page comes off.
+3. **Run it from the desk.** While it is on the stage the desk shows a live
+   picture of it, framed in red: click, scroll and type on it and it happens on
+   the stage — Kahoot's *Start* and *Next* are pressed from the desk. The
+   clicker's forward / back reach the page as the arrow keys, which turn
+   Canva's slides (also when another program is in front).
+4. **Take it off the stage** — or send anything else to the Main Stage (a file,
+   a scene, black, a presentation, a laptop) — and the page goes back to the
+   desk, still logged in and where it was. **Close** puts it away.
+
+A site that refuses to work in here can be opened with **Open in Edge**: Edge
+as an app window, full screen on the Main Stage's monitor (an Edge that is
+already open may put it elsewhere — Win+Shift+→ moves it across).
+
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
@@ -943,6 +972,7 @@ still works. The rest is split by what it does:
 | `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
 | `routing.py` | `RoutingRow`: the rows of Settings → Screens |
+| `webstage.py` | Canva, Kahoot and other web pages: got ready on the desk (silent), moved onto the Main Stage, mirrored on the desk for clicks and typing, logins kept in their own profile |
 | `widgets.py` | `ElidedLabel`: one line - usually a file name - that never asks for more width than it has, so a long name cannot push a page past the window's edge; `VideoTransport`: pause / play, 10 s back and on, and a seek bar for the video playing in a talk |
 | `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |
 | `winplatform.py` | Windows 11: caption colours and corners (DWM), square borderless stage windows, no background throttling, above-normal priority, keeping the displays awake during a show |

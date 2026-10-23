@@ -160,7 +160,7 @@ FLUENT_GLYPHS = {
     "image": 0xE91B, "compress": 0xE73F, "expand": 0xE740, "warning": 0xE7BA, "video": 0xE714,
     "gear": 0xE713, "lock": 0xE72E, "unlock": 0xE785, "user": 0xE77B, "home": 0xE80F, "broadcast": 0xE93E,
     "slides": 0xE786, "disc": 0xE8D6, "help": 0xE897, "keyboard": 0xE765,
-    "rewind": 0xEB9E, "forward": 0xEB9D,
+    "rewind": 0xEB9E, "forward": 0xEB9D, "globe": 0xE774,
 }
 _fluent_family: Optional[str] = None
 
@@ -251,6 +251,12 @@ class Icons:
             path.lineTo(tip - 8.5, 18)
             path.closeSubpath()
             p.fillPath(path, brush)
+
+    @staticmethod
+    def _globe(p: QPainter) -> None:
+        p.drawEllipse(QPointF(12, 12), 8.4, 8.4)
+        p.drawEllipse(QPointF(12, 12), 3.6, 8.4)
+        p.drawLine(QPointF(3.8, 12), QPointF(20.2, 12))
 
     @staticmethod
     def _plus(p: QPainter) -> None:

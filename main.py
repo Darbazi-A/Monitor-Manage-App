@@ -169,6 +169,7 @@ import screenshare as share_mod  # noqa: E402 - laptops on the Main Stage (WebRT
 import access as access_mod  # noqa: E402 - the admin PIN
 import winplatform  # noqa: E402 - Windows 11: title bars, corners, power and sleep
 import simple as simple_mod  # noqa: E402 - the simple desk
+import webstage as web_mod  # noqa: E402 - Canva, Kahoot and other web pages on the Main Stage
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -497,6 +498,10 @@ class ControlPanel(QMainWindow):
         self.share = share_mod.ShareServer(os.path.join(APP_DIR, "share_cert"), self)
         self.share_receiver = share_mod.ShareReceiver(self)
         self._share_dialog = None
+        # A web page (Canva, Kahoot) got ready on the desk, then shown on the Main Stage.
+        self.web = web_mod.WebStage(self)
+        self.web.detached.connect(self._on_web_detached)
+        self._web_background_was_playing = False
 
         # Presentations: one presenter, driven by the dashboard, the clicker,
         # the keyboard, the phone and the running order alike.
@@ -555,6 +560,8 @@ class ControlPanel(QMainWindow):
         self.tabs.addTab(self.live_page, tr('  Live  '))
         self.tabs.addTab(self._build_show_tab(), tr('  Show  '))
         self.tabs.addTab(self._build_presentation_tab(), tr('  Slides  '))
+        self.web_tab = self._build_web_tab()
+        self.tabs.addTab(self.web_tab, tr('  Web  '))
         self.tabs.addTab(self._build_library_tab(), tr('  Library  '))
         self.text_page = self._build_text_tab()
         self.tabs.addTab(self.text_page, tr('  Text  '))
@@ -576,6 +583,7 @@ class ControlPanel(QMainWindow):
                                          (self.live_page, "broadcast", tr("Live"), False),
                                          (self.show_tab, "list", tr("Show"), False),
                                          (self.presentation_tab, "slides", tr("Slides"), False),
+                                         (self.web_tab, "globe", tr("Web"), False),
                                          (self.library, "folder", tr("Library"), False),
                                          (self.text_page, "text", tr("Text"), False),
                                          (self.dj_page, "disc", "DJ", False),
@@ -778,6 +786,12 @@ class ControlPanel(QMainWindow):
                     if not pixmap.isNull() else None
                 caption = tr("laptop  ·  {0}").format(self._share_names())
                 live = True
+            elif role == ROLE_MAIN and self.web.on_stage(window):
+                pixmap = self.web.snapshot()
+                pixmap = pixmap.scaled(tile.preview_size(), Qt.KeepAspectRatio, Qt.SmoothTransformation) \
+                    if not pixmap.isNull() else None
+                caption = tr("web  ·  {0}").format(self.web.title())
+                live = True
             elif presenter.live and presenter.role == role and presenter.playing_in_powerpoint() \
                     and not presenter.paused:
                 pixmap = None
@@ -882,6 +896,7 @@ class ControlPanel(QMainWindow):
             self.tabs.indexOf(self.live_page): not simple,
             self.tabs.indexOf(self.show_tab): True,
             self.tabs.indexOf(self.presentation_tab): True,
+            self.tabs.indexOf(self.web_tab): True,              # Canva / Kahoot: the simple desk too
             self.tabs.indexOf(self.library): not simple and not show,
             self.tabs.indexOf(self.text_page): not simple,
             self.tabs.indexOf(self.dj_page): not simple,
@@ -1046,6 +1061,86 @@ class ControlPanel(QMainWindow):
         if path:
             self.settings.setValue("simple/folder", os.path.dirname(path))
             self.play_break(os.path.normpath(path))
+
+    # -- web pages: Canva, Kahoot ------------------------------------------------ #
+
+    def _build_web_tab(self) -> QWidget:
+        tab = web_mod.WebTab(self.web, Icons, THEME, web_mod.load_links(self.settings.value("web/links", "")),
+                             stage_window=lambda: self.main_output)
+        tab.linksChanged.connect(lambda links: self.settings.setValue("web/links", web_mod.dump_links(links)))
+        tab.stageRequested.connect(self._web_to_stage)
+        tab.offStageRequested.connect(lambda: self._web_off_stage(tr("The web page came off the Main Stage.")))
+        tab.edgeRequested.connect(self._web_in_edge)
+        self.web.changed.connect(self._update_hotkeys)
+        return tab
+
+    @Slot()
+    def _web_to_stage(self) -> None:
+        """The page got ready on the desk goes onto the Main Stage, with its sound."""
+        window = self.main_output
+        if window is None:
+            self.statusBar().showMessage(tr("Open the Main Stage screen first - the page goes there."), 8000)
+            return
+        presenter = self.presenter
+        if presenter.live and presenter.role == ROLE_MAIN:
+            self.statusBar().showMessage(tr("A presentation is on the Main Stage - end it first."), 8000)
+            return
+        if self.share_receiver.stage:
+            self._end_share(tr("The stage desk put something else on the Main Stage."))
+        if not self.web.to_stage(window):
+            return
+        # the background waits, silent, under the page - and plays on when it comes off
+        states = getattr(QMediaPlayer, "PlaybackState", None)
+        self._web_background_was_playing = window.engine.player.playbackState() == getattr(states, "PlayingState", None)
+        window.engine.pause()
+        try:
+            window.pictureReplaced.disconnect(self._on_web_covered)
+        except (RuntimeError, TypeError):
+            pass                            # was not connected
+        window.pictureReplaced.connect(self._on_web_covered)
+        self.statusBar().showMessage(tr("{0} is on the Main Stage.").format(self.web.title()), 6000)
+
+    def _web_off_stage(self, message: str = "") -> None:
+        if not self.web.on_stage():
+            return
+        window = self.web.window
+        self.web.off_stage()
+        if window is not None:
+            try:
+                window.pictureReplaced.disconnect(self._on_web_covered)
+            except (RuntimeError, TypeError):
+                pass
+            if self._web_background_was_playing:
+                window.engine.play()
+        self._web_background_was_playing = False
+        if message:
+            self.statusBar().showMessage(message, 6000)
+
+    @Slot()
+    def _on_web_covered(self) -> None:
+        """A file, a colour or black was sent to the Main Stage: the page makes way (back to the desk)."""
+        if self.web.on_stage():
+            window = self.web.window
+            self._web_background_was_playing = False      # the new picture plays as it was sent
+            self.web.off_stage()
+            if window is not None:
+                try:
+                    window.pictureReplaced.disconnect(self._on_web_covered)
+                except (RuntimeError, TypeError):
+                    pass
+            self.statusBar().showMessage(tr("The web page came off the Main Stage for the new picture."), 6000)
+
+    @Slot()
+    def _on_web_detached(self) -> None:
+        self._web_background_was_playing = False
+        self.statusBar().showMessage(tr("The Main Stage screen closed - the web page is back on the desk."), 8000)
+
+    @Slot(str)
+    def _web_in_edge(self, url: str) -> None:
+        window = self.main_output
+        rect = window.frameGeometry() if window is not None else None
+        error = self.web.open_in_edge(url, rect)
+        self.statusBar().showMessage(error or tr("Edge is opening on the Main Stage."), 8000)
 
     # -- the simple desk -------------------------------------------------------- #
 
@@ -1556,6 +1651,8 @@ class ControlPanel(QMainWindow):
             return
         if self.share_receiver.stage and self.share_receiver.window is self.main_output:
             self._end_share(tr("The rehearsal ended."))     # it was on the rehearsal window
+        if self.web.on_stage(self.main_output):
+            self._web_off_stage(tr("The rehearsal ended."))
         before = self._rehearsal_before
         if self.presenter.live:
             self.presenter.end()
@@ -2642,6 +2739,7 @@ class ControlPanel(QMainWindow):
                 self.statusBar().showMessage(
                     tr("Open the Main Stage screen first - the laptop's picture goes there."), 8000)
                 return
+            self._web_off_stage(tr("The web page came off the Main Stage for the laptop."))
             self._switched_off(receiver.receive(ident, request.offer, window=window))
             self._watch_share_window(window)
             self.statusBar().showMessage(tr("{0}: connecting to the Main Stage…").format(request.name), 6000)
@@ -2660,6 +2758,7 @@ class ControlPanel(QMainWindow):
             self.statusBar().showMessage(
                 tr("Open the Main Stage screen first - the laptop's picture goes there."), 8000)
             return
+        self._web_off_stage(tr("The web page came off the Main Stage for the laptop."))
         self._switched_off(receiver.take(ident, mode, window))
         self.share.move(ident, "stage")
         self._watch_share_window(window)
@@ -3600,6 +3699,11 @@ class ControlPanel(QMainWindow):
         if self.presenter.live and action:
             self._do_slide(action, name, source)
             return True
+        if self.web.on_stage() and action in ("next", "back"):
+            # a web page on the stage: the arrow keys, which turn Canva's slides
+            self.web.press(action)
+            self.presentation_tab.show_key(name, tr('web page {0}').format(action), source)
+            return True
         learned = any(info.get("name") == name for info in self._learned().values())
         if action in ("next", "back") and (name in ("PgDown", "PgUp") or learned):
             self.presentation_tab.show_key(name, tr('running order {0}').format(action), source)
@@ -3658,7 +3762,7 @@ class ControlPanel(QMainWindow):
         self._update_hotkeys()
 
     def _update_hotkeys(self) -> None:
-        want = self.presenter.live and self._clicker_global()
+        want = (self.presenter.live or self.web.on_stage()) and self._clicker_global()
         if want and not self._hotkeys:
             self._register_hotkeys()
         elif not want and self._hotkeys:
@@ -3816,6 +3920,8 @@ class ControlPanel(QMainWindow):
         if self._break and self._break.get("slides") and not self.presenter.paused:
             self._break = None              # the talk ended (or something took its screen) during the video
             self._sync_break_controls()
+        if live and self.presenter.role == ROLE_MAIN and self.web.on_stage():
+            self._web_off_stage(tr("The web page came off the Main Stage for the presentation."))
         if live != self._was_live:
             self._was_live = live
             deck = self.presenter.deck
@@ -4912,6 +5018,10 @@ class ControlPanel(QMainWindow):
     def _blackout_all(self) -> None:
         if self.share_receiver.stage:
             self._end_share(tr("The stage went to black."))
+        if self.web.on_stage():
+            self._web_background_was_playing = False       # it all goes to black anyway
+            self._web_off_stage()
+
         def black() -> None:
             fade = self.fade_ms()
             for window in self._outputs():
@@ -5330,6 +5440,7 @@ class ControlPanel(QMainWindow):
         self._end_all_shares(tr("The stage desk closed."))
         self.share.stop()
         self.share_receiver.shutdown()
+        self.web.shutdown()
         self.show_store.save()
         if self.dj_panel:
             self.dj_panel.shutdown()
