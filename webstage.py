@@ -401,9 +401,35 @@ class WebStage(QObject):
                 if s.isEnabled() and s.key().matches(wanted) == QKeySequence.ExactMatch]
 
     def _with_focus(self, action) -> None:
-        if self._target() is None or self.window is None or self.where != "stage":
+        if self._target() is None or self.where not in ("stage", "desk"):
             return
         action()
+
+    # -- from a phone: a tap, typing, scrolling ------------------------------------------- #
+    def click_at(self, fx: float, fy: float) -> None:
+        """A click at a point of the page given as fractions of its width and height."""
+        target = self._target()
+        if target is None or self.view is None or not self.is_open():
+            return
+        local = QPointF(max(0.0, min(1.0, fx)) * self.view.width(), max(0.0, min(1.0, fy)) * self.view.height())
+        if not target.hasFocus():
+            QApplication.sendEvent(target, QFocusEvent(QEvent.FocusIn, Qt.MouseFocusReason))
+        glob = QPointF(target.mapToGlobal(local.toPoint()))
+        for kind, buttons in ((QEvent.MouseMove, Qt.NoButton), (QEvent.MouseButtonPress, Qt.LeftButton),
+                              (QEvent.MouseButtonRelease, Qt.NoButton)):
+            button = Qt.NoButton if kind == QEvent.MouseMove else Qt.LeftButton
+            QApplication.sendEvent(target, QMouseEvent(kind, local, glob, button, buttons, Qt.NoModifier))
+
+    def type_text(self, text: str) -> None:
+        """Text into whatever box on the page has the caret - any language, as if typed."""
+        if self.page is not None and text:
+            self.page.runJavaScript(
+                f"document.execCommand('insertText', false, {json.dumps(text)})")
+
+    def scroll(self, amount: float) -> None:
+        """Scroll by a share of the page's height: positive down, negative up."""
+        if self.page is not None:
+            self.page.runJavaScript(f"window.scrollBy(0, window.innerHeight * {float(amount):.3f})")
 
     # -- keys typed into the page itself, on the desk ------------------------------------ #
     def _watch_keys(self) -> None:

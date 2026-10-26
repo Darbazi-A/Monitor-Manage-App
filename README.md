@@ -486,16 +486,62 @@ in by itself* puts the PIN into the code as well (in the part of the link that
 never leaves the phone), for the crew's own phones — anyone with a photo of that
 code can run the show until *New PIN*, so it is off by default.
 
-The page opens with **what the hall sees**: Main Stage and Side Screens side by
-side with the ceiling strip under them, framed red when on air — names, marquee
-and PowerPoint slides included. Moving screens refresh every second, still ones
-only when they change (small JPEGs, about 13 KB each), and the pictures can be
-hidden. They need the PIN like everything else; the guest link cannot see them.
+### The whole stage from a phone
 
-- **SHOW**: NOW with the step's notes and running time, a thumb-sized **NEXT**,
-  Back, Start over, and the whole running order — tap a step, then GO.
-- **STAGE**: BLACKOUT, which file each screen shows, the eight sound cues
-  (tap to play / pause), Silence, the master volume, and the presets.
+The phone is a complete desk, made for a teacher who runs an assembly or a
+rehearsal without the operator. It opens on a **home screen**: what the hall
+sees (Main Stage and Side Screens side by side, the ceiling strip under them,
+framed red when on air — tap one to control it), the running order's NOW with
+a thumb-sized **NEXT**, and nine big tiles. At the bottom of every page:
+**BLACKOUT** (held down, so a brush of the thumb does nothing), **Undo** (the
+last change, for a few seconds) and **Stop sound**.
+
+- **A screen** (tap its picture): the live picture, *Show a file*, *Black*;
+  for a video pause / play, back to the start, a bar to drag, repeat, sound on
+  or off, and its volume.
+- **Files**: *Send a file from this phone* — videos, pictures, music and
+  presentations go straight to the stage computer (*Documents\Stage
+  Display\Phone uploads*), with a progress bar; a gigabyte video streams to
+  disk, never into memory. Then the uploads, the Library's folders and the
+  favourites, with pictures of the videos. A file tapped is offered where it
+  fits: on a screen, played in the middle of the talk, opened as the
+  presentation, or put on a sound pad.
+- **Running order**: run it (NEXT, Back, Start over, tap a step and GO), switch
+  between running orders or start a new one — and **build it from the phone**:
+  set the screens up the way a moment should look, then *Add a step: what is on
+  the screens now*, with a name and notes. A step can be renamed, given notes,
+  set to go on by itself after some seconds, moved, replaced with the screens
+  as they are now, or deleted.
+- **Presentation**: open one (sent from the phone or from the computer), choose
+  its screen, show / end (held), a huge NEXT, Back, Black, the current and next
+  slide, every slide to jump to; the videos for the middle of the talk with
+  pause, ±10 s, a seek bar and *Back to slides*; close it.
+- **Sound**: the eight pads (tap to play / pause; ⋯ to choose a sound, stop or
+  empty it), the pads' volume, Stop all sound.
+- **Text on screen**: a name and a second line on any screen, show / hide; the
+  running text on the Top Screen, start / stop.
+- **Canva and Kahoot**: the saved links or a pasted one; the page opens on the
+  stage computer first, silent. The phone shows it live: a tap on the picture
+  clicks there, ◀ ▶ turn Canva's slides, typing goes into the page (Georgian
+  too); then *Show on the Main Stage* / *Take it off the stage*.
+- **Laptop**: switch the share on and read the address and code out to the
+  laptop's owner; take a waiting laptop onto the Main Stage (or beside the
+  one there), mute it, end it.
+- **Scenes**: put one on the screens; save the screens as a new scene, or
+  update the one that is on.
+- **Rehearsal**: try a whole event out first. While it runs, everything the
+  phone (or the desk) does goes to a rehearsal window on the stage computer
+  instead of the hall's screens — and the phone's pictures show the rehearsal.
+  Its sound stays silent or goes to headphones. The hall keeps what it had.
+
+Nothing the phone does waits for a click at an empty desk: a file that will not
+play comes back to the phone as a message instead of a dialog on the computer.
+The phone reaches only the uploads folder, the Library's folders and the
+favourites — never the rest of the disk — and accepts only pictures, videos,
+sounds and presentations (8 GB at most, never filling the disk). Wiring the
+screens, the PINs and the admin settings stay on the desk. The page is in the
+app's language (English or Georgian).
+
 - **SLIDES** (`/slides`, a page of its own for the presenter or whoever is
   standing in for a flat clicker battery): the current and next slide as
   pictures, the notes, the slide counter and time, a huge NEXT, Back, Black and
@@ -1009,7 +1055,9 @@ The running order and the remote are separate modules too; the dashboard
 | Module | Role |
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
-| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link), `RemoteDialog`, `GuestDialog`, and the phone pages themselves |
+| `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link, files streamed from phones), `RemoteDialog`, `GuestDialog`, and the slide-clicker pages |
+| `phone_control.py` | The phone as a whole desk: its state, every action (screens, files, running order, slides, text, sound, scenes, web, laptops, rehearsal), the folders it may see, `UploadSink` |
+| `phone_page.py` / `phone_ka.py` | The phone's page - a home of big tiles, one page per job - and its Georgian |
 | `screenshare.py` | the laptop screen share: `ShareServer` (HTTPS, a thread), `ShareReceiver` and `ShareLink` (a Chromium page per laptop - previewed on the desk, then laid out on the Main Stage alone, side by side or picture in picture), `ShareBar` and its cards, `ShareDialog`, and the laptop's page |
 | `selfcert.py` | a self-signed TLS certificate in pure Python, for the share's HTTPS |
 | `presentation.py` | `Deck` (PDF via QtPdf, PowerPoint via its COM export, picture folders; cached), `Presenter`, `PowerPointShow` (a live PowerPoint slide show driven over a pipe), the Slides tab and `LearnDialog` |

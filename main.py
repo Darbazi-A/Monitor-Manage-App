@@ -171,6 +171,7 @@ import winplatform  # noqa: E402 - Windows 11: title bars, corners, power and sl
 import simple as simple_mod  # noqa: E402 - the simple desk
 import webstage as web_mod  # noqa: E402 - Canva, Kahoot and other web pages on the Main Stage
 import tray as tray_mod  # noqa: E402 - the icon by the clock, where the minimised desk waits
+import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage desk
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -432,7 +433,7 @@ WM_HOTKEY = 0x0312
 VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
 
 
-class ControlPanel(QMainWindow):
+class ControlPanel(phone_mod.PhoneControl, QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
     WIDE_ASPECT_THRESHOLD = 2.5
@@ -501,9 +502,14 @@ class ControlPanel(QMainWindow):
         self._show_active = 0
         self._show_timer = QTimer(self)
         self._show_timer.timeout.connect(self._show_tick)
-        self.remote = remote_mod.RemoteServer(self.remote_state, self.remote_action, self,
+        # The phone is a whole desk: state, actions, files, uploads (phone_control.py).
+        self.remote = remote_mod.RemoteServer(self.phone_state, self.phone_action, self,
                                               image=self._remote_slide_image,
-                                              screen=self._remote_screen_image)
+                                              screen=self._remote_screen_image,
+                                              get=self.phone_get,
+                                              upload=phone_mod.UploadSink(
+                                                  arrived=lambda path: self.statusBar().showMessage(
+                                                      tr("From a phone: {0}").format(os.path.basename(path)), 6000)))
         self._remote_dialog = None
         self._guest_dialog = None
         # Laptop screen share: laptops ask over HTTPS, the picture comes over WebRTC.
@@ -638,6 +644,7 @@ class ControlPanel(QMainWindow):
         self.set_active_role(ROLE_MAIN)
         self._apply_touch_mode()
         self._restore_window_geometry()
+        self._phone_setup()
         self._restore_remote()
         self._restore_share()
         self._multiview_timer = QTimer(self)
@@ -4710,6 +4717,12 @@ class ControlPanel(QMainWindow):
 
     def _report_media_problem(self, role: str, path: str, problem: MediaProblem) -> None:
         """One clear dialog instead of a frozen or blank screen."""
+        if hasattr(self, "_phone_sent") and self.phone_owns_problem(role):
+            # asked for from a phone: the phone hears about it (a dialog would wait at an empty desk)
+            text = tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title)
+            self.statusBar().showMessage(text, 12000)
+            self._phone_problem(text)
+            return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle(problem.title)
@@ -4728,7 +4741,8 @@ class ControlPanel(QMainWindow):
         so an unplayable codec looked like the app hanging for no reason.
         """
         card = self.cards.get(role)
-        name = os.path.basename(card.current_path()) if card and card.current_path() else "the clip"
+        path = card.current_path() if card else ""      # before the card forgets it
+        name = os.path.basename(path) if path else "the clip"
         window = getattr(self, self.OUTPUT_ATTRS[role], None)
         if window is not None:
             window.clear_output()      # do not leave a frozen half-frame on stage
@@ -4736,7 +4750,7 @@ class ControlPanel(QMainWindow):
             card.reset_file()
         self._report_media_problem(
             role,
-            card.current_path() if card else "",
+            path,
             MediaProblem(
                 tr('This video will not play on this PC'),
                 tr('{0}\n\nThe video backend reported:\n{1}\n\nThe container opened, so this is almost certainly the codec inside it - H.265/HEVC, VP9 and AV1 are not supported here.').format(name, message),

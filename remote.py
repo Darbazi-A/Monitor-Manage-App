@@ -16,7 +16,8 @@ guest link retires the old one.
 from __future__ import annotations
 
 from i18n import language, tr  # noqa: E402 - the interface's language
-import remote_ka  # noqa: E402 - the phone pages in Georgian
+import phone_page  # noqa: E402 - the phone's whole-desk page
+import remote_ka  # noqa: E402 - the slide clicker's pages in Georgian
 
 import json
 import random
@@ -77,12 +78,17 @@ class RemoteServer(QObject):
     def __init__(self, state: Callable[[], dict], act: Callable[[str, dict], Tuple[bool, str]],
                  parent: Optional[QObject] = None,
                  image: Optional[Callable[[str, int], Optional[bytes]]] = None,
-                 screen: Optional[Callable[[str], Optional[bytes]]] = None) -> None:
+                 screen: Optional[Callable[[str], Optional[bytes]]] = None,
+                 get: Optional[Callable[[str, dict], Optional[Tuple[int, bytes, str]]]] = None,
+                 upload: Optional["UploadSink"] = None) -> None:
         super().__init__(parent)
         self.state = state
         self.act = act
         self.image = image
         self.screen = screen            # role -> JPEG of that stage screen, for the multiview
+        self.get = get                  # other GET /api/... routes: files, thumbnails, the web page
+        self.upload = upload            # where files sent from a phone go
+        self._uploads: Dict[QTcpSocket, dict] = {}
         self.pin = new_pin()
         self.guest = ""                   # the guest link's token; "" = no guest link
         self.port = DEFAULT_PORT
@@ -153,6 +159,9 @@ class RemoteServer(QObject):
 
     def _forget(self, socket: QTcpSocket) -> None:
         self._buffers.pop(socket, None)
+        upload = self._uploads.pop(socket, None)
+        if upload is not None:
+            self._abandon(upload)               # the phone gave up half way
         socket.deleteLater()
 
     def _close(self, socket: QTcpSocket) -> None:
@@ -160,15 +169,23 @@ class RemoteServer(QObject):
             socket.abort()
 
     def _on_ready(self, socket: QTcpSocket) -> None:
+        if socket in self._uploads:
+            self._on_upload_data(socket)
+            return
         if socket not in self._buffers:
             return
         data = self._buffers[socket] + bytes(socket.readAll().data())
         self._buffers[socket] = data
-        if len(data) > MAX_REQUEST:
-            self._send(socket, 413, b"too large", "text/plain")
-            return
         head, sep, body = data.partition(b"\r\n\r\n")
         if not sep:
+            if len(data) > MAX_REQUEST:
+                self._send(socket, 413, b"too large", "text/plain")
+            return
+        if head.startswith(b"POST /api/upload"):
+            self._start_upload(socket, head, body)
+            return
+        if len(data) > MAX_REQUEST:
+            self._send(socket, 413, b"too large", "text/plain")
             return
         lines = head.decode("latin-1").split("\r\n")
         try:
@@ -185,7 +202,8 @@ class RemoteServer(QObject):
             return                               # wait for the rest
         ip = socket.peerAddress().toString().replace("::ffff:", "")
         path, _, query = target.partition("?")
-        params = dict(part.partition("=")[::2] for part in query.split("&") if part)
+        from urllib.parse import parse_qsl
+        params = dict(parse_qsl(query, keep_blank_values=True))
         status, payload, kind = self._handle(method, path, headers, body[:length], ip, params)
         self._send(socket, status, payload, kind)
 
@@ -200,12 +218,99 @@ class RemoteServer(QObject):
         socket.disconnectFromHost()
         self._buffers.pop(socket, None)
 
+    # -- files sent from a phone ---------------------------------------------- #
+    # A video can be a gigabyte: it goes straight to disk as it arrives, never into
+    # memory, and the connection may take minutes - it is only dropped when nothing
+    # has come for half a minute.
+    def _start_upload(self, socket: QTcpSocket, head: bytes, body: bytes) -> None:
+        self._buffers.pop(socket, None)
+        lines = head.decode("latin-1").split("\r\n")
+        headers = {}
+        for line in lines[1:]:
+            key, _, value = line.partition(":")
+            headers[key.strip().lower()] = value.strip()
+        ip = socket.peerAddress().toString().replace("::ffff:", "")
+        refused = self._authorise(headers, ip)
+        if refused is not None or headers.get("x-guest"):
+            status, payload = refused or (403, _json({"ok": False, "message": tr("A guest link only turns slides.")}))
+            self._send(socket, status, payload, "application/json")
+            return
+        if self.upload is None:
+            self._send(socket, 404, _json({"ok": False, "message": "no uploads"}), "application/json")
+            return
+        try:
+            length = int(headers.get("content-length", "0") or 0)
+        except ValueError:
+            length = 0
+        from urllib.parse import unquote
+        name = unquote(headers.get("x-name", ""))
+        ticket, error = self.upload.begin(name, length)
+        if ticket is None:
+            self._send(socket, 400, _json({"ok": False, "message": error}), "application/json")
+            return
+        upload = {"ticket": ticket, "left": length, "timer": QTimer(self)}
+        upload["timer"].setSingleShot(True)
+        upload["timer"].timeout.connect(lambda s=socket: self._upload_stalled(s))
+        self._uploads[socket] = upload
+        self._write_upload(socket, upload, body)
+
+    def _on_upload_data(self, socket: QTcpSocket) -> None:
+        upload = self._uploads.get(socket)
+        if upload is not None:
+            self._write_upload(socket, upload, bytes(socket.readAll().data()))
+
+    def _write_upload(self, socket: QTcpSocket, upload: dict, chunk: bytes) -> None:
+        chunk = chunk[: upload["left"]]
+        if chunk:
+            error = self.upload.write(upload["ticket"], chunk)
+            if error:
+                self._uploads.pop(socket, None)
+                self._abandon(upload)
+                self._send(socket, 500, _json({"ok": False, "message": error}), "application/json")
+                return
+            upload["left"] -= len(chunk)
+        self._seen[socket.peerAddress().toString().replace("::ffff:", "")] = time.monotonic()
+        if upload["left"] > 0:
+            upload["timer"].start(30000)
+            return
+        upload["timer"].stop()
+        self._uploads.pop(socket, None)
+        ok, message, name = self.upload.finish(upload["ticket"])
+        self._send(socket, 200, _json({"ok": ok, "message": message, "name": name}), "application/json")
+
+    def _upload_stalled(self, socket: QTcpSocket) -> None:
+        upload = self._uploads.pop(socket, None)
+        if upload is not None:
+            self._abandon(upload)
+            socket.abort()
+
+    def _abandon(self, upload: dict) -> None:
+        upload["timer"].stop()
+        if self.upload is not None:
+            self.upload.cancel(upload["ticket"])
+
     # -- routes -------------------------------------------------------------- #
+    def _authorise(self, headers: dict, ip: str):
+        """None when the PIN (or a guest link) is right; else (status, payload) to answer with."""
+        count, until = self._failures.get(ip, (0, 0.0))
+        if until > time.monotonic():
+            return 429, _json({"ok": False, "message": tr("Too many wrong PINs - wait a minute.")})
+        offered = headers.get("x-guest", "")
+        guest = bool(offered) and bool(self.guest) and secrets.compare_digest(offered, self.guest)
+        if not guest and not secrets.compare_digest(headers.get("x-pin", ""), self.pin):
+            count += 1
+            self._failures[ip] = (0, time.monotonic() + 60) if count >= 5 else (count, 0.0)
+            message = tr("This guest link has expired.") if offered else tr("Wrong PIN")
+            return 401, _json({"ok": False, "message": message})
+        self._failures.pop(ip, None)
+        self._seen[ip] = time.monotonic()
+        return None
+
     def _handle(self, method: str, path: str, headers: dict, body: bytes, ip: str,
                 params: Optional[dict] = None):
         params = params or {}
         if path in ("/", "/index.html"):
-            return 200, _page(PAGE, remote_ka.PAGE_KA), "text/html; charset=utf-8"
+            return 200, phone_page.render(language()), "text/html; charset=utf-8"
         if path == "/slides":
             return 200, _page(SLIDES_PAGE, remote_ka.SLIDES_KA), "text/html; charset=utf-8"
         if path == "/manifest.json":
@@ -218,18 +323,11 @@ class RemoteServer(QObject):
         if not path.startswith("/api/"):
             return 404, b"not found", "text/plain"
 
-        count, until = self._failures.get(ip, (0, 0.0))
-        if until > time.monotonic():
-            return 429, _json({"ok": False, "message": tr("Too many wrong PINs - wait a minute.")}), "application/json"
+        refused = self._authorise(headers, ip)
+        if refused is not None:
+            return refused[0], refused[1], "application/json"
         offered = headers.get("x-guest", "")
         guest = bool(offered) and bool(self.guest) and secrets.compare_digest(offered, self.guest)
-        if not guest and not secrets.compare_digest(headers.get("x-pin", ""), self.pin):
-            count += 1
-            self._failures[ip] = (0, time.monotonic() + 60) if count >= 5 else (count, 0.0)
-            message = tr("This guest link has expired.") if offered else tr("Wrong PIN")
-            return 401, _json({"ok": False, "message": message}), "application/json"
-        self._failures.pop(ip, None)
-        self._seen[ip] = time.monotonic()
 
         if path == "/api/state" and method == "GET":
             if guest:
@@ -267,6 +365,10 @@ class RemoteServer(QObject):
                 self._last_step_action = now
             ok, message = self.act(action, data)
             return 200, _json({"ok": ok, "message": message}), "application/json"
+        if method == "GET" and self.get is not None and not guest:
+            answer = self.get(path, params)
+            if answer is not None:
+                return answer
         return 404, _json({"ok": False, "message": "unknown"}), "application/json"
 
 
@@ -305,7 +407,7 @@ class RemoteDialog(QDialog):
         box.setContentsMargins(22, 20, 22, 20)
         box.setSpacing(12)
 
-        intro = QLabel(tr('Run the show from a phone or tablet: NEXT, BACK, BLACKOUT, the sound cues and the presets. The phone must be on the same Wi-Fi as this computer.'))
+        intro = QLabel(tr('The whole stage from a phone or tablet - for a teacher running an event or a rehearsal: the screens, files sent from the phone, the running order (run and build it), presentations, text, sound, scenes, Canva and Kahoot, laptops, a rehearsal, BLACKOUT and Undo. The phone must be on the same Wi-Fi as this computer.'))
         intro.setWordWrap(True)
         intro.setObjectName("cardHint")
         box.addWidget(intro)
@@ -376,6 +478,13 @@ class RemoteDialog(QDialog):
         note.setObjectName("keyHint")
         note.setWordWrap(True)
         box.addWidget(note)
+        if server.upload is not None:
+            folder = server.upload.folder()
+            uploads = QLabel(tr('Files sent from phones go to {0}. Only pictures, videos, sounds and presentations are accepted; the phone sees only that folder and the Library\'s folders. Keep the PIN to the people who run the hall.').format(folder))
+            uploads.setObjectName("keyHint")
+            uploads.setWordWrap(True)
+            uploads.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            box.addWidget(uploads)
 
         close = QPushButton(tr('Close'))
         close.clicked.connect(self.accept)
@@ -528,273 +637,6 @@ MANIFEST = json.dumps({
     "name": "Stage remote", "short_name": "Stage", "display": "standalone",
     "background_color": "#0c1018", "theme_color": "#0c1018", "start_url": "/",
 })
-
-PAGE = r"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#0c1018">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="manifest" href="/manifest.json">
-<title>Stage remote</title>
-<style>
-:root { --bg:#0c1018; --card:#141a26; --raised:#1a2130; --well:#0f141e; --edge:#222b3c; --edge-hi:#2c3750;
-  --text:#e9edf5; --dim:#9aa6bb; --muted:#6c7891; --gold:#e3b23c; --ok:#57c98a; --warn:#d9853f; --red:#e0605c; }
-* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-html,body { margin:0; background:var(--bg); color:var(--text); font:15px/1.35 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif; }
-body { padding:env(safe-area-inset-top) 0 calc(72px + env(safe-area-inset-bottom)); min-height:100vh; }
-button { font:inherit; color:inherit; border:1px solid var(--edge); background:linear-gradient(#212a3a,#182030);
-  border-radius:14px; padding:14px 10px; touch-action:manipulation; cursor:pointer; }
-button:active { transform:scale(.98); background:var(--well); }
-header { display:flex; align-items:center; gap:10px; padding:14px 16px 6px; }
-header .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); flex:none; }
-header .dot.on { background:var(--ok); box-shadow:0 0 10px var(--ok); }
-header h1 { font-size:16px; margin:0; letter-spacing:.3px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-header .clock { color:var(--dim); font-variant-numeric:tabular-nums; }
-main { padding:6px 14px 14px; display:none; }
-main.active { display:block; }
-.card { background:linear-gradient(var(--raised),var(--card) 55%); border:1px solid var(--edge); border-top-color:#313d55;
-  border-radius:18px; padding:14px 16px; margin-bottom:12px; }
-.cap { color:var(--muted); font-size:11px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; }
-.now h2 { font-size:26px; margin:4px 0 2px; line-height:1.15; }
-.notes { color:var(--dim); white-space:pre-wrap; margin-top:4px; }
-.timer { color:var(--muted); font-variant-numeric:tabular-nums; margin-top:6px; font-size:13px; }
-.next h3 { font-size:18px; margin:4px 0 0; }
-.auto { color:var(--gold); font-weight:600; margin-top:4px; font-size:13px; }
-.go { display:block; width:100%; min-height:24vh; font-size:34px; font-weight:800; letter-spacing:2px;
-  color:#12161f; background:linear-gradient(#f2c556,var(--gold)); border-color:#c9992f; border-radius:22px; margin:4px 0 10px; }
-.go:disabled { background:var(--well); color:var(--muted); border-color:var(--edge); }
-.row { display:flex; gap:10px; }
-.row > * { flex:1; }
-.steps { list-style:none; margin:0; padding:0; }
-.steps li { display:flex; align-items:center; gap:10px; padding:11px 10px; border-radius:12px; border:1px solid transparent; }
-.steps li + li { margin-top:4px; }
-.steps li .n { width:28px; height:28px; flex:none; border-radius:50%; background:#232c3d; color:var(--dim);
-  display:grid; place-items:center; font-size:13px; font-weight:700; }
-.steps li .t { flex:1; min-width:0; }
-.steps li .t b { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.steps li .t small { display:block; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.steps li.now { background:#1d2533; border-color:rgba(227,178,60,.45); }
-.steps li.now .n { background:var(--gold); color:#12161f; }
-.steps li.sel { border-color:var(--gold); }
-.steps li .jump { display:none; padding:8px 14px; border-radius:10px; background:var(--gold); color:#12161f; border-color:#c9992f; font-weight:700; }
-.steps li.sel .jump { display:block; }
-.blackout { width:100%; font-size:22px; font-weight:800; letter-spacing:2px; color:var(--red);
-  background:transparent; border:1.5px solid rgba(224,96,92,.55); min-height:74px; border-radius:18px; margin-bottom:12px; }
-.screens { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
-.screen { background:var(--well); border:1px solid var(--edge); border-radius:12px; padding:9px; min-width:0; }
-.screen b { font-size:12px; display:block; }
-.screen span { color:var(--dim); font-size:12px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.screen.off b { color:var(--muted); }
-.cues { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
-.cue { padding:10px 6px; min-height:64px; text-align:left; }
-.cue small { display:block; color:var(--muted); font-size:11px; font-weight:700; }
-.cue span { display:block; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.cue.playing { border-color:var(--ok); background:rgba(87,201,138,.14); }
-.cue.playing small { color:var(--ok); }
-.cue.paused { border-color:var(--gold); }
-.cue:disabled { opacity:.35; }
-.presets button { width:100%; text-align:left; margin-top:6px; display:flex; justify-content:space-between; }
-.presets button.cur { border-color:rgba(227,178,60,.5); }
-.vol { display:flex; align-items:center; gap:10px; }
-.vol b { min-width:54px; text-align:center; font-size:18px; }
-nav { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:8px 12px calc(8px + env(safe-area-inset-bottom));
-  background:rgba(12,16,24,.94); border-top:1px solid var(--edge); backdrop-filter:blur(8px); }
-nav button { flex:1; background:transparent; border-color:transparent; color:var(--muted); font-weight:700; letter-spacing:1px; }
-nav button.on { color:var(--gold); border-color:rgba(227,178,60,.35); background:rgba(227,178,60,.08); }
-#login { position:fixed; inset:0; background:var(--bg); display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px; z-index:9; }
-#login.show { display:flex; }
-#pin { font-size:40px; letter-spacing:18px; min-height:52px; font-weight:800; }
-.pad { display:grid; grid-template-columns:repeat(3,84px); gap:12px; }
-.pad button { height:72px; font-size:26px; font-weight:700; border-radius:50%; }
-#msg { color:var(--red); min-height:20px; }
-#toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:var(--raised); border:1px solid var(--edge-hi);
-  padding:10px 16px; border-radius:12px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90vw; text-align:center; }
-#toast.show { opacity:1; }
-.empty { color:var(--muted); text-align:center; padding:20px 6px; }
-/* the multiview: what every stage screen shows */
-.mvbar { display:flex; align-items:center; justify-content:space-between; padding:0 16px; }
-.mvbar button { padding:4px 10px; font-size:11px; border-radius:9px; color:var(--muted); background:transparent; }
-.mv { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 14px 8px; }
-.mv.hidden { display:none; }
-.mv .t { position:relative; background:#05070b; border:1.5px solid var(--edge); border-radius:10px; overflow:hidden; aspect-ratio:16/9; }
-.mv .t.top { grid-column:1 / span 2; aspect-ratio:14/1; }
-.mv .t.live { border-color:var(--red); }
-.mv .t.rehearsal { border-color:#7c9cf0; }
-.mv .t.closed { border-style:dashed; }
-.mv img { width:100%; height:100%; object-fit:contain; display:block; }
-.mv .t.top img { object-fit:fill; }
-.mv .lab, .mv .tag { position:absolute; top:4px; font-size:9px; font-weight:800; letter-spacing:.8px;
-  text-shadow:0 1px 3px #000; }
-.mv .lab { left:7px; color:#fff; }
-.mv .tag { right:7px; color:var(--muted); }
-.mv .t.live .tag { color:#ff8c88; }
-.mv .t.top .lab, .mv .t.top .tag { top:50%; transform:translateY(-50%); }
-</style></head>
-<body>
-<header><div class="dot" id="dot"></div><h1 id="head">Stage remote</h1><div class="clock" id="clock"></div></header>
-<div class="mvbar"><div class="cap">On the screens</div><button id="mvtoggle">hide</button></div>
-<div class="mv" id="mv"></div>
-
-<main id="v-show" class="active">
-  <div class="card now"><div class="cap" id="nowcap">Ready</div><h2 id="nowtitle">—</h2>
-    <div class="notes" id="notes"></div><div class="timer" id="timer"></div></div>
-  <button class="go" id="go">NEXT ▶</button>
-  <div class="card next"><div class="cap">Next</div><h3 id="nexttitle">—</h3><div class="auto" id="auto"></div></div>
-  <div class="row" style="margin-bottom:12px"><button id="back">◀ Back</button><button id="restart">↺ Start over</button></div>
-  <div class="card"><div class="cap" style="margin-bottom:6px">Running order · tap a step, then GO</div><ul class="steps" id="steps"></ul></div>
-</main>
-
-<main id="v-stage">
-  <button class="blackout" id="blackout">BLACKOUT</button>
-  <div class="card"><div class="cap" style="margin-bottom:8px">Screens</div><div class="screens" id="screens"></div></div>
-  <div class="card"><div class="cap" style="margin-bottom:8px">Sound</div><div class="cues" id="cues"></div>
-    <div class="row" style="margin-top:10px"><button id="silence">Silence</button>
-      <div class="vol"><button id="vdown">−</button><b id="vol">–</b><button id="vup">+</button></div></div></div>
-  <div class="card presets"><div class="cap">Presets</div><div id="presets"></div></div>
-</main>
-
-<nav><button class="on" data-v="show">SHOW</button><button data-v="stage">STAGE</button><button data-href="/slides">SLIDES</button></nav>
-
-<div id="login"><div class="cap">Enter the PIN shown on the dashboard</div><div id="pin"></div>
-  <div class="pad" id="pad"></div><div id="msg"></div></div>
-<div id="toast"></div>
-
-<script>
-const $ = id => document.getElementById(id);
-let pin = localStorage.getItem("stagePin") || "";
-let typed = "", state = null, selected = -1, lastGo = 0, failures = 0;
-if (/^#pin=\d{4}$/.test(location.hash)) {       // scanned from the dashboard's QR code
-  pin = location.hash.slice(5); localStorage.setItem("stagePin", pin); }
-if (location.hash) history.replaceState(null, "", location.pathname);
-
-function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show");
-  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1800); }
-function buzz() { if (navigator.vibrate) navigator.vibrate(18); }
-function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
-function mmss(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
-
-async function api(path, body) {
-  const options = { headers: { "X-Pin": pin } };
-  if (body) { options.method = "POST"; options.headers["Content-Type"] = "application/json"; options.body = JSON.stringify(body); }
-  const r = await fetch(path, options);
-  // forget a refused PIN, so polling stops instead of locking this phone out
-  if (r.status === 401) { pin = ""; localStorage.removeItem("stagePin"); askPin("Wrong PIN"); throw new Error("pin"); }
-  if (r.status === 429) { askPin("Too many tries - wait a minute"); throw new Error("locked"); }
-  return r.json();
-}
-async function act(action, extra) {
-  buzz();
-  try { const res = await api("/api/action", Object.assign({ action }, extra || {}));
-        if (!res.ok && res.message) toast(res.message); else if (res.message) toast(res.message); }
-  catch (e) {}
-  refresh();
-}
-
-function askPin(message) { $("login").classList.add("show"); $("msg").textContent = message || ""; typed = ""; drawPin(); }
-function drawPin() { $("pin").textContent = typed.padEnd(4, "·").split("").map((c, i) => i < typed.length ? "●" : "·").join(""); }
-(function buildPad() {
-  const keys = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
-  for (const k of keys) { const b = document.createElement("button"); b.textContent = k; if (!k) b.style.visibility = "hidden";
-    b.onclick = () => { buzz(); if (k === "⌫") typed = typed.slice(0, -1); else if (typed.length < 4) typed += k;
-      drawPin(); if (typed.length === 4) { pin = typed; localStorage.setItem("stagePin", pin); $("login").classList.remove("show"); refresh(); } };
-    $("pad").appendChild(b); }
-})();
-
-const shots = {};          // role -> {key, url}: a still screen is fetched again only when it changes
-let mvHidden = localStorage.getItem("stageMvHidden") === "1";
-function mvLayout() { $("mv").classList.toggle("hidden", mvHidden); $("mvtoggle").textContent = mvHidden ? "show" : "hide"; }
-$("mvtoggle").onclick = () => { mvHidden = !mvHidden; localStorage.setItem("stageMvHidden", mvHidden ? "1" : "0"); mvLayout(); };
-mvLayout();
-async function shot(sc) {
-  const key = sc.version + (sc.moving ? ":" + Math.floor(Date.now() / 1000) : "");
-  if (shots[sc.role] && shots[sc.role].key === key) return null;
-  const r = await fetch(`/api/screen?role=${sc.role}`, { headers: { "X-Pin": pin } });
-  if (!r.ok) return null;
-  const url = URL.createObjectURL(await r.blob());
-  if (shots[sc.role]) URL.revokeObjectURL(shots[sc.role].url);
-  shots[sc.role] = { key, url };
-  return url;
-}
-function renderMv(s) {
-  const mv = $("mv");
-  if (!mv.children.length) mv.innerHTML = s.screens.map(sc =>
-    `<div class="t ${sc.role === "top" ? "top" : ""}" id="mv-${sc.role}"><img alt=""><span class="lab">${esc(sc.label)}</span><span class="tag"></span></div>`).join("");
-  if (mvHidden) return;
-  for (const sc of s.screens) {
-    const el = $("mv-" + sc.role); if (!el) continue;
-    el.className = `t ${sc.role === "top" ? "top" : ""} ${sc.state}`;
-    el.querySelector(".tag").textContent = sc.state === "live" ? "ON AIR" : sc.state.toUpperCase();
-    const img = el.querySelector("img");
-    if (sc.state === "closed") { img.removeAttribute("src"); delete shots[sc.role]; continue; }
-    shot(sc).then(url => { if (url) img.src = url; }).catch(() => {});
-  }
-}
-
-function render() {
-  const s = state; if (!s) return;
-  renderMv(s);
-  const show = s.show;
-  $("head").textContent = show.name || "Stage remote";
-  const now = show.index >= 0 ? show.steps[show.index] : null;
-  const next = show.steps[show.index + 1];
-  $("nowcap").textContent = now ? `Now · step ${show.index + 1} of ${show.steps.length}` : (show.steps.length ? "Ready" : "No steps yet");
-  $("nowtitle").textContent = now ? now.title : (show.steps.length ? "Press NEXT to start" : "Build the running order on the dashboard");
-  $("notes").textContent = now ? now.notes : "";
-  $("timer").textContent = now ? "running " + mmss(show.elapsed) : "";
-  $("nexttitle").textContent = next ? next.title : (now ? "— end of the show —" : "—");
-  $("auto").textContent = show.auto != null ? `goes on by itself in ${Math.ceil(show.auto)} s` : "";
-  $("go").disabled = !next;
-  const list = $("steps");
-  if (!show.steps.length) list.innerHTML = '<li class="empty">No steps in this running order.</li>';
-  else list.innerHTML = show.steps.map((st, i) =>
-    `<li data-i="${i}" class="${i === show.index ? "now" : ""} ${i === selected ? "sel" : ""}"><div class="n">${i + 1}</div>
-     <div class="t"><b>${esc(st.title)}</b><small>${esc(st.summary)}</small></div><button class="jump" data-go="${i}">GO</button></li>`).join("");
-  $("screens").innerHTML = s.screens.map(sc =>
-    `<div class="screen ${sc.open ? "" : "off"}"><b>${esc(sc.label)}</b><span>${sc.open ? esc(sc.file || "empty") : "closed"}</span></div>`).join("");
-  $("cues").innerHTML = s.cues.map(c =>
-    `<button class="cue ${c.playing ? "playing" : ""} ${c.paused ? "paused" : ""}" data-cue="${c.index}" ${c.filled ? "" : "disabled"}>
-     <small>F${c.index + 1}${c.playing ? " ▶" : c.paused ? " ❚❚" : ""}</small><span>${esc(c.label || "empty")}</span></button>`).join("");
-  $("vol").textContent = s.master + "%";
-  $("presets").innerHTML = s.presets.length ? s.presets.map(p =>
-    `<button data-preset="${esc(p)}" class="${p === s.preset ? "cur" : ""}"><span>${esc(p)}</span><span>${p === s.preset ? "on screens" : "load"}</span></button>`).join("")
-    : '<div class="empty">No presets saved.</div>';
-}
-
-async function refresh() {
-  if (!pin) { askPin(); return; }
-  try { state = await api("/api/state"); $("dot").classList.add("on"); failures = 0; render(); }
-  catch (e) { if (e.message !== "pin" && e.message !== "locked") { if (++failures > 2) $("dot").classList.remove("on"); } }
-}
-
-$("go").onclick = () => { const t = Date.now(); if (t - lastGo < 700) return; lastGo = t; selected = -1; act("next"); };
-$("back").onclick = () => act("back");
-$("restart").onclick = () => { if (confirm("Back to before step 1? Nothing on stage changes until NEXT.")) act("restart"); };
-$("steps").onclick = e => {
-  const go = e.target.closest("[data-go]");
-  if (go) { selected = -1; act("goto", { index: +go.dataset.go }); return; }
-  const li = e.target.closest("li[data-i]"); if (!li) return;
-  selected = (+li.dataset.i === selected) ? -1 : +li.dataset.i; render(); };
-$("blackout").onclick = () => act("blackout");
-$("silence").onclick = () => act("silence");
-$("vdown").onclick = () => act("master", { value: Math.max(0, (state ? state.master : 90) - 5) });
-$("vup").onclick = () => act("master", { value: Math.min(100, (state ? state.master : 90) + 5) });
-$("cues").onclick = e => { const b = e.target.closest("[data-cue]"); if (b) act("cue", { index: +b.dataset.cue }); };
-$("presets").onclick = e => { const b = e.target.closest("[data-preset]");
-  if (b && confirm(`Put “${b.dataset.preset}” on the screens?`)) act("preset", { name: b.dataset.preset }); };
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
-  if (b.dataset.href) { location.href = b.dataset.href; return; }
-  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
-  document.querySelectorAll("main").forEach(m => m.classList.toggle("active", m.id === "v-" + b.dataset.v)); });
-setInterval(() => { $("clock").textContent = new Date().toTimeString().slice(0, 5); }, 1000);
-setInterval(() => { if (!document.hidden) refresh(); }, 800);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-refresh();
-</script></body></html>
-"""
-
 
 # The slides-only remote: what a presenter holds when the clicker fails.
 SLIDES_PAGE = r"""<!doctype html>
