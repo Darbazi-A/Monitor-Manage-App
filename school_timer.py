@@ -76,10 +76,14 @@ def clean_look(look: Optional[dict]) -> dict:
     return result
 
 
-def format_ms(ms: float, plus: bool = True) -> str:
-    """10:00, 1:05:00, +0:12 - a running second shows until it is over (like a kitchen timer)."""
+def format_ms(ms: float, plus: bool = True, up: bool = False) -> str:
+    """10:00, 1:05:00, +0:12 - counting down, a second shows until it is over (like a kitchen
+    timer); counting up (`up`), only once it is complete."""
     over = ms < 0
-    total = int(math.floor(-ms / 1000)) if over else int(math.ceil(ms / 1000 - 1e-6))
+    if over:
+        total = int(math.floor(-ms / 1000))
+    else:
+        total = int(math.floor(ms / 1000)) if up else int(math.ceil(ms / 1000 - 1e-6))
     hours, rest = divmod(total, 3600)
     minutes, seconds = divmod(rest, 60)
     text = f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
@@ -149,7 +153,7 @@ class TimerClock(QObject):
             frame["state"] = "running"
             return frame
         if self.mode == "stopwatch":
-            frame["text"] = format_ms(self.elapsed_ms())
+            frame["text"] = format_ms(self.elapsed_ms(), up=True)
             frame["state"] = "running" if self.running else ("idle" if self._elapsed_ms == 0 else "paused")
             return frame
         left = self.left_ms()
@@ -180,6 +184,8 @@ class TimerClock(QObject):
             self.reset()
 
     def set_duration(self, ms: int) -> None:
+        """A new time: ready at the top, waiting for Start."""
+        self.running = False
         self.duration_ms = max(1000, int(ms))
         self.reset()
 
@@ -299,6 +305,9 @@ def _family(kind: str) -> str:
 
 def _font(kind: str, pixels: float, weight: QFont.Weight) -> QFont:
     font = QFont(_family(kind))
+    # Segoe UI Variable has no Georgian letters; left to itself Qt borrows them from
+    # whatever font comes first (a decorative one) - Segoe UI, then Sylfaen, have them
+    font.setFamilies([_family(kind), "Segoe UI", "Sylfaen"])
     font.setPixelSize(max(1, int(pixels)))
     font.setWeight(weight)
     font.setHintingPreference(QFont.PreferNoHinting)
@@ -480,7 +489,7 @@ def paint_timer(p: QPainter, rect: QRectF, frame: dict, look: dict, logo: Option
         time_box = QRectF(inner.right() - clock_w - time_w - (pad * 0.5 if clock_w else 0), inner.top(),
                           time_w, inner.height() * (0.86 if bar else 1.0))
         if title:
-            _text(p, title, QRectF(x, inner.top(), time_box.left() - x - pad, inner.height() * 0.5),
+            _text(p, title, QRectF(x, inner.center().y() - inner.height() * 0.25, time_box.left() - x - pad, inner.height() * 0.5),
                   accent if style != "light" else accent, QFont.DemiBold, Qt.AlignLeft, shadow)
         if not blink_off:
             draw_digits(p, frame.get("text", ""), time_box, colour, weight, Qt.AlignRight if title else Qt.AlignCenter, shadow)
