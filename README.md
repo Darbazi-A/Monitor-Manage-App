@@ -626,6 +626,19 @@ order, fire the eight cues, silence the sound, blackout. Cue buttons light green
 while playing and gold while paused, exactly as the full pads do. ⤢ brings the
 dashboard back where it was.
 
+## Minimised: the icon by the clock
+
+The app keeps a small icon by the clock (the notification area). The window's
+minimise button takes the desk off the taskbar and into that icon, and the show
+goes on in the background: the stage screens keep playing, and the sound, the
+clicker, the phone remote, the laptop share and a web page on the stage all
+keep working. A click on the icon brings the desk back, as big as it was. Its
+menu (right-click) also has the compact bar, BLACKOUT, stopping all sound, and
+Quit (which asks first while screens are live). Its tooltip says how many
+stage screens are open and whether slides, a web page or a laptop are on.
+
+*Settings → Interface → Minimise* switches it off, for the usual taskbar button.
+
 ## Sound
 
 The desk sits along the bottom of the Live tab rather than behind a tab of its
@@ -972,6 +985,7 @@ still works. The rest is split by what it does:
 | `library.py` | `MediaLibrary`, and `EventFolderDialog` (the plan, shown before anything is applied) |
 | `textslides.py` | `TextSlides`: the running order of names, and how they are styled |
 | `routing.py` | `RoutingRow`: the rows of Settings → Screens |
+| `tray.py` | The icon by the clock: the minimised desk waits there while the show goes on; its menu opens the desk, the compact bar, BLACKOUT, stop all sound, quit |
 | `webstage.py` | Canva, Kahoot and other web pages: got ready on the desk (silent), moved onto the Main Stage, mirrored on the desk for clicks and typing, logins kept in their own profile |
 | `widgets.py` | `ElidedLabel`: one line - usually a file name - that never asks for more width than it has, so a long name cannot push a page past the window's edge; `VideoTransport`: pause / play, 10 s back and on, and a seek bar for the video playing in a talk |
 | `access.py` | the admin PIN (salted PBKDF2, lock-out) and `PinDialog`, the finger-sized PIN pad |

@@ -170,6 +170,7 @@ import access as access_mod  # noqa: E402 - the admin PIN
 import winplatform  # noqa: E402 - Windows 11: title bars, corners, power and sleep
 import simple as simple_mod  # noqa: E402 - the simple desk
 import webstage as web_mod  # noqa: E402 - Canva, Kahoot and other web pages on the Main Stage
+import tray as tray_mod  # noqa: E402 - the icon by the clock, where the minimised desk waits
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -473,6 +474,17 @@ class ControlPanel(QMainWindow):
         self.mini: Optional[MiniBar] = None
         self._mini_ticker = QTimer(self)
         self._mini_ticker.timeout.connect(self._refresh_mini)
+        # The icon by the clock: minimising hides the desk there, and the show goes on.
+        self.tray = tray_mod.StageTray(QIcon(ICON_FILE) if os.path.exists(ICON_FILE) else self.windowIcon(), self)
+        self.tray.openRequested.connect(self.restore_from_tray)
+        self.tray.barRequested.connect(lambda: self.shrink_to_bar())
+        self.tray.blackoutRequested.connect(lambda: self._blackout_all())
+        self.tray.stopSoundRequested.connect(lambda: self._stop_all_sound())
+        self.tray.quitRequested.connect(self._quit_from_tray)
+        self._was_maximized = True
+        self._tray_ticker = QTimer(self)
+        self._tray_ticker.timeout.connect(self._refresh_tray)
+        self._tray_ticker.start(2000)
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -2188,6 +2200,58 @@ class ControlPanel(QMainWindow):
         self.mini.setVisible(True)
         self._refresh_mini()
         self.mini.setVisible(was_visible)
+
+    # ------------------------------------------------- the icon by the clock -- #
+
+    def _to_tray_on_minimise(self) -> bool:
+        return self.tray.available() and str(self.settings.value("ui/tray", "true")).lower() == "true"
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and self.isMinimized() and self._to_tray_on_minimise():
+            self._was_maximized = bool(event.oldState() & Qt.WindowMaximized)
+            QTimer.singleShot(0, self._hide_to_tray)    # not from inside the state change
+
+    def _hide_to_tray(self) -> None:
+        """Minimised: off the taskbar, into the icon by the clock - the show goes on."""
+        if not self.isMinimized():
+            return                                      # brought back meanwhile
+        self.hide()
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        if str(self.settings.value("ui/tray_hinted", "false")).lower() != "true":
+            self.settings.setValue("ui/tray_hinted", "true")
+            self.tray.notify(tr("Still running"),
+                             tr("The screens and the sound go on. Click the icon by the clock to bring the desk back."))
+
+    @Slot()
+    def restore_from_tray(self) -> None:
+        if self.mini is not None and self.mini.isVisible():
+            self.restore_from_bar()
+            return
+        if self._was_maximized:
+            self.showMaximized()
+        else:
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    @Slot()
+    def _quit_from_tray(self) -> None:
+        self.restore_from_tray()                        # so its question is seen
+        self.close()
+
+    def _refresh_tray(self) -> None:
+        if not self.tray.available() or not hasattr(self, "web"):
+            return
+        opened = len(self._outputs())
+        parts = [tr("{0} of 3 stage screens open").format(opened)]
+        if self.presenter.live:
+            parts.append(tr("slides on"))
+        if self.web.on_stage():
+            parts.append(tr("web page on"))
+        if self.share_receiver.stage:
+            parts.append(tr("laptop on"))
+        self.tray.set_status("  ·  ".join(parts))
 
     def restore_from_bar(self) -> None:
         if self.mini is not None:
@@ -4089,8 +4153,8 @@ class ControlPanel(QMainWindow):
              (self._build_remote_card(), self._build_laptop_card())),
             ("power", tr('Start with Windows'), tr('The app and a preset come up by themselves when the PC starts.'),
              (self._build_autostart_card(),)),
-            ("palette", tr('Interface'), tr('Language, and controls sized for fingers.'),
-             (self._build_touch_card(),)),
+            ("palette", tr('Interface'), tr('Language, controls sized for fingers, and where the minimised desk goes.'),
+             (self._build_touch_card(), self._build_tray_card())),
             ("lock", tr('Admin & simple desk'), tr('Keep the setup safe while others use the hall.'),
              (self._build_security_card(),)),
             ("save", tr('Backups'), tr('Copies of the presets and running orders, taken before they change.'),
@@ -4353,6 +4417,26 @@ class ControlPanel(QMainWindow):
         self.touch_note.setObjectName("cardHint")
         box.addWidget(self.touch_note, 1)
         self._add_language_picker(box)
+        return card
+
+    def _build_tray_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        box = QHBoxLayout(card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(10)
+        heading = QLabel(tr('Minimise'))
+        heading.setObjectName("sectionTitle")
+        box.addWidget(heading)
+        self.tray_check = QCheckBox(tr('Minimising hides the desk by the clock - the show goes on in the background'))
+        self.tray_check.setChecked(self._to_tray_on_minimise())
+        self.tray_check.setEnabled(self.tray.available())
+        self.tray_check.setToolTip(
+            tr('On: the minimise button takes the desk off the taskbar to the small icon by the clock;\n'
+               'the screens, sound, clicker, phone and laptops keep working. A click on the icon brings it back.\n'
+               'Off: minimising leaves the usual button on the taskbar.'))
+        self.tray_check.toggled.connect(lambda on: self.settings.setValue("ui/tray", "true" if on else "false"))
+        box.addWidget(self.tray_check, 1)
         return card
 
     def touch_enabled(self) -> bool:
@@ -5444,6 +5528,8 @@ class ControlPanel(QMainWindow):
             window.deleteLater()
         self.main_output = self.sides_output = self.top_output = None
         winplatform.keep_awake(False)
+        self._tray_ticker.stop()
+        self.tray.hide()                     # or its ghost stays by the clock until hovered
         event.accept()
         QApplication.quit()
 
