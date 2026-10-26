@@ -327,7 +327,8 @@ $("rehend").onclick = () => act("rehearsal", { on: false });
 setInterval(() => { $("clock").textContent = new Date().toTimeString().slice(0, 5); }, 1000);
 
 const TITLES = { home: "Stage remote", screen: "", files: "Files", show: "Running order", slides: "Presentation",
-  sound: "Sound", text: "Text on screen", web: "Canva and Kahoot", laptop: "Laptop", scenes: "Scenes", rehearsal: "Rehearsal" };
+  sound: "Sound", text: "Text on screen", web: "Canva and Kahoot", laptop: "Laptop", scenes: "Scenes", rehearsal: "Rehearsal",
+  timer: "Timer" };
 function frame() {
   const c = cur(); $("head").classList.toggle("sub", stack.length > 1);
   let title = c.v === "screen" ? role(c.role) : t(TITLES[c.v] || "");
@@ -392,6 +393,8 @@ V.home = {
       ["laptop", "💻", "Laptop", sh.waiting.length ? tf("{0} waiting", sh.waiting.length) : (sh.stage.length ? t("on the Main Stage") : (sh.running ? t("ready for laptops") : t("off"))), sh.waiting.length ? "busy" : (sh.stage.length ? "live" : "")],
       ["scenes", "⭐", "Scenes", s.preset ? tf("now: {0}", s.preset) : tf("{0} saved", s.presets.length), ""],
       ["rehearsal", "🎭", "Rehearsal", s.rehearsal.on ? t("ON - the hall sees nothing") : t("try everything out first"), s.rehearsal.on ? "busy" : ""],
+      ["timer", "⏱", "Timer", s.timer.on ? s.timer.frame.text + " · " + role(s.timer.on) : (s.timer.running ? s.timer.frame.text : t("countdown on a screen")),
+        s.timer.on ? "live" : (s.timer.running ? "busy" : "")],
     ];
     put("h-tiles", tiles.map(([v, ico, label, sub, cls]) =>
       `<button class="tile ${cls}" data-v="${v}"><span class="ico">${ico}</span><b>${esc(t(label))}</b><small>${esc(sub)}</small></button>`).join(""));
@@ -819,6 +822,89 @@ V.rehearsal = {
     if (r.on && !$("mv")) put("r-mv", mvHtml());
     if (!r.on) put("r-mv", "");
     drawMv();
+  },
+};
+
+/* TIMER */
+const T_MODES = [["countdown", "Countdown"], ["until", "Until a time"], ["stopwatch", "Stopwatch"], ["clock", "Clock"]];
+const T_STYLES = [["school", "School"], ["black", "Black"], ["light", "Light"], ["bold", "Bold"], ["ring", "Ring"], ["glass", "Over the picture"]];
+const T_SIZES = [["full", "Full screen"], ["large", "Large"], ["medium", "Medium"], ["small", "Small"], ["strip", "Band"]];
+const T_PLACES = [["tl", "↖"], ["tr", "↗"], ["c", "●"], ["bl", "↙"], ["br", "↘"]];
+const T_SELECTS = [["warn", "Warning colour", [[0, "no warning"], [60, "last minute"], [120, "last 2 minutes"], [300, "last 5 minutes"]]],
+  ["overtime", "When the time is up", [["count", "counts on, red (+)"], ["stop", "stops at 0:00"], ["flash", "0:00, flashing"]]],
+  ["sound", "Sound at the end", [["beeps", "three beeps"], ["off", "silent"]]]];
+function chips(id, options, current, attr) {
+  put(id, options.map(([v, label]) => `<button data-${attr}="${v}" class="${String(v) === String(current) ? "on" : ""}">${esc(t(label))}</button>`).join("")); }
+V.timer = {
+  build() {
+    $("view").innerHTML = `<div class="card" style="text-align:center"><div class="status" id="t-state"></div>
+        <div id="t-big" style="font-size:68px;font-weight:200;line-height:1.1;font-variant-numeric:tabular-nums;margin:4px 0"></div>
+        <div class="bar" style="height:4px;margin:0 0 12px"><i id="t-line"></i></div>
+        <div class="row"><button class="gold big" id="t-run" style="flex:2"></button><button class="big" id="t-reset">↺</button></div>
+        <div class="row" style="margin-top:8px"><button id="t-minus">− 1 ${esc(t("min"))}</button><button id="t-plus">+ 1 ${esc(t("min"))}</button></div></div>
+      <div class="card stack"><div class="cap">${esc(t("On the screen"))}</div><div class="chips" id="t-roles" style="margin:0"></div>
+        <button class="big" id="t-show" style="width:100%"></button></div>
+      <div class="card stack"><div class="cap">${esc(t("What it counts"))}</div>
+        <input type="text" id="t-title" placeholder="${esc(t("Name on the screen (optional)"))}">
+        <div class="chips" id="t-modes" style="margin:0;flex-wrap:wrap"></div>
+        <div id="t-dur"><div class="chips" id="t-presets" style="flex-wrap:wrap"></div>
+          <div class="row"><input type="text" id="t-min" inputmode="numeric" placeholder="${esc(t("minutes"))}"><input type="text" id="t-sec" inputmode="numeric" placeholder="${esc(t("seconds"))}"><button id="t-setdur">${esc(t("Set"))}</button></div></div>
+        <div id="t-until" class="row"><input type="time" id="t-time" style="flex:2;background:var(--well);border:1px solid var(--edge);border-radius:12px;padding:12px"><button id="t-setuntil">${esc(t("Set"))}</button></div></div>
+      <div class="card stack"><div class="cap">${esc(t("How it looks"))}</div>
+        <div class="chips" id="t-styles" style="margin:0"></div><div class="chips" id="t-sizes" style="margin:0"></div>
+        <div class="chips" id="t-places" style="margin:0"></div><div class="toggles" id="t-toggles"></div><div id="t-selects"></div></div>`;
+    $("t-run").onclick = () => act("timer_toggle");
+    $("t-reset").onclick = () => act("timer_reset");
+    $("t-minus").onclick = () => act("timer_add", { ms: -60000 });
+    $("t-plus").onclick = () => act("timer_add", { ms: 60000 });
+    $("t-show").onclick = () => state.timer.on ? act("timer_hide") : act("timer_show", { role: ui.timerRole || "main" });
+    $("t-roles").onclick = e => { const b = e.target.closest("[data-role]"); if (!b) return; ui.timerRole = b.dataset.role;
+      if (state.timer.on) act("timer_show", { role: b.dataset.role }); else { $("t-roles")._html = null; draw(); } };
+    $("t-title").onchange = () => act("timer_set", { title: $("t-title").value });
+    $("t-modes").onclick = e => { const b = e.target.closest("[data-mode]"); if (b) act("timer_set", { mode: b.dataset.mode }); };
+    $("t-presets").onclick = e => { const b = e.target.closest("[data-min]"); if (b) act("timer_set", { ms: +b.dataset.min * 60000 }); };
+    $("t-setdur").onclick = () => { const ms = ((parseInt($("t-min").value, 10) || 0) * 60 + (parseInt($("t-sec").value, 10) || 0)) * 1000;
+      if (ms > 0) act("timer_set", { ms }); };
+    $("t-setuntil").onclick = () => { if ($("t-time").value) act("timer_set", { until: $("t-time").value.slice(0, 5) }); };
+    $("view").onclick = e => {
+      const s = e.target.closest("[data-style]"); if (s) { act("timer_look", { style: s.dataset.style }); return; }
+      const z = e.target.closest("[data-size]"); if (z) { act("timer_look", { size: z.dataset.size }); return; }
+      const p = e.target.closest("[data-place]"); if (p) { act("timer_look", { position: p.dataset.place }); return; }
+      const k = e.target.closest("[data-flag]"); if (k) act("timer_look", { [k.dataset.flag]: !state.timer.look[k.dataset.flag] }); };
+    $("t-selects").onchange = e => { const sel = e.target.closest("select"); if (!sel) return;
+      act("timer_look", { [sel.dataset.key]: sel.dataset.key === "warn" ? +sel.value : sel.value }); };
+    put("t-selects", T_SELECTS.map(([key, label, options]) => `<label class="hint" style="display:block;margin:10px 0 4px">${esc(t(label))}</label>
+      <select data-key="${key}">${options.map(([v, l]) => `<option value="${v}">${esc(t(l))}</option>`).join("")}</select>`).join(""));
+    put("t-presets", [1, 2, 3, 5, 10, 15, 20, 30, 45, 60].map(m => `<button data-min="${m}">${m} ${esc(t("min"))}</button>`).join(""));
+  },
+  draw() {
+    const tm = state.timer, f = tm.frame, look = tm.look;
+    ui.timerRole = tm.on || ui.timerRole || "main";
+    const colour = { warn: "var(--gold)", over: "var(--red)" }[f.state] || "var(--text)";
+    $("t-big").textContent = f.text; $("t-big").style.color = colour;
+    $("t-line").style.width = f.fraction == null ? "0" : (f.fraction * 100).toFixed(1) + "%";
+    $("t-state").textContent = tm.on ? tf("ON {0}", role(tm.on)) : t("NOT ON A SCREEN");
+    $("t-state").className = "status " + (tm.on ? "live" : "off");
+    const pausable = tm.mode === "countdown" || tm.mode === "stopwatch";
+    $("t-run").textContent = tm.running ? "❚❚ " + t("Pause") : (pausable ? "▶ " + t("Start") : t("Runs by itself"));
+    $("t-run").disabled = !pausable;
+    $("t-minus").disabled = $("t-plus").disabled = tm.mode !== "countdown";
+    $("t-reset").disabled = tm.mode === "clock";
+    chips("t-roles", state.roles.map(r => [r.role, r.label]), ui.timerRole, "role");
+    $("t-show").textContent = tm.on ? "■ " + tf("Take it off {0}", role(tm.on)) : "▶ " + t("Show on the screen");
+    $("t-show").className = "big " + (tm.on ? "danger" : "gold");
+    if (document.activeElement !== $("t-title")) $("t-title").value = tm.title;
+    chips("t-modes", T_MODES, tm.mode, "mode");
+    $("t-dur").style.display = tm.mode === "countdown" ? "" : "none";
+    $("t-until").style.display = tm.mode === "until" ? "" : "none";
+    if (document.activeElement !== $("t-time")) $("t-time").value = tm.until;
+    document.querySelectorAll("#t-presets [data-min]").forEach(b => b.classList.toggle("on", +b.dataset.min * 60000 === tm.duration));
+    chips("t-styles", T_STYLES, look.style, "style");
+    chips("t-sizes", T_SIZES, look.size, "size");
+    chips("t-places", T_PLACES, look.position, "place");
+    put("t-toggles", [["title", "Name"], ["clock", "Clock"], ["logo", "Logo"], ["bar", "Line"]].map(([k, l]) =>
+      `<button data-flag="${k}" class="${look[k] ? "on" : ""}">${look[k] ? "✔ " : ""}${esc(t(l))}</button>`).join(""));
+    document.querySelectorAll("#t-selects select").forEach(sel => { if (document.activeElement !== sel) sel.value = String(look[sel.dataset.key]); });
   },
 };
 

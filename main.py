@@ -172,6 +172,7 @@ import simple as simple_mod  # noqa: E402 - the simple desk
 import webstage as web_mod  # noqa: E402 - Canva, Kahoot and other web pages on the Main Stage
 import tray as tray_mod  # noqa: E402 - the icon by the clock, where the minimised desk waits
 import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage desk
+import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(APP_DIR, "presets.json")
@@ -433,7 +434,7 @@ WM_HOTKEY = 0x0312
 VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
 
 
-class ControlPanel(phone_mod.PhoneControl, QMainWindow):
+class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
     WIDE_ASPECT_THRESHOLD = 2.5
@@ -575,6 +576,7 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
         self.preset_bar = self._build_preset_bar()
         root.addWidget(self.preset_bar)
 
+        self._timer_setup()                 # before its page is built
         self.tabs = desk_mod.PageTabs()
         self.live_page = self._build_live_tab()
         self.tabs.addTab(self.live_page, tr('  Live  '))
@@ -582,6 +584,7 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
         self.tabs.addTab(self._build_presentation_tab(), tr('  Slides  '))
         self.web_tab = self._build_web_tab()
         self.tabs.addTab(self.web_tab, tr('  Web  '))
+        self.tabs.addTab(self._build_timer_page(), tr('  Timer  '))
         self.tabs.addTab(self._build_library_tab(), tr('  Library  '))
         self.text_page = self._build_text_tab()
         self.tabs.addTab(self.text_page, tr('  Text  '))
@@ -604,6 +607,7 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
                                          (self.show_tab, "list", tr("Show"), False),
                                          (self.presentation_tab, "slides", tr("Slides"), False),
                                          (self.web_tab, "globe", tr("Web"), False),
+                                         (self.timer_page, "timer", tr("Timer"), False),
                                          (self.library, "folder", tr("Library"), False),
                                          (self.text_page, "text", tr("Text"), False),
                                          (self.dj_page, "disc", "DJ", False),
@@ -918,6 +922,7 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
             self.tabs.indexOf(self.show_tab): True,
             self.tabs.indexOf(self.presentation_tab): True,
             self.tabs.indexOf(self.web_tab): True,              # Canva / Kahoot: the simple desk too
+            self.tabs.indexOf(self.timer_page): True,           # the timer: the simple desk too
             self.tabs.indexOf(self.library): not simple and not show,
             self.tabs.indexOf(self.text_page): not simple,
             self.tabs.indexOf(self.dj_page): not simple,
@@ -5108,6 +5113,8 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
         if self.web.on_stage():
             self._web_background_was_playing = False       # it all goes to black anyway
             self._web_off_stage()
+        if self._timer_role:
+            self.timer_hide()
 
         def black() -> None:
             fade = self.fade_ms()
@@ -5543,6 +5550,7 @@ class ControlPanel(phone_mod.PhoneControl, QMainWindow):
         self.main_output = self.sides_output = self.top_output = None
         winplatform.keep_awake(False)
         self._tray_ticker.stop()
+        self._timer_ticker.stop()
         self.tray.hide()                     # or its ghost stays by the clock until hovered
         event.accept()
         QApplication.quit()

@@ -476,6 +476,39 @@ A site that refuses to work in here can be opened with **Open in Edge**: Edge
 as an app window, full screen on the Main Stage's monitor (an Edge that is
 already open may put it elsewhere — Win+Shift+→ moves it across).
 
+## School timer
+
+The **Timer** page (on the simple desk and the phone too) puts a countdown on
+a stage screen — for a speech, a test, a break.
+
+- **What it counts**: a *countdown* (presets 1–60 minutes, or hours, minutes
+  and seconds), a countdown *until a time* of day (the end of a break — it
+  needs no start), a *stopwatch*, or just the *clock*. An optional name goes
+  above it (*Mathematics test*).
+- **While it runs**: Start / Pause, *From the top*, −1 / +1 minute.
+- **How it looks**, each drawn the same on the stage, in the preview and on
+  the look buttons:
+  - *School* — the hall's own timer: deep blue with a soft glow, the school's
+    logo, the clock in the corner, the name in gold, large light digits and a
+    thin gold line that fills as the time runs;
+  - *Black*, *Light* (for a bright room or a projector), *Bold* (heavy digits,
+    a thick line), *Ring* (the time inside a ring that empties), and *Over the
+    picture* (the screen's video or picture shows through).
+- **Size**: full screen, a large / medium / small box in a corner (or the
+  middle), or a band along the bottom (or top). On the ceiling strip it lies
+  along it.
+- **On it**: name, clock, logo (*Logo…* picks another picture), the line.
+- **Warning colour** in the last minute (or 2, or 5); **when the time is up**
+  it counts on in red with a "+", stops at 0:00, or flashes 0:00; and **three
+  beeps** through the hall's sound (only when it is on a screen, never during a
+  rehearsal) — or none.
+
+The timer is a layer of the stage screen above everything else: a file or a
+scene changing underneath, even a dissolve, does not disturb it, and the
+header's pictures (and the phone's) show it. BLACKOUT takes it away. During a
+rehearsal the rehearsal window shows it as well, while the hall keeps its own.
+The time, the look and the logo are remembered.
+
 ## Phone remote
 
 **Show → Phone remote** puts the running order on any phone or tablet on the
@@ -1056,6 +1089,8 @@ The running order and the remote are separate modules too; the dashboard
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link, files streamed from phones), `RemoteDialog`, `GuestDialog`, and the slide-clicker pages |
+| `school_timer.py` | The school timer: `TimerClock` (countdown, until, stopwatch, clock), `paint_timer` (every look and size), `TimerItem` (the stage layer), `TimerPage` |
+| `timer_control.py` | The dashboard's side of the timer: which screens show it, the ticks, the beeps, remembering it |
 | `phone_control.py` | The phone as a whole desk: its state, every action (screens, files, running order, slides, text, sound, scenes, web, laptops, rehearsal), the folders it may see, `UploadSink` |
 | `phone_page.py` / `phone_ka.py` | The phone's page - a home of big tiles, one page per job - and its Georgian |
 | `screenshare.py` | the laptop screen share: `ShareServer` (HTTPS, a thread), `ShareReceiver` and `ShareLink` (a Chromium page per laptop - previewed on the desk, then laid out on the Main Stage alone, side by side or picture in picture), `ShareBar` and its cards, `ShareDialog`, and the laptop's page |

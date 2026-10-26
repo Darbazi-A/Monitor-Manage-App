@@ -348,6 +348,7 @@ class PhoneControl:
                           "waiting": [{"id": r.id, "name": r.name} for r in share.waiting() if r.id not in receiver.links]
                           if share.running else [],
                           "links": links, "stage": list(receiver.stage), "layout": receiver.layout}
+        state["timer"] = self.timer_state()
         state["notice"] = dict(self._phone_notice)
         state["lang"] = language()
         return state
@@ -362,6 +363,7 @@ class PhoneControl:
         "text_show", "text_hide", "marquee", "cue_assign", "cue_stop", "cue_clear",
         "web_open", "web_stage", "web_off", "web_close", "web_key", "web_click", "web_type", "web_scroll",
         "share_on", "share_preview", "share_take", "share_decline", "share_end", "share_silence",
+        "timer_set", "timer_toggle", "timer_reset", "timer_add", "timer_show", "timer_hide", "timer_look",
     ))
 
     def phone_action(self, action: str, data: dict):
@@ -823,4 +825,50 @@ class PhoneControl:
 
     def _phone_share_silence(self, data: dict):
         self._silence_share(str(data.get("id", "")), bool(data.get("on")))
+        return True, ""
+
+    # the school timer
+    def _phone_timer_set(self, data: dict):
+        from PySide6.QtCore import QTime
+        clock = self.timer_clock
+        if "title" in data:
+            clock.title = str(data["title"]).strip()[:80]
+        if data.get("mode"):
+            clock.set_mode(str(data["mode"]))
+        if "ms" in data:
+            ms = int(data["ms"])
+            if not 1000 <= ms <= 24 * 3600 * 1000:
+                return False, tr("Choose a time between a second and a day.")
+            clock.set_duration(ms)
+        if data.get("until"):
+            when = QTime.fromString(str(data["until"]), "HH:mm")
+            if not when.isValid():
+                return False, tr("That is not a time of day.")
+            clock.set_until(when)
+        clock.changed.emit()
+        self.timer_page.refresh()
+        return True, ""
+
+    def _phone_timer_toggle(self, _data: dict):
+        self.timer_clock.toggle()
+        return True, tr("Running.") if self.timer_clock.running else tr("Paused.")
+
+    def _phone_timer_reset(self, _data: dict):
+        self.timer_clock.reset()
+        return True, tr("From the top.")
+
+    def _phone_timer_add(self, data: dict):
+        self.timer_clock.add(max(-3600000, min(3600000, int(data.get("ms", 60000)))))
+        return True, ""
+
+    def _phone_timer_show(self, data: dict):
+        return self.timer_show(self._phone_role(data))
+
+    def _phone_timer_hide(self, _data: dict):
+        return self.timer_hide()
+
+    def _phone_timer_look(self, data: dict):
+        changes = {k: v for k, v in data.items() if k in ("style", "size", "position", "clock", "logo", "bar",
+                                                          "title", "warn", "overtime", "sound")}
+        self.timer_set_look(changes)
         return True, ""

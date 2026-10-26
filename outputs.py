@@ -921,6 +921,9 @@ class SceneOutputWindow(BaseOutputWindow):
         self._position_marquee_vertically()
         self._layout_slide()
         self._layout_corner()
+        item = getattr(self, "_timer_item", None)
+        if item is not None:
+            item.set_rect(rect)
 
     def _layout_pixmap(self) -> None:
         pixmap = self._pixmap_item.pixmap()
@@ -1181,6 +1184,34 @@ class SceneOutputWindow(BaseOutputWindow):
     def corner_text(self) -> str:
         return self._corner_text.text() if self._corner_text.isVisible() else ""
 
+    # -- the school timer: a layer over everything, dissolves included ------- #
+
+    def set_timer(self, look: Optional[dict], frame: Optional[dict] = None, logo: Optional[QPixmap] = None) -> None:
+        """Show (or, with None, take away) the timer on this screen."""
+        from school_timer import TimerItem
+
+        item = getattr(self, "_timer_item", None)
+        if look is None:
+            if item is not None and item.isVisible():
+                item.setVisible(False)
+                self.picture_version += 1
+            return
+        if item is None:
+            item = TimerItem()
+            self._scene.addItem(item)
+            self._timer_item = item
+        item.set_rect(self._scene.sceneRect())
+        changed = item.set_state(look, frame or {}, logo)
+        if not item.isVisible():
+            item.setVisible(True)
+            changed = True
+        if changed:
+            self.picture_version += 1
+
+    def timer_visible(self) -> bool:
+        item = getattr(self, "_timer_item", None)
+        return item is not None and item.isVisible()
+
     def _layout_corner(self) -> None:
         rect = self._scene.sceneRect()
         if rect.isEmpty() or not self._corner_text.text():
@@ -1233,12 +1264,13 @@ class SceneOutputWindow(BaseOutputWindow):
         """Whether the picture changes by itself: video, a scrolling marquee, a fade under way."""
         return (self._video_item.isVisible() or self.is_marquee_running()
                 or self._still_anim.state() == QVariantAnimation.Running
-                or self._slide_anim.state() == QVariantAnimation.Running)
+                or self._slide_anim.state() == QVariantAnimation.Running
+                or self.timer_visible())
 
     def has_picture(self) -> bool:
         """Whether anything but black is on this screen."""
         return (self._pixmap_item.isVisible() or self._video_item.isVisible() or self.slide_visible()
-                or self.is_marquee_running() or self._bg_color.value() > 45)
+                or self.is_marquee_running() or self._bg_color.value() > 45 or self.timer_visible())
 
 
 class StandardOutputWindow(SceneOutputWindow):
