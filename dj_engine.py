@@ -353,14 +353,18 @@ class DecoderClient(QObject):
 
     # -- process ------------------------------------------------------------ #
     def _spawn(self) -> None:
-        exe = sys.executable
-        folder = os.path.dirname(exe)
-        console = os.path.join(folder, "python.exe")
-        if os.path.basename(exe).lower() == "pythonw.exe" and os.path.exists(console):
-            exe = console                       # pipes are only reliable on the console build
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dj_decoder.py")
+        if getattr(sys, "frozen", False):
+            # installed: the program's own .exe is the decoder too (see stage_display.py)
+            command = [sys.executable, "--dj-decoder"]
+        else:
+            exe = sys.executable
+            folder = os.path.dirname(exe)
+            console = os.path.join(folder, "python.exe")
+            if os.path.basename(exe).lower() == "pythonw.exe" and os.path.exists(console):
+                exe = console                   # pipes are only reliable on the console build
+            command = [exe, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dj_decoder.py")]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
-        self._proc = subprocess.Popen([exe, script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self._proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, creationflags=flags)
         reader = threading.Thread(target=self._read, args=(self._proc,), daemon=True)
         reader.start()

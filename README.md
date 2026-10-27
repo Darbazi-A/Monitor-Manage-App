@@ -109,14 +109,48 @@ Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
 
 ## Install
 
+**With the installer** (Windows 10 / 11, 64-bit): run
+`StageDisplayController-Setup-<version>.exe`. It installs for the current user —
+no administrator needed — into `AppData\Local\Programs\Stage Display
+Controller`, with a Start-menu entry, a Desktop shortcut if wanted, and an entry
+in *Settings → Apps* to uninstall it. Nothing else is needed on the PC: Python,
+Qt, Chromium (for Canva, Kahoot and the laptop share) and the video codecs come
+inside. Run with administrator rights it also lets the phone remote and the
+laptop share through the Windows firewall (private networks only); otherwise
+Windows asks the first time they are switched on.
+
+The installed program keeps the hall's files — presets, running orders, their
+backups, the laptop share's certificate — in `AppData\Roaming\StageDisplayController`.
+The first time it starts it takes a copy of the presets and running orders the
+source version used (the originals stay where they are); the settings, the PIN
+and the screens' wiring are shared already. Uninstalling removes the program and
+keeps those files for the next installation.
+
+**From source**:
+
 ```
 pip install PySide6 numpy
 python main.py
 ```
 
-Python 3.9+. Windows is the target platform; video playback uses Qt's Windows
-Media Foundation backend, so codec support is whatever the machine has (H.264 /
-MP4 is the safe choice).
+Python 3.9+. Run like this, the hall's files stay beside the code, as before.
+
+**Building the installer** (`installer\`):
+
+```
+pip install pyinstaller
+winget install JRSoftware.InnoSetup
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
+
+The version comes from `VERSION` in `config.py`. `build.ps1` makes the program
+folder (PyInstaller, `stage_display.spec` — Chromium's developer tools and
+foreign-language files left out), then has **the built program check itself**
+(`--selftest`: the desk builds, Chromium loads a page, a sound and a video codec,
+PDF slides, the DJ desk's decoder process, the phone server, where files go —
+with settings and files of its own, no stage window, no sound) and makes the
+installer (Inno Setup, `StageDisplay.iss`) only if every check passed. The
+result: `dist\installer\StageDisplayController-Setup-<version>.exe`.
 
 ## Running a show
 
@@ -1089,6 +1123,9 @@ The running order and the remote are separate modules too; the dashboard
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link, files streamed from phones), `RemoteDialog`, `GuestDialog`, and the slide-clicker pages |
+| `stage_display.py` | The installed program's entry point: the desk, the DJ decoder (`--dj-decoder`) or the self-test (`--selftest`) |
+| `selftest.py` | The built program checks itself before an installer is made |
+| `installer\` | `build.ps1`, the PyInstaller recipe, the Inno Setup script, the .exe's version information |
 | `school_timer.py` | The school timer: `TimerClock` (countdown, until, stopwatch, clock), `paint_timer` (every look and size), `TimerItem` (the stage layer), `TimerPage` |
 | `timer_control.py` | The dashboard's side of the timer: which screens show it, the ticks, the beeps, remembering it |
 | `phone_control.py` | The phone as a whole desk: its state, every action (screens, files, running order, slides, text, sound, scenes, web, laptops, rehearsal), the folders it may see, `UploadSink` |

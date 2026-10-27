@@ -134,8 +134,32 @@ if QApplication.instance() is None:
 # Constants
 # --------------------------------------------------------------------------- #
 
-APP_DIR =os.path.dirname(os.path.abspath(__file__))
-ICON_FILE = os.path.join(APP_DIR, "stage_icon.ico")
+VERSION = "1.0.0"
+APP_NAME = "Stage Display Controller"
+
+# Run from the source folder, the code and the hall's files (presets, running
+# orders, backups) live side by side, as they always have. Installed (a frozen
+# build in AppData\Local\Programs), the program's folder is not the place to
+# write: the hall's files go to AppData\Roaming\StageDisplayController.
+FROZEN = bool(getattr(sys, "frozen", False))
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+RESOURCE_DIR = getattr(sys, "_MEIPASS", APP_DIR)        # files packed with a frozen build
+ICON_FILE = os.path.join(RESOURCE_DIR, "stage_icon.ico")
+
+
+def _data_dir() -> str:
+    if os.environ.get("SDC_DATA_DIR"):              # the built program's self-test: not the hall's files
+        os.makedirs(os.environ["SDC_DATA_DIR"], exist_ok=True)
+        return os.environ["SDC_DATA_DIR"]
+    if not FROZEN:
+        return APP_DIR
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    folder = os.path.join(base, "StageDisplayController")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+DATA_DIR = _data_dir()
 
 def _readable_image_extensions() -> set:
     """

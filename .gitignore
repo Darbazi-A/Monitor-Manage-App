@@ -14,3 +14,7 @@ share_cert/
 
 # The regression tests stay on this PC: they use the hall's own media folders and devices.
 tests/
+
+# The installer's build output (installer\build.ps1)
+build/
+dist/

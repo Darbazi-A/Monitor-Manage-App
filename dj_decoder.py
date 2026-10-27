@@ -36,7 +36,21 @@ from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dj_engine as de  # noqa: E402  (shared analysis code)
 
-OUT = sys.stdout.buffer
+
+def _pipe(which: int, mode: str):
+    """
+    The installed program has no console, so Python may have left stdin /
+    stdout unset even though the desk handed us pipes: take them straight from
+    Windows (STD_INPUT_HANDLE -10, STD_OUTPUT_HANDLE -11).
+    """
+    import ctypes
+    import msvcrt
+    handle = ctypes.windll.kernel32.GetStdHandle(which)
+    return os.fdopen(msvcrt.open_osfhandle(handle, os.O_BINARY), mode)
+
+
+OUT = sys.stdout.buffer if sys.stdout is not None else _pipe(-11, "wb")
+IN = sys.stdin.buffer if sys.stdin is not None else _pipe(-10, "rb")
 
 
 def emit(message: dict) -> None:
@@ -255,7 +269,7 @@ class Worker(QObject):
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
-        for raw in sys.stdin.buffer:
+        for raw in IN:
             try:
                 self.command.emit(json.loads(raw.decode("utf-8")))
             except ValueError:

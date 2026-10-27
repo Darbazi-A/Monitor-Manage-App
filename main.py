@@ -56,6 +56,7 @@ import ctypes
 from contextlib import contextmanager
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -175,8 +176,8 @@ import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage des
 import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
                   new_step, summary as step_summary)
-PRESET_FILE = os.path.join(APP_DIR, "presets.json")
-SHOW_FILE = os.path.join(APP_DIR, "shows.json")
+PRESET_FILE = os.path.join(DATA_DIR, "presets.json")
+SHOW_FILE = os.path.join(DATA_DIR, "shows.json")
 
 # Per-user "run at login" entry. HKCU needs no administrator rights, and it
 # starts nothing until the operator ticks the box in Screens & Setup.
@@ -190,7 +191,7 @@ DEFAULT_STARTUP_DELAY = 20
 # QSettings scope. Tests override these so a test run cannot rewrite the
 # operator's real preferences.
 SETTINGS_ORG = "StageDisplayController"
-SETTINGS_APP = "StageDisplayController"
+SETTINGS_APP = os.environ.get("SDC_SETTINGS_APP") or "StageDisplayController"   # the self-test's own
 
 
 # --------------------------------------------------------------------------- #
@@ -514,7 +515,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self._remote_dialog = None
         self._guest_dialog = None
         # Laptop screen share: laptops ask over HTTPS, the picture comes over WebRTC.
-        self.share = share_mod.ShareServer(os.path.join(APP_DIR, "share_cert"), self)
+        self.share = share_mod.ShareServer(os.path.join(DATA_DIR, "share_cert"), self)
         self.share_receiver = share_mod.ShareReceiver(self)
         self._share_dialog = None
         # A web page (Canva, Kahoot) got ready on the desk, then shown on the Main Stage.
@@ -1502,7 +1503,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
     def restart_app(self) -> None:
         """Close properly (it asks first if screens are live), then start again - without the autostart."""
         if self.close():
-            QProcess.startDetached(sys.executable, [os.path.abspath(__file__)])
+            # installed, the program is its own .exe; from source, python runs this file
+            QProcess.startDetached(sys.executable, [] if FROZEN else [os.path.abspath(__file__)])
 
     def _build_backups_card(self) -> QWidget:
         card = QFrame()
@@ -5579,10 +5581,36 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return options
 
 
+def adopt_hall_files(settings: QSettings) -> None:
+    """
+    Run from source, say where the hall's presets and running orders are. The
+    installed program, started for the first time with none of its own, takes
+    a copy of them from there - the originals stay where they are. (Settings,
+    the PIN and the screens' wiring live in the registry: both already share them.)
+    """
+    if not FROZEN:
+        settings.setValue("app/source_dir", APP_DIR)
+        return
+    if os.path.exists(PRESET_FILE) or os.path.exists(SHOW_FILE):
+        return
+    source = str(settings.value("app/source_dir", "") or "")
+    if not source or not os.path.isdir(source):
+        return
+    for name in ("presets.json", "shows.json"):
+        old = os.path.join(source, name)
+        if os.path.isfile(old):
+            try:
+                shutil.copy2(old, os.path.join(DATA_DIR, name))
+            except OSError:
+                pass
+
+
 def main() -> int:
     options = parse_args(sys.argv[1:])
     app = QApplication(sys.argv)
     app.setApplicationName("Stage Display Controller")
+    app.setApplicationVersion(VERSION)
+    adopt_hall_files(QSettings(SETTINGS_ORG, SETTINGS_APP))
     # the interface's language, before a single window is built
     set_language(str(QSettings(SETTINGS_ORG, SETTINGS_APP).value("ui/language", "en") or "en"))
     app.setStyle("Fusion")
