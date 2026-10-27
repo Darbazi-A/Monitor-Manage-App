@@ -1361,8 +1361,8 @@ class RehearsalMonitor(QWidget):
         screens = QHBoxLayout()
         screens.setSpacing(12)
         strip = QVBoxLayout()
-        for role, cls in ((ROLE_MAIN, StandardOutputWindow), (ROLE_SIDES, StandardOutputWindow),
-                          (ROLE_TOP, TopOutputWindow)):
+        for role, cls in ((role, TopOutputWindow if role == ROLE_TOP else StandardOutputWindow)
+                          for role in STAGE_ROLES):
             window = cls(tr("{0} (rehearsal)").format(ROLE_LABELS[role]))
             window.setWindowFlags(Qt.Widget)
             window.setCursor(Qt.ArrowCursor)

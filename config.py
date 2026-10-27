@@ -134,7 +134,7 @@ if QApplication.instance() is None:
 # Constants
 # --------------------------------------------------------------------------- #
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 APP_NAME = "Stage Display Controller"
 
 # Run from the source folder, the code and the hall's files (presets, running
@@ -225,23 +225,111 @@ MEDIA_FILTER = (
 # otherwise lock the interface for seconds while it is unpacked.
 MAX_IMAGE_PIXELS = 40_000_000
 
+# --------------------------------------------------------------------------- #
+# The hall: which stage screens there are (hall.json beside the hall's files)
+# --------------------------------------------------------------------------- #
+# A hall is a list of screens. The first is always the Main Stage ("main") - the
+# one presentations, Canva and laptops go to. A screen is a plain "screen", or
+# the one "strip": a wide LED band with the running text, driven at its own
+# canvas size. Without a hall.json the hall is the one this program was made
+# for: Main Stage, Side Screens and the ceiling strip (ids main / sides / top),
+# so presets and running orders keep their meaning. The hall is read once, at
+# start; Settings -> Hall writes a new one and restarts the program.
+
+MAX_SCREENS = 8
+SCREEN_KINDS = ("screen", "strip")
+DEFAULT_HALL = {
+    "name": "",
+    "screens": [
+        {"id": "main", "name": "Main Stage", "kind": "screen", "note": "large central screen"},
+        {"id": "sides", "name": "Side Screens", "kind": "screen", "note": "left + right, mirrored"},
+        {"id": "top", "name": "Top Screen", "kind": "strip", "note": "ceiling LED strip", "width": 2818, "height": 132},
+    ],
+}
+
+
+def hall_file() -> str:
+    return os.environ.get("SDC_HALL_FILE") or os.path.join(DATA_DIR, "hall.json")
+
+
+def clean_hall(data) -> dict:
+    """A hall that can be used: known keys, unique ids, the Main Stage first, at most one strip."""
+    import copy
+    import re
+    screens = []
+    seen = set()
+    strip_taken = False
+    for entry in (data or {}).get("screens", []) if isinstance(data, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        sid = str(entry.get("id", "")).strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,15}", sid) or sid in seen or sid == "control":
+            continue
+        kind = entry.get("kind") if entry.get("kind") in SCREEN_KINDS else "screen"
+        if kind == "strip":
+            if strip_taken:
+                kind = "screen"
+            strip_taken = True if kind == "strip" else strip_taken
+        screen = {"id": sid, "name": str(entry.get("name") or sid).strip()[:40] or sid, "kind": kind,
+                  "note": str(entry.get("note") or "")[:60]}
+        for key in ("width", "height"):
+            try:
+                if int(entry.get(key) or 0) > 0:
+                    screen[key] = int(entry[key])
+            except (TypeError, ValueError):
+                pass
+        if entry.get("monitor"):
+            screen["monitor"] = str(entry["monitor"])[:120]
+        seen.add(sid)
+        screens.append(screen)
+        if len(screens) >= MAX_SCREENS:
+            break
+    if not screens or "main" not in seen:
+        return copy.deepcopy(DEFAULT_HALL) if not screens else clean_hall(
+            {"name": data.get("name", ""), "screens": [dict(screens[0], id="main")] + screens[1:]})
+    screens.sort(key=lambda s: s["id"] != "main")          # the Main Stage first
+    if screens[0]["kind"] == "strip":
+        screens[0]["kind"] = "screen"                       # the Main Stage is never a strip
+    return {"name": str(data.get("name", ""))[:60], "screens": screens}
+
+
+def load_hall() -> dict:
+    import copy
+    import json
+    try:
+        with open(hall_file(), encoding="utf-8") as handle:
+            return clean_hall(json.load(handle))
+    except (OSError, ValueError):
+        return copy.deepcopy(DEFAULT_HALL)
+
+
+HALL = load_hall()
+SCREENS = {screen["id"]: screen for screen in HALL["screens"]}
+
 ROLE_CONTROL = "control"
 ROLE_MAIN = "main"
-ROLE_SIDES = "sides"
-ROLE_TOP = "top"
+STAGE_ROLES = tuple(screen["id"] for screen in HALL["screens"])
+# the hall's LED strip with the running text, if it has one
+ROLE_TOP = next((s["id"] for s in HALL["screens"] if s["kind"] == "strip"), None)
+# the one screen beside the Main Stage that the original hall's shortcuts and
+# file sorting call "sides" (portrait clips go there), if there is such a screen
+ROLE_SIDES = "sides" if "sides" in SCREENS else next(
+    (s["id"] for s in HALL["screens"][1:] if s["kind"] == "screen"), None)
 
-STAGE_ROLES = (ROLE_MAIN, ROLE_SIDES, ROLE_TOP)
-
-ROLE_LABELS = Labels({         # answers in the chosen language
+ROLE_LABELS = Labels({         # answers in the chosen language (a hall's own names stay as typed)
     ROLE_CONTROL: "Control Panel",
-    ROLE_MAIN: "Main Stage",
-    ROLE_SIDES: "Side Screens",
-    ROLE_TOP: "Top Screen",
+    **{screen["id"]: screen["name"] for screen in HALL["screens"]},
 })
+SCREEN_NOTES = {screen["id"]: screen.get("note", "") for screen in HALL["screens"]}
 
-# The LED strip's real canvas, as mapped in Nova Studio - NOT what Windows reports.
-DEFAULT_TOP_WIDTH = 2818
-DEFAULT_TOP_HEIGHT = 132
+
+def is_strip(role: Optional[str]) -> bool:
+    return bool(role) and SCREENS.get(role, {}).get("kind") == "strip"
+
+
+# The LED strip's real canvas, as mapped in its processor (Nova Studio) - NOT what Windows reports.
+DEFAULT_TOP_WIDTH = int(SCREENS.get(ROLE_TOP, {}).get("width") or 2818)
+DEFAULT_TOP_HEIGHT = int(SCREENS.get(ROLE_TOP, {}).get("height") or 132)
 
 # Transition lengths, total.
 FADE_PRESETS = (("Off (hard cut)", 0), ("Fast", 240), ("Normal", 500), ("Slow", 1000))

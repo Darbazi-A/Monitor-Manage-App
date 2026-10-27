@@ -1,11 +1,46 @@
 # Stage Display Controller
 
 A multi-screen playback controller for a school assembly hall stage, written in
-Python with PySide6 (Qt 6). One operator dashboard drives three stage outputs.
+Python with PySide6 (Qt 6). One operator dashboard drives every stage screen of
+the hall — videos, pictures, presentations, Canva and Kahoot, laptops, names,
+running text, a timer and the sound — from the desk, the simple desk for
+guests, or a teacher's phone.
+
+**Download:** the installer is on the [Releases](../../releases/latest) page
+(`StageDisplayController-Setup-<version>.exe`, Windows 10 / 11, 64-bit — see
+[Install](#install)). What changed in each version: [CHANGELOG](CHANGELOG.md).
 
 ![Live tab](docs/live.png)
 
-## The setup it drives
+## Any hall
+
+The program was made for one hall — the one below — and sets itself up for any
+other: **Settings → Hall → Set up the hall…**
+
+- **Find the screens** lists the monitors connected now (all but the desk's):
+  the biggest becomes the Main Stage, a very wide one the LED strip.
+  **Show numbers on the monitors** puts a big number on each, to tell them apart.
+- Up to **eight screens**, each with its own name (*Stage left*, *Foyer*,
+  *ფოიე*) and kind: a plain **screen**, or the one **LED strip** with the running
+  text, driven at its own canvas size. The first is always the **Main Stage** —
+  presentations, Canva, Kahoot and laptops go there.
+- Saving restarts the program with the new hall. Everything follows: a card per
+  screen on the Live page, a picture per screen in the header, the wiring in
+  Settings → Screens, the number keys 1–8, the running order's steps, the scenes,
+  the library and *Build a show from a folder* (a file named after a screen goes
+  there), the rehearsal window, the compact bar, the simple desk, the timer, text
+  and the phone.
+- **Save to a file…** puts the hall, its scenes and running orders in one
+  `.stagehall` file; **Open a file…** on another computer brings them in.
+- A new installation opens the wizard by itself the first time.
+
+The hall lives in `hall.json` beside the hall's files. Without one the hall is
+this one — Main Stage, Side Screens and the ceiling strip — so nothing changes
+here. How many videos can play at once is the graphics card's limit: this
+hall's GTX 760 plays three 1080p videos side by side easily; a hall with six
+screens of video wants a newer card (or pictures on some of them).
+
+## The setup it was made for
 
 | Output | Screen | Notes |
 | --- | --- | --- |
@@ -1123,6 +1158,7 @@ The running order and the remote are separate modules too; the dashboard
 | --- | --- |
 | `show.py` | steps, `fold` (the state a step lands in), `ShowStore`, and the Show tab: NOW / NEXT, the step list and its editor |
 | `remote.py` | `RemoteServer` (QTcpServer, PIN, lock-out, guest link, files streamed from phones), `RemoteDialog`, `GuestDialog`, and the slide-clicker pages |
+| `hall.py` | Setting a hall up: the wizard (find the screens, number them, name them, the strip), saving and opening `.stagehall` files; the hall itself is read by `config.py` |
 | `stage_display.py` | The installed program's entry point: the desk, the DJ decoder (`--dj-decoder`) or the self-test (`--selftest`) |
 | `selftest.py` | The built program checks itself before an installer is made |
 | `installer\` | `build.ps1`, the PyInstaller recipe, the Inno Setup script, the .exe's version information |

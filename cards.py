@@ -767,8 +767,9 @@ class TopCard(OutputCard):
     marqueeStart = Signal()
     marqueeStop = Signal()
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__("Top Screen", "ceiling LED strip", ScaleMode.CROP, parent)
+    def __init__(self, title: str = "Top Screen", subtitle: str = "ceiling LED strip",
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(title, subtitle, ScaleMode.CROP, parent)
         self._bg_color = QColor("#101828")
         self._text_color = QColor("#ffd23f")
 

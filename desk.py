@@ -297,17 +297,18 @@ class ScreenTile(QWidget):
 
 
 class MultiView(QWidget):
-    """The three stage screens side by side, as the audience sees them."""
+    """The hall's stage screens side by side, as the audience sees them."""
 
     def __init__(self, labels: Dict[str, str], aspects: Dict[str, float], theme: dict) -> None:
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(12)
+        row.setSpacing(12 if len(labels) <= 4 else 8)
         self.tiles: Dict[str, ScreenTile] = {}
+        many = len(labels) > 4                  # a big hall: smaller pictures, so the header still fits
         for role, label in labels.items():
             aspect = aspects.get(role, 16 / 9)
-            width = 250 if aspect > 3 else 120
+            width = (190 if many else 250) if aspect > 3 else (92 if many else 120)
             tile = ScreenTile(role, label, aspect, theme, width)
             row.addWidget(tile)
             self.tiles[role] = tile

@@ -263,6 +263,7 @@ async function pic(key, url, img) {
 function toast(text, bad) { const el = $("toast"); el.textContent = text; el.classList.toggle("bad", !!bad); el.classList.add("show");
   clearTimeout(el._h); el._h = setTimeout(() => el.classList.remove("show"), 2600); }
 function put(el, html) { if (typeof el === "string") el = $(el); if (el && el._html !== html) { el._html = html; el.innerHTML = html; } }
+function isStrip(r) { const s = screen(r); return !!s && s.kind === "strip"; }
 function role(r) { return (state && state.roles.find(x => x.role === r) || { label: r }).label; }
 function screen(r) { return state && state.screens.find(s => s.role === r); }
 function go(v, extra) { stack.push(Object.assign({ v }, extra || {})); ui.sel = -1; build(); window.scrollTo(0, 0); }
@@ -351,13 +352,13 @@ function build() { const c = cur(); $("view").innerHTML = ""; $("view")._html = 
 function draw() { const c = cur(); frame(); (V[c.v] || V.home).draw(c); }
 
 function mvHtml() { return `<div class="mv" id="mv">` + state.screens.map(sc =>
-  `<div class="t ${sc.role === "top" ? "top" : ""}" id="mv-${sc.role}" data-go="${sc.role}"><img alt=""><span class="lab">${esc(sc.label)}</span><span class="tag"></span></div>`).join("") + `</div>`; }
+  `<div class="t ${sc.kind === "strip" ? "top" : ""}" id="mv-${sc.role}" data-go="${sc.role}"><img alt=""><span class="lab">${esc(sc.label)}</span><span class="tag"></span></div>`).join("") + `</div>`; }
 function tag(stateName) { return ({ live: t("ON AIR"), black: t("BLACK"), closed: t("CLOSED"), rehearsal: t("REHEARSAL") })[stateName] || stateName; }
 function drawMv() {
   const mv = $("mv"); if (!mv) return;
   for (const sc of state.screens) {
     const el = $("mv-" + sc.role); if (!el) continue;
-    el.className = `t ${sc.role === "top" ? "top" : ""} ${sc.state}`;
+    el.className = `t ${sc.kind === "strip" ? "top" : ""} ${sc.state}`;
     el.querySelector(".tag").textContent = tag(sc.state);
     const img = el.querySelector("img");
     if (sc.state === "closed") { img.removeAttribute("src"); continue; }
@@ -404,7 +405,7 @@ V.home = {
 
 /* SCREEN */
 V.screen = {
-  build(c) { $("view").innerHTML = `<div class="shot ${c.role === "top" ? "top" : ""}" id="s-shot"><img id="s-img" alt=""></div>
+  build(c) { $("view").innerHTML = `<div class="shot ${isStrip(c.role) ? "top" : ""}" id="s-shot"><img id="s-img" alt=""></div>
     <div class="card"><div class="cap" id="s-state"></div><div class="ell" id="s-file" style="font-size:17px;font-weight:700"></div><div class="hint" id="s-text"></div></div>
     <div class="row" style="margin-bottom:12px"><button class="gold big" id="s-pick">📁 ${esc(t("Show a file"))}</button><button class="big" id="s-black">${esc(t("Black"))}</button></div>
     <div class="card" id="s-video"><div class="cap">${esc(t("Video"))}</div>
@@ -425,7 +426,7 @@ V.screen = {
   },
   draw(c) {
     const sc = screen(c.role); if (!sc) return;
-    $("s-shot").className = `shot ${c.role === "top" ? "top" : ""} ${sc.state}`;
+    $("s-shot").className = `shot ${isStrip(c.role) ? "top" : ""} ${sc.state}`;
     if (sc.state !== "closed") pic(sc.version + (sc.moving ? ":" + Math.floor(Date.now() / 1000) : ""), `/api/screen?role=${c.role}`, $("s-img"));
     $("s-state").textContent = tag(sc.state);
     $("s-file").textContent = sc.open ? (sc.file || t("nothing - black")) : t("This screen is closed");

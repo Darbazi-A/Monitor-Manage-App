@@ -613,10 +613,8 @@ class EventFolderDialog(QDialog):
     row - an import that silently guessed wrong would be worse than no import.
     """
 
-    DEST_LABELS = (
-        ("Main Stage", ROLE_MAIN),
-        ("Side Screens", ROLE_SIDES),
-        ("Top Screen", ROLE_TOP),
+    # every screen of the hall, then a sound cue, or nothing
+    DEST_LABELS = tuple((dict.__getitem__(ROLE_LABELS, role), role) for role in STAGE_ROLES) + (
         ("Sound cue", "sound"),
         ("Skip", "skip"),
     )

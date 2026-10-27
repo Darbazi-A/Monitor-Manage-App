@@ -696,6 +696,8 @@ class PhoneControl:
         return True, tr("Text hidden.")
 
     def _phone_marquee(self, data: dict):
+        if not ROLE_TOP:
+            return False, tr("This hall has no LED strip for running text.")
         if self.top_output is None:
             return False, tr("{0} is closed - open the screens first.").format(ROLE_LABELS[ROLE_TOP])
         if data.get("on"):

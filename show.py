@@ -29,8 +29,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QScrollArea, QSizePolicy, QSpinBox, QStyle,
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
-ROLES = ("main", "sides", "top")
-ROLE_NAMES = {"main": "Main Stage", "sides": "Side Screens", "top": "Top Screen"}
+from config import ROLE_LABELS, STAGE_ROLES  # noqa: E402 - the hall's screens
+
+ROLES = STAGE_ROLES
+ROLE_NAMES = {role: dict.__getitem__(ROLE_LABELS, role) for role in ROLES}      # as typed; tr() at use
+SHORT_NAMES = {"main": "Main", "sides": "Sides", "top": "Top"}
 
 SCREEN_MODES = (("keep", "Leave as it is"), ("file", "Show a file"), ("black", "Black"))
 SOUND_MODES = (("keep", "Leave as it is"), ("play", "Play a sound"),
@@ -109,7 +112,8 @@ def fold(steps: List[dict], index: int) -> dict:
 def summary(step: dict) -> str:
     """One line saying what a step does."""
     parts = []
-    for role, short in (("main", "Main"), ("sides", "Sides"), ("top", "Top")):
+    for role in ROLES:
+        short = SHORT_NAMES.get(role, ROLE_NAMES[role])
         screen = step["screens"][role]
         if screen["mode"] == "file":
             parts.append(f"{tr(short)}: {os.path.basename(screen['path']) or '?'}")

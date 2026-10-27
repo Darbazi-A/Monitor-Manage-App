@@ -173,8 +173,9 @@ import simple as simple_mod  # noqa: E402 - the simple desk
 import webstage as web_mod  # noqa: E402 - Canva, Kahoot and other web pages on the Main Stage
 import tray as tray_mod  # noqa: E402 - the icon by the clock, where the minimised desk waits
 import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage desk
+import hall as hall_mod  # noqa: E402 - setting a hall up: its screens
 import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
-from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files,  # noqa: E402
+from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files, normalise_step,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(DATA_DIR, "presets.json")
 SHOW_FILE = os.path.join(DATA_DIR, "shows.json")
@@ -439,7 +440,41 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
     WIDE_ASPECT_THRESHOLD = 2.5
-    OUTPUT_ATTRS = {ROLE_MAIN: "main_output", ROLE_SIDES: "sides_output", ROLE_TOP: "top_output"}
+
+    # The stage windows, one per screen of the hall (config.STAGE_ROLES). The
+    # Main Stage, the "sides" screen and the LED strip keep their old names, for
+    # the many places that mean exactly those.
+    @property
+    def main_output(self):
+        return self._windows.get(ROLE_MAIN)
+
+    @main_output.setter
+    def main_output(self, window) -> None:
+        self._set_window(ROLE_MAIN, window)
+
+    @property
+    def sides_output(self):
+        return self._windows.get(ROLE_SIDES) if ROLE_SIDES else None
+
+    @sides_output.setter
+    def sides_output(self, window) -> None:
+        if ROLE_SIDES:
+            self._set_window(ROLE_SIDES, window)
+
+    @property
+    def top_output(self):
+        return self._windows.get(ROLE_TOP) if ROLE_TOP else None
+
+    @top_output.setter
+    def top_output(self, window) -> None:
+        if ROLE_TOP:
+            self._set_window(ROLE_TOP, window)
+
+    def _set_window(self, role: str, window) -> None:
+        if window is None:
+            self._windows.pop(role, None)
+        else:
+            self._windows[role] = window
 
     def __init__(self) -> None:
         super().__init__()
@@ -450,9 +485,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         available = QGuiApplication.primaryScreen().availableGeometry()
         self.resize(min(1380, available.width() - 60), min(940, available.height() - 60))
 
-        self.main_output: Optional[StandardOutputWindow] = None
-        self.sides_output: Optional[StandardOutputWindow] = None
-        self.top_output: Optional[TopOutputWindow] = None
+        self._windows: Dict[str, SceneOutputWindow] = {}     # screen -> its stage window, when open
 
         self.routing_rows: Dict[str, RoutingRow] = {}
         self.presets = PresetStore()
@@ -712,8 +745,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         clock_timer.start(1000)
 
         # What the audience sees, on every screen, all the time.
-        aspects = {ROLE_MAIN: 16 / 9, ROLE_SIDES: 16 / 9,
-                   ROLE_TOP: DEFAULT_TOP_WIDTH / DEFAULT_TOP_HEIGHT}
+        aspects = {role: (DEFAULT_TOP_WIDTH / DEFAULT_TOP_HEIGHT if role == ROLE_TOP else 16 / 9)
+                   for role in STAGE_ROLES}
         self.multiview = desk_mod.MultiView({role: ROLE_LABELS[role] for role in STAGE_ROLES},
                                             aspects, THEME)
         for tile in self.multiview.tiles.values():
@@ -1623,7 +1656,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             window.engine.set_volume(card.volume_slider.value())
             window.engine.set_muted(card.mute_btn.isChecked())
             window.set_scale_mode(card.current_scale_mode())
-            setattr(self, self.OUTPUT_ATTRS[role], window)
+            self._set_window(role, window)
         self._rehearsal = monitor
         # the running order gets its own music players, so the hall's keep playing
         self._show_players = [SoundCue(-3, self), SoundCue(-4, self)]
@@ -1686,7 +1719,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             window = self._show_output(role)
             if window is not None:
                 window.engine.clear()
-            setattr(self, self.OUTPUT_ATTRS[role], before["outputs"][role])
+            self._set_window(role, before["outputs"][role])
         self._rehearsal = None
         self.presenter.rehearsing = False
         monitor.hide()
@@ -2056,10 +2089,11 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             return True
 
         cover(outputs.get(ROLE_MAIN, {}).get("file", ""), QRect(0, 0, 176, 99))
-        top_rect = QRect(0, 0, 176, 9)
-        if not cover(outputs.get(ROLE_TOP, {}).get("file", ""), top_rect):
-            painter.fillRect(top_rect, QColor(payload.get("top", {}).get("background", "#101828")))
-        sides = outputs.get(ROLE_SIDES, {}).get("file", "")
+        if ROLE_TOP:
+            top_rect = QRect(0, 0, 176, 9)
+            if not cover(outputs.get(ROLE_TOP, {}).get("file", ""), top_rect):
+                painter.fillRect(top_rect, QColor(payload.get("top", {}).get("background", "#101828")))
+        sides = outputs.get(ROLE_SIDES, {}).get("file", "") if ROLE_SIDES else ""
         if sides:
             inset = QRect(6, 99 - 6 - 27, 48, 27)
             painter.fillRect(inset.adjusted(-1, -1, 1, 1), QColor(CLR_BG))
@@ -2125,20 +2159,36 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         outer.setSpacing(11)
 
         screens = QWidget()
-        layout = QHBoxLayout(screens)
+        layout = QGridLayout(screens)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(11)
 
-        self.main_card = OutputCard("Main Stage", "large central screen", ScaleMode.FIT)
-        self._wire_card(self.main_card, ROLE_MAIN)
-        layout.addWidget(self.main_card, 1)
-
-        self.sides_card = OutputCard("Side Screens", "left + right, mirrored", ScaleMode.CROP)
-        self._wire_card(self.sides_card, ROLE_SIDES)
-        layout.addWidget(self.sides_card, 1)
-
-        self.top_card = TopCard()
-        self._wire_card(self.top_card, ROLE_TOP)
+        # One card per screen of the hall: up to three side by side (four screens
+        # make two rows of two); the LED strip's card, the tallest, always beside them.
+        self.cards: Dict[str, OutputCard] = {}
+        plain = [role for role in STAGE_ROLES if role != ROLE_TOP]
+        per_row = len(plain) if len(plain) <= 3 else (2 if len(plain) == 4 else 3)
+        for index, role in enumerate(plain):
+            card = OutputCard(ROLE_LABELS[role], SCREEN_NOTES.get(role, ""),
+                              ScaleMode.FIT if role == ROLE_MAIN else ScaleMode.CROP)
+            self._wire_card(card, role)
+            row, column = divmod(index, per_row)
+            layout.addWidget(card, row, column)
+            self.cards[role] = card
+        # The strip's card is built even in a hall without a strip: the running
+        # text, its colours and the presets keep one place to live (it is not shown).
+        self.top_card = TopCard(ROLE_LABELS[ROLE_TOP] if ROLE_TOP else "Top Screen",
+                                SCREEN_NOTES.get(ROLE_TOP, "") if ROLE_TOP else "ceiling LED strip")
+        if ROLE_TOP:
+            self._wire_card(self.top_card, ROLE_TOP)
+            layout.addWidget(self.top_card, 0, per_row, max(1, (len(plain) + per_row - 1) // per_row), 1)
+            self.cards[ROLE_TOP] = self.top_card
+        else:
+            self.top_card.hide()
+        for column in range(per_row + (1 if ROLE_TOP else 0)):
+            layout.setColumnStretch(column, 1)
+        self.main_card = self.cards[ROLE_MAIN]
+        self.sides_card = self.cards.get(ROLE_SIDES) if ROLE_SIDES else None
         self.top_card.colorRequested.connect(self._on_top_colour)
         self.top_card.marqueeTextChanged.connect(
             lambda text: self.top_output and self.top_output.set_marquee_text(text)
@@ -2160,13 +2210,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         for changed in (self.top_card.marqueeTextChanged, self.top_card.marqueeColorChanged,
                         self.top_card.marqueeSpeedChanged, self.top_card.colorRequested):
             changed.connect(lambda *_a: self._mark_preset_dirty())
-        layout.addWidget(self.top_card, 1)
 
-        self.cards: Dict[str, OutputCard] = {
-            ROLE_MAIN: self.main_card,
-            ROLE_SIDES: self.sides_card,
-            ROLE_TOP: self.top_card,
-        }
         for role, card in self.cards.items():
             card.activated.connect(lambda bound=role: self.set_active_role(bound))
 
@@ -2282,7 +2326,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             return
         role = self.active_role
         card = self.cards[role]
-        window = getattr(self, self.OUTPUT_ATTRS[role], None)
+        window = self._windows.get(role)
         playing = False
         if window is not None:
             states = getattr(QMediaPlayer, "PlaybackState", None)
@@ -2331,7 +2375,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         return self.show_tab
 
     def _show_output(self, role: str):
-        return getattr(self, self.OUTPUT_ATTRS[role], None)
+        return self._windows.get(role)
 
     def _cached_thumb(self, path: str, width: int = 112, height: int = 64) -> Optional[QPixmap]:
         """Small pictures for lists that repaint often: made once, kept."""
@@ -2424,7 +2468,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         needed = [role for role in STAGE_ROLES if target["screens"][role] is not None]
         if target["text"] is not None and target["text"]["mode"] == "show":
             needed.append(target["text"].get("target") or ROLE_MAIN)
-        if target["marquee"] is not None and target["marquee"]["mode"] == "start":
+        if target["marquee"] is not None and target["marquee"]["mode"] == "start" and ROLE_TOP:
             needed.append(ROLE_TOP)
         closed = [role for role in needed if self._show_output(role) is None
                   and self.routing_rows[role].screen_combo.currentData()]
@@ -3081,7 +3125,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         for role in STAGE_ROLES:
             path = self.cards[role].current_path()
             state, moving, version = self._screen_state(role)
-            screens.append({"role": role, "label": ROLE_LABELS[role],
+            screens.append({"role": role, "label": ROLE_LABELS[role], "kind": "strip" if role == ROLE_TOP else "screen",
                             "open": self._show_output(role) is not None,
                             "file": os.path.basename(path) if path else "",
                             "state": state, "moving": moving, "version": version})
@@ -3189,7 +3233,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
     def _slide_output(self):
         role = self.text_slides.target.currentData() or ROLE_MAIN
-        return role, getattr(self, self.OUTPUT_ATTRS[role], None)
+        return role, self._windows.get(role)
 
     @Slot(str, str)
     def _show_slide(self, title: str, subtitle: str) -> None:
@@ -3315,7 +3359,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             # Only screens that actually have a window; otherwise this would
             # fire one "output not open" dialog per screen, in a row.
             open_roles = [r for r in STAGE_ROLES
-                          if getattr(self, self.OUTPUT_ATTRS[r], None) is not None]
+                          if self._windows.get(r) is not None]
             with self._direct():
                 for role in open_roles:
                     card = self.cards[role]
@@ -3668,10 +3712,10 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             # clicker expects; otherwise they keep their stage meaning.
             return lambda: self._clicker_key(name, fallback)
 
-        bindings = (
-            ("1", lambda: self.set_active_role(ROLE_MAIN)),
-            ("2", lambda: self.set_active_role(ROLE_SIDES)),
-            ("3", lambda: self.set_active_role(ROLE_TOP)),
+        # 1, 2, 3 … choose a screen, in the hall's order
+        screen_keys = tuple((str(number), lambda r=role: self.set_active_role(r))
+                            for number, role in enumerate(STAGE_ROLES[:9], start=1))
+        bindings = screen_keys + (
             ("Space", clicker_or("Space", self._toggle_active_playback)),
             ("Right", clicker_or("Right", lambda: self._active_card().playlist.step(1))),
             ("Left", clicker_or("Left", lambda: self._active_card().playlist.step(-1))),
@@ -3702,7 +3746,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.setContext(Qt.ApplicationShortcut)
             shortcut.activated.connect(handler)
-            if key in ("1", "2", "3", "Space", "Left", "Right"):
+            if key.isdigit() or key in ("Space", "Left", "Right"):
                 self._stage_shortcuts.append(shortcut)
 
         # Other keys clickers send, live only while slides are on screen.
@@ -4122,7 +4166,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
     @Slot()
     def _toggle_active_playback(self) -> None:
-        window = getattr(self, self.OUTPUT_ATTRS[self.active_role], None)
+        window = self._windows.get(self.active_role)
         if window is None:
             return
         player = window.engine.player
@@ -4159,6 +4203,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self.settings_stack = QStackedWidget()
         outer.addWidget(self.settings_stack, 1)
         sections = (
+            ("target", tr('Hall'), tr("The hall's stage screens: how many, their names, which is the LED strip."),
+             (self._build_hall_card(),)),
             ("monitor", tr('Screens'), tr('Which monitor is which stage screen, and the stage windows themselves.'),
              (self._build_routing_card(),)),
             ("image", tr('Picture & show'), tr('How pictures change on the stage, and how carefully.'),
@@ -4215,6 +4261,67 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             box.addWidget(heading)
         return card, box
 
+    # -- the hall ------------------------------------------------------------------- #
+
+    def _build_hall_card(self) -> QWidget:
+        card, box = self._settings_card(tr('The hall'))
+        lines = [f"{number}.  {ROLE_LABELS[role]}" + (tr("   ·   LED strip, running text") if role == ROLE_TOP else "")
+                 + (tr("   ·   presentations, Canva, laptops") if role == ROLE_MAIN else "")
+                 for number, role in enumerate(STAGE_ROLES, start=1)]
+        title = HALL.get("name") or tr("This hall")
+        summary = QLabel(f"<b>{title}</b><br>" + "<br>".join(lines))
+        summary.setTextFormat(Qt.RichText)
+        box.addWidget(summary)
+        note = QLabel(tr('A different hall - more or fewer screens, other names - is set up here. The program then '
+                         'restarts with it; the scenes and running orders keep what they had for the screens that stay.'))
+        note.setObjectName("cardHint")
+        note.setWordWrap(True)
+        box.addWidget(note)
+        row = QHBoxLayout()
+        setup = QPushButton(tr('  Set up the hall…'))
+        setup.setObjectName("primary")
+        setup.setIcon(Icons.get("monitor", CLR_INK, 16))
+        setup.clicked.connect(self.open_hall_setup)
+        row.addWidget(setup)
+        row.addStretch(1)
+        box.addLayout(row)
+        return card
+
+    def open_hall_setup(self) -> None:
+        dialog = hall_mod.HallDialog(HALL, self, identify=self._identify_screens,
+                                     extras=self._hall_extras, take_extras=self._take_hall_extras)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        answer = QMessageBox.question(
+            self, tr('The hall'),
+            tr('The hall is saved. The program restarts to use it - now?\n\n(Screens that are live close for a moment.)'))
+        if answer == QMessageBox.Yes:
+            self.restart_app()
+
+    def _hall_extras(self) -> dict:
+        """What a hall file carries besides the screens: the scenes and the running orders."""
+        return {"presets": {name: self.presets.get(name) for name in self.presets.names()},
+                "shows": dict(self.show_store.shows)}
+
+    def _take_hall_extras(self, data: dict) -> str:
+        """A hall file's scenes and running orders join this computer's (same names: theirs win)."""
+        presets = data.get("presets") if isinstance(data.get("presets"), dict) else {}
+        for name, payload in presets.items():
+            if isinstance(payload, dict):
+                self.presets.put(str(name), payload)
+        if presets:
+            self._write_presets()
+        shows = data.get("shows") if isinstance(data.get("shows"), dict) else {}
+        added = 0
+        for name, show in shows.items():
+            if isinstance(show, dict) and isinstance(show.get("steps"), list):
+                self.show_store.shows[str(name)] = {"steps": [normalise_step(s) for s in show["steps"]]}
+                added += 1
+        if added:
+            self.show_store.save()
+            self.show_tab._fill_show_combo()
+        return tr('{0} scene(s) and {1} running order(s) added.').format(len(presets), added) if presets or added else ""
+
     def _build_routing_card(self) -> QWidget:
         card, card_layout = self._settings_card(tr('Display routing'))
         note = QLabel(
@@ -4224,7 +4331,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         note.setWordWrap(True)
         card_layout.addWidget(note)
 
-        for role in (ROLE_CONTROL, ROLE_MAIN, ROLE_SIDES, ROLE_TOP):
+        for role in (ROLE_CONTROL,) + STAGE_ROLES:
             row = RoutingRow(role, allow_custom=(role != ROLE_CONTROL))
             row.onTopChanged.connect(self._on_output_on_top_changed)
             self.routing_rows[role] = row
@@ -4647,7 +4754,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         """Connect a card's signals to whichever output window that role owns."""
 
         def output():
-            return getattr(self, self.OUTPUT_ATTRS[role], None)
+            return self._windows.get(role)
 
         def on_load(path: str) -> None:
             if output() is None:
@@ -4750,7 +4857,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         card = self.cards.get(role)
         path = card.current_path() if card else ""      # before the card forgets it
         name = os.path.basename(path) if path else "the clip"
-        window = getattr(self, self.OUTPUT_ATTRS[role], None)
+        window = self._windows.get(role)
         if window is not None:
             window.clear_output()      # do not leave a frozen half-frame on stage
         if card is not None:
@@ -4886,17 +4993,26 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
         top_screen = None
         wide = [screen for screen in candidates if aspect(screen) >= self.WIDE_ASPECT_THRESHOLD]
-        if wide:
+        if wide and ROLE_TOP:
             top_screen = max(wide, key=aspect)
             candidates.remove(top_screen)
 
+        # the hall's screens in its own order, the biggest monitors first
         candidates.sort(key=area, reverse=True)
-        chosen = {
-            ROLE_CONTROL: primary,
-            ROLE_MAIN: candidates[0] if len(candidates) > 0 else None,
-            ROLE_SIDES: candidates[1] if len(candidates) > 1 else None,
-            ROLE_TOP: top_screen,
-        }
+        chosen = {ROLE_CONTROL: primary}
+        plain = [role for role in STAGE_ROLES if role != ROLE_TOP]
+        for index, role in enumerate(plain):
+            chosen[role] = candidates[index] if index < len(candidates) else None
+        if ROLE_TOP:
+            chosen[ROLE_TOP] = top_screen
+        # a hall set up in Settings -> Hall names its monitors: those come first
+        by_name = {screen.name(): screen for screen in screens}
+        for role in STAGE_ROLES:
+            wanted = SCREENS[role].get("monitor")
+            if wanted in by_name:
+                chosen[role] = by_name[wanted]
+                if role == ROLE_TOP:
+                    top_screen = by_name[wanted]
 
         for role, screen in chosen.items():
             row = self.routing_rows[role]
@@ -4906,11 +5022,12 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
                 geo = screen.geometry()
                 row.set_size(geo.width(), geo.height())
 
-        # The ceiling strip's mapped canvas, not what Windows reports.
-        top_row = self.routing_rows[ROLE_TOP]
-        top_row.set_size(DEFAULT_TOP_WIDTH, DEFAULT_TOP_HEIGHT)
-        top_row.mode_combo.setCurrentIndex(1 if top_screen is not None else 0)
-        self.top_card.size_spin.setValue(max(24, int(DEFAULT_TOP_HEIGHT * 0.72)))
+        if ROLE_TOP:
+            # The LED strip's mapped canvas, not what Windows reports.
+            top_row = self.routing_rows[ROLE_TOP]
+            top_row.set_size(DEFAULT_TOP_WIDTH, DEFAULT_TOP_HEIGHT)
+            top_row.mode_combo.setCurrentIndex(1 if top_screen is not None else 0)
+            self.top_card.size_spin.setValue(max(24, int(DEFAULT_TOP_HEIGHT * 0.72)))
 
     @Slot()
     def _copy_reported_sizes(self) -> None:
@@ -4963,15 +5080,11 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
         self._freshly_opened = set()   # filled by _ensure_output below
 
-        specs = (
-            (ROLE_MAIN, StandardOutputWindow, "Main Stage Output", self.main_card),
-            (ROLE_SIDES, StandardOutputWindow, "Side Screens Output", self.sides_card),
-            (ROLE_TOP, TopOutputWindow, "Top Screen Output", self.top_card),
-        )
-        for role, cls, title, card in specs:
-            attr = self.OUTPUT_ATTRS[role]
-            window = self._ensure_output(role, getattr(self, attr), assignments[role], cls, title, card)
-            setattr(self, attr, window)
+        for role in STAGE_ROLES:
+            cls = TopOutputWindow if role == ROLE_TOP else StandardOutputWindow
+            title = f"{ROLE_LABELS[role]} Output"
+            window = self._ensure_output(role, self._windows.get(role), assignments[role], cls, title, self.cards[role])
+            self._set_window(role, window)
 
         if self.top_output is not None:
             self._push_top_settings()
@@ -5030,7 +5143,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         because there is nothing to dissolve away from.
         """
         for role, card in self.cards.items():
-            window = getattr(self, self.OUTPUT_ATTRS[role], None)
+            window = self._windows.get(role)
             path = card.current_path()
             if window is None or not path or not os.path.isfile(path):
                 continue
@@ -5049,10 +5162,10 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         Without this the panel would keep sending media to a hidden window -
         which looks exactly like a screen that has gone black.
         """
-        window = getattr(self, self.OUTPUT_ATTRS[role], None)
+        window = self._windows.get(role)
         if window is not None:
             window.deleteLater()
-        setattr(self, self.OUTPUT_ATTRS[role], None)
+        self._set_window(role, None)
         self._update_output_status()
         self.statusBar().showMessage(
             tr('{0} closed with Escape — press OPEN OUTPUTS to bring it back.').format(title), 8000
@@ -5083,7 +5196,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
     @Slot(str, bool)
     def _on_output_on_top_changed(self, role: str, on_top: bool) -> None:
         """Apply a stacking change live, without reopening the whole routing."""
-        window = getattr(self, self.OUTPUT_ATTRS.get(role, ""), None)
+        window = self._windows.get(role)
         if window is None:
             return
         window.set_always_on_top(on_top)
@@ -5104,7 +5217,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             window.clear_output()
             window.force_close()
             window.deleteLater()
-        self.main_output = self.sides_output = self.top_output = None
+        self._windows.clear()
         self._update_output_status()
         self.statusBar().showMessage(tr('All stage outputs closed.'), 5000)
 
@@ -5130,7 +5243,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self.statusBar().showMessage(tr('BLACKOUT — every stage screen cleared.  (Ctrl+Z puts it back)'), 6000)
 
     def _outputs(self):
-        return [w for w in (self.main_output, self.sides_output, self.top_output) if w is not None]
+        return [self._windows[role] for role in STAGE_ROLES if self._windows.get(role) is not None]
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -5142,7 +5255,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         # show can pass without a touch of the mouse, and Windows dims screens after ten minutes.
         winplatform.keep_awake(bool(self._outputs()))
         for role in STAGE_ROLES:
-            is_open = getattr(self, self.OUTPUT_ATTRS[role], None) is not None
+            is_open = self._windows.get(role) is not None
             if role in getattr(self, "cards", {}):
                 self.cards[role].set_output_open(is_open)
         if hasattr(self, "cards"):
@@ -5549,7 +5662,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             window.clear_output()
             window.force_close()
             window.deleteLater()
-        self.main_output = self.sides_output = self.top_output = None
+        self._windows.clear()
         winplatform.keep_awake(False)
         self._tray_ticker.stop()
         self._timer_ticker.stop()
@@ -5596,7 +5709,7 @@ def adopt_hall_files(settings: QSettings) -> None:
     source = str(settings.value("app/source_dir", "") or "")
     if not source or not os.path.isdir(source):
         return
-    for name in ("presets.json", "shows.json"):
+    for name in ("presets.json", "shows.json", "hall.json"):
         old = os.path.join(source, name)
         if os.path.isfile(old):
             try:
@@ -5625,6 +5738,9 @@ def main() -> int:
     panel.show()
     if options.preset:
         panel.run_autostart(options.preset, options.delay)
+    elif FROZEN and not os.path.exists(hall_file()) and not os.path.exists(PRESET_FILE):
+        # installed on a new computer: nothing set up yet - start with the hall's screens
+        QTimer.singleShot(900, panel.open_hall_setup)
 
     return app.exec()
 

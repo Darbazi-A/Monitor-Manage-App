@@ -258,11 +258,16 @@ def _check_video(path: str, extension: str) -> None:
 # Words that say which screen a file belongs to, in the two languages the
 # material is actually named in. Checked against the file name and every folder
 # above it, which is why "VIDEO ZEDA" and "ფონი გვერდების" land correctly.
-ROLE_HINTS = {
-    ROLE_TOP: ("top", "zeda", "\u10d6\u10d4\u10d3\u10d0", "ceiling", "strip", "\u10ed\u10d4\u10e0"),
-    ROLE_SIDES: ("side", "gverd", "\u10d2\u10d5\u10d4\u10e0\u10d3", "left", "right"),
-    ROLE_MAIN: ("main", "centre", "center", "\u10ea\u10d4\u10dc\u10e2\u10e0", "\u10db\u10d7\u10d0\u10d5\u10d0\u10e0"),
-}
+ROLE_HINTS = {}
+# a hall's own screen names come first ("Stage left", "\u10e4\u10dd\u10d8\u10d4"): the most particular words
+for _screen in HALL["screens"]:
+    if _screen["id"] not in (ROLE_MAIN, ROLE_SIDES, ROLE_TOP) and len(_screen["name"]) >= 3:
+        ROLE_HINTS[_screen["id"]] = (_screen["name"].lower(),)
+if ROLE_TOP:
+    ROLE_HINTS[ROLE_TOP] = ("top", "zeda", "\u10d6\u10d4\u10d3\u10d0", "ceiling", "strip", "\u10ed\u10d4\u10e0")
+if ROLE_SIDES:
+    ROLE_HINTS[ROLE_SIDES] = ("side", "gverd", "\u10d2\u10d5\u10d4\u10e0\u10d3", "left", "right")
+ROLE_HINTS[ROLE_MAIN] = ("main", "centre", "center", "\u10ea\u10d4\u10dc\u10e2\u10e0", "\u10db\u10d7\u10d0\u10d5\u10d0\u10e0")
 
 # Shape thresholds. The ceiling clips really are 2816x128 and the side clips
 # really are 256x640, so the media sorts itself if you just look at it.
@@ -344,9 +349,9 @@ def classify_media(path: str, size: Optional[QSize] = None,
 
     if size is not None and size.height():
         ratio = size.width() / size.height()
-        if ratio >= WIDE_RATIO:
+        if ratio >= WIDE_RATIO and ROLE_TOP:
             return ROLE_TOP
-        if ratio <= TALL_RATIO:
+        if ratio <= TALL_RATIO and ROLE_SIDES:
             return ROLE_SIDES
     return ROLE_MAIN
 

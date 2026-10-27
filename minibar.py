@@ -162,7 +162,10 @@ class MiniBar(QWidget):
         top.addSpacing(2)
 
         self.screen_buttons: Dict[str, QPushButton] = {}
-        for role, short in ((ROLE_MAIN, "Main"), (ROLE_SIDES, "Sides"), (ROLE_TOP, "Top")):
+        # the original hall's short words; any other screen goes by its number
+        short_words = {"main": "Main", "sides": "Sides", "top": "Top"}
+        for number, role in enumerate(STAGE_ROLES, start=1):
+            short = short_words.get(role, str(number))
             button = QPushButton(tr(short))
             button.setObjectName("miniScreen")
             button.setCheckable(True)
