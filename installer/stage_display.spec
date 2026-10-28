@@ -12,7 +12,8 @@ a = Analysis(
     # imported by name inside functions, or only by the DJ decoder process
     hiddenimports=["dj_decoder", "selftest", "i18n_ka", "phone_ka", "remote_ka", "school_timer",
                    "PySide6.QtPdf", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
-                   "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.QtNetwork"],
+                   "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets", "PySide6.QtNetwork",
+                   "PySide6.QtWebSockets", "cloud", "cloud_control"],
     hookspath=[],
     runtime_hooks=[],
     # nothing here uses these; leaving them out keeps the program smaller

@@ -1,0 +1,28 @@
+# Stage Cloud - the dashboard for every hall (Cloudflare Workers + Durable Objects, free plan)
+#   npx wrangler dev        on this computer: http://127.0.0.1:8787  (SETUP_KEY in .dev.vars)
+#   npx wrangler deploy     on the internet:  https://stage-cloud.<account>.workers.dev
+name = "stage-cloud"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*", "/hall/*"]
+not_found_handling = "single-page-application"
+
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "Directory"
+
+[[durable_objects.bindings]]
+name = "HALL"
+class_name = "Hall"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Directory", "Hall"]
+
+[observability]
+enabled = true

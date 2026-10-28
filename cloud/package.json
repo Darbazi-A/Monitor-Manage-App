@@ -1,0 +1,14 @@
+{
+  "name": "stage-cloud",
+  "private": true,
+  "type": "module",
+  "description": "Stage Cloud: every hall's Stage Display Controller on one website (Cloudflare Workers + Durable Objects)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/words_test.cjs && node test/with_server.mjs test/server_test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.154.0"
+  }
+}

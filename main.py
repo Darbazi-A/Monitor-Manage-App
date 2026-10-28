@@ -179,6 +179,7 @@ import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage des
 import hall as hall_mod  # noqa: E402 - setting a hall up: its screens
 import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
 import updater as update_mod  # noqa: E402 - new versions from GitHub, installed when the desk says so
+import cloud_control as cloud_ctl_mod  # noqa: E402 - Stage Cloud: every hall on one dashboard
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files, normalise_step,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(DATA_DIR, "presets.json")
@@ -440,7 +441,7 @@ WM_HOTKEY = 0x0312
 VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
 
 
-class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWindow):
+class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl_mod.CloudControl, QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
     WIDE_ASPECT_THRESHOLD = 2.5
@@ -534,6 +535,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self._relaunch_by_installer = False
         self._update_announced = ""
         self._updates_section = 0
+        self._cloud_setup()                  # Stage Cloud: this hall on the dashboard of every hall
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -724,10 +726,19 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self.update_chip.clicked.connect(lambda: self.open_settings(self._updates_section))
         self.update_chip.hide()
         self.statusBar().addPermanentWidget(self.update_chip)
+        self.cloud_chip = QPushButton(tr(" Cloud"))   # connected to Stage Cloud: a click opens Settings → Cloud
+        self.cloud_chip.setIcon(Icons.get("globe", CLR_OK, 15))
+        self.cloud_chip.setFlat(True)
+        self.cloud_chip.setCursor(Qt.PointingHandCursor)
+        self.cloud_chip.setToolTip(tr("Connected to Stage Cloud"))
+        self.cloud_chip.clicked.connect(lambda: self.open_settings(self._cloud_section))
+        self.cloud_chip.hide()
+        self.statusBar().addPermanentWidget(self.cloud_chip)
         self.statusBar().addPermanentWidget(self.health)
         if self._updates_auto() and not os.environ.get("SDC_NO_UPDATE_CHECK"):
             self.updater.start_schedule()
         self._refresh_updates()
+        QTimer.singleShot(1500, self._cloud_start)
         self._health_timer = QTimer(self)
         self._health_timer.timeout.connect(self._refresh_health)
         self._health_timer.start(2000)
@@ -4391,12 +4402,15 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
              (self._build_security_card(),)),
             ("save", tr('Backups'), tr('Copies of the presets and running orders, taken before they change.'),
              (self._build_backups_card(),)),
+            ("globe", tr('Cloud'), tr('This hall on the dashboard of every hall - and run from there, from anywhere.'),
+             (self._build_cloud_card(),)),
             ("refresh", tr('Updates'), tr('New versions of the program, from the internet.'),
              (self._build_updates_card(),)),
             ("help", tr('Help'), tr('Keys, and how a show is run.'),
              (self._build_help_card(),)),
         )
         self._updates_section = [section[1] for section in sections].index(tr('Updates'))
+        self._cloud_section = [section[1] for section in sections].index(tr('Cloud'))
         for icon, name, lead, cards in sections:
             self.settings_nav.addItem(QListWidgetItem(Icons.get(icon, CLR_DIM, 18), name))
             section = QWidget()
@@ -5006,6 +5020,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
     def _report_media_problem(self, role: str, path: str, problem: MediaProblem) -> None:
         """One clear dialog instead of a frozen or blank screen."""
+        self._cloud_event(tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title))
         if hasattr(self, "_phone_sent") and self.phone_owns_problem(role):
             # asked for from a phone: the phone hears about it (a dialog would wait at an empty desk)
             text = tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title)
@@ -5797,7 +5812,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
     def closeEvent(self, event) -> None:  # noqa: N802
         """Closing the control panel tears down every stage window, then quits."""
         live = self._outputs()
-        if live:
+        if live and not self._cloud_closing:     # the cloud's Install now: asked on the dashboard already
             # Quitting mid-show blacks out the hall; make it a deliberate act.
             answer = QMessageBox.question(
                 self,
@@ -5821,6 +5836,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
             self.presenter.deck.stop()
         pres_mod.release_powerpoint()        # and the hidden PowerPoint behind it, once idle
         self.remote.stop()
+        self.cloud.stop()
         self._end_all_shares(tr("The stage desk closed."))
         self.share.stop()
         self.share_receiver.shutdown()

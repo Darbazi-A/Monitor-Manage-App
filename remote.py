@@ -328,7 +328,10 @@ class RemoteServer(QObject):
             return refused[0], refused[1], "application/json"
         offered = headers.get("x-guest", "")
         guest = bool(offered) and bool(self.guest) and secrets.compare_digest(offered, self.guest)
+        return self.serve(method, path, params, body, guest)
 
+    def serve(self, method: str, path: str, params: dict, body: bytes, guest: bool = False):
+        """The phone page's API, once whoever asks is known: the PIN here, or the cloud (cloud.py)."""
         if path == "/api/state" and method == "GET":
             if guest:
                 return 200, _json({"slides": self.state().get("slides", {}), "guest": True}), "application/json"

@@ -3,6 +3,19 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.3.0 — 2026-10-28 · Stage Cloud
+
+- **Every hall on one website.** [Stage Cloud](cloud/README.md) shows which halls are on, their
+  version, their screens and what is on them, the running order and problems — from anywhere.
+- From there: look for an update, install it, show the operator a message — and the **remote
+  desk**: the hall's own phone remote over the internet (screens, files from the browser,
+  running order, slides, text, sound, scenes, web pages, laptops).
+- People sign in as viewers, operators or administrators; everything done goes in a journal.
+- In the hall: *Settings → Cloud* — the address and a code, **Pair**. The connection comes back
+  by itself. *Allow running this hall from the dashboard* can be switched off; whatever the
+  website does is shown at the desk, with who did it.
+- The website runs on Cloudflare's free plan (`cloud\`).
+
 ## 1.2.0 — 2026-10-28 · Updates by themselves
 
 - **The program updates itself.** It looks for a new version on GitHub a little

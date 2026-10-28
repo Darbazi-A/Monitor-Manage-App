@@ -22,6 +22,7 @@ WORK = tempfile.mkdtemp(prefix="sdc-selftest-")
 os.environ["SDC_SETTINGS_APP"] = "StageDisplayControllerSELFTEST"
 os.environ["SDC_DATA_DIR"] = os.path.join(WORK, "data")
 os.environ["SDC_NO_UPDATE_CHECK"] = "1"   # never asks GitHub, never downloads
+os.environ["SDC_NO_CLOUD"] = "1"          # never connects to Stage Cloud
 
 results = []
 
@@ -160,6 +161,18 @@ def run(report: str) -> int:
     check("updates: a release is understood", sample is not None and sample.sha256 == "ab"
           and updater.is_newer(sample.version, VERSION), sample)
     check("updates: not looked for in the self-test", not panel.updater.scheduled())
+
+    # Stage Cloud: the WebSocket is there, the status is written, the phone page is served (no network)
+    try:
+        from PySide6.QtWebSockets import QWebSocket
+        QWebSocket().deleteLater()
+        status = panel.cloud_status()
+        page = panel.cloud_rpc("GET", "/", {}, b"", "self-test")
+        check("Stage Cloud: WebSockets, the status, the remote desk's page",
+              status["summary"]["version"] == VERSION and page[0] == 200 and b"<html" in page[1][:300].lower()
+              and panel.cloud.state == "off", status["summary"].get("screens"))
+    except Exception:  # noqa: BLE001
+        check("Stage Cloud: WebSockets, the status, the remote desk's page", False, traceback.format_exc())
 
     # the presets go to the right place
     panel.presets.put("Self-test", panel._collect_preset())

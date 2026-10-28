@@ -799,6 +799,27 @@ order, fire the eight cues, silence the sound, blackout. Cue buttons light green
 while playing and gold while paused, exactly as the full pads do. ⤢ brings the
 dashboard back where it was.
 
+## Stage Cloud: every hall on one website
+
+[Stage Cloud](cloud/README.md) is a website for all the halls at once: which are on, their
+version, their screens and what is on them, the running order and problems — and, from
+anywhere, not only the hall's Wi-Fi: **look for an update**, **install it**, **a message for
+the operator**, and the **remote desk** — the hall's own phone remote, over the internet
+(the screens, files sent from the browser, the running order, slides, text, sound, scenes,
+Canva and Kahoot, laptops). People sign in with a name and password as *viewers*, *operators*
+or *administrators*; everything done goes in a journal.
+
+In the hall, once: *Settings → Cloud* — the website's address and the code it gives for this
+hall (*Add a hall*), then **Pair**. From then on the program connects by itself (and comes
+back by itself after a break), says how the hall is doing every 30 seconds and the moment a
+file will not play. **Allow running this hall from the dashboard** can be switched off there:
+the website then only looks. Whatever the website does shows at the desk — for a minute the
+cloud chip in the status bar says who did what, and its tooltip keeps the last few. A message
+opens on the desk and by the clock. *Leave the cloud…* forgets the pairing.
+
+The website runs on Cloudflare's free plan; [cloud/README.md](cloud/README.md) has how to put
+it online.
+
 ## Minimised: the icon by the clock
 
 The app keeps a small icon by the clock (the notification area). The window's
@@ -1187,6 +1208,9 @@ The running order and the remote are separate modules too; the dashboard
 | `stage_display.py` | The installed program's entry point: the desk, the DJ decoder (`--dj-decoder`) or the self-test (`--selftest`) |
 | `selftest.py` | The built program checks itself before an installer is made |
 | `updater.py` | Updates: the newest GitHub release, its installer downloaded and checked in the background, run silently when the desk closes |
+| `cloud.py` | Stage Cloud's connection: pairing with a code, the WebSocket (back by itself), status, answering commands and the remote desk |
+| `cloud_control.py` | The dashboard's side of Stage Cloud: the status it sends, the commands and remote desk it allows, Settings → Cloud |
+| `cloud\` | The Stage Cloud website itself (Cloudflare Worker + Durable Objects) — see [cloud/README.md](cloud/README.md) |
 | `installer\` | `build.ps1`, `release.ps1` (publish a version), the PyInstaller recipe, the Inno Setup script, the .exe's version information |
 | `school_timer.py` | The school timer: `TimerClock` (countdown, until, stopwatch, clock), `paint_timer` (every look and size), `TimerItem` (the stage layer), `TimerPage` |
 | `timer_control.py` | The dashboard's side of the timer: which screens show it, the ticks, the beeps, remembering it |
