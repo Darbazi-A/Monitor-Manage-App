@@ -811,7 +811,7 @@ or *administrators*; everything done goes in a journal.
 
 In the hall, once: *Settings → Cloud* — the website's address and the code it gives for this
 hall (*Add a hall*), then **Pair**. From then on the program connects by itself (and comes
-back by itself after a break), says how the hall is doing every 30 seconds and the moment a
+back by itself after a break), says how the hall is doing within seconds of a change (a screen, a file, a step) and the moment a
 file will not play. **Allow running this hall from the dashboard** can be switched off there:
 the website then only looks. Whatever the website does shows at the desk — for a minute the
 cloud chip in the status bar says who did what, and its tooltip keeps the last few. A message

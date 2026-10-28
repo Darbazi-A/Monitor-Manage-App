@@ -128,7 +128,9 @@ class CloudControl:
             return 403, _json({"ok": False, "message": tr(
                 "Running this hall from the dashboard is switched off here (Settings → Cloud).")}), "application/json"
         if path in ("/", "/index.html"):
-            return 200, phone_page.render(language()), "text/html; charset=utf-8"
+            # in the website's language (the hall's own messages stay in the hall's)
+            wanted = params.get("lang") if params.get("lang") in ("en", "ka") else language()
+            return 200, phone_page.render(wanted), "text/html; charset=utf-8"
         if path == "/api/upload" and method == "POST":
             return self._cloud_upload(params, body, user)
         if method == "POST" and path == "/api/action":

@@ -3,6 +3,15 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.3.1 — 2026-10-28 · Stage Cloud, at once
+
+- A change in the hall — a screen opened or closed, another file, the next step — reaches Stage
+  Cloud within seconds, not at the next half-minute.
+- The remote desk opens in the website's language.
+- The website itself is new: made for a phone first (tabs at the bottom, sheets from below, an
+  app on the home screen), a sidebar on a computer, live pictures of each hall's screens,
+  ready-made messages, a journal by day in Georgian, light and dark.
+
 ## 1.3.0 — 2026-10-28 · Stage Cloud
 
 - **Every hall on one website.** [Stage Cloud](cloud/README.md) shows which halls are on, their

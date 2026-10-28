@@ -9,6 +9,22 @@ It runs on Cloudflare's free plan: a Worker (the site and its API) and Durable O
 *directory* with the people, halls and journal; one object per hall, which keeps the hall's
 WebSocket and passes the remote desk's requests to it). Nothing to maintain, no server.
 
+## On a phone and on a computer
+
+The site is made for a phone first: tabs at the bottom (Halls, Journal, People, Account), big
+buttons, actions in sheets that slide up from below, and *Add to Home screen* makes it an app
+(it has its own icon and opens full screen). From 900 px wide the tabs become a sidebar.
+
+- **Halls**: how many are on and how many need attention (offline, a problem, an update
+  waiting) — a tap filters by it; a search once there are more than four. Each card shows the
+  screens and what is on them, what is running now, the first problem, and **Control**.
+- **A hall**: **live pictures of its screens** (every few seconds, while the hall allows the
+  remote desk), Control / Message (with ready-made messages) / Update or Install, problems and
+  events, the computer, the journal; rename, pair again and remove under ⋯.
+- **The remote desk** in the website's language; on a computer it sits in a phone-sized frame.
+- The journal by day, in Georgian or English; people with their roles explained; light, dark or
+  as the device is.
+
 ## How it fits together
 
 ```

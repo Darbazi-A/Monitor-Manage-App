@@ -51,6 +51,32 @@ const KA = {
   "Password (8 or more characters)": "პაროლი (8 ან მეტი სიმბოლო)", "Change my password": "ჩემი პაროლის შეცვლა",
   "Password now": "ახლანდელი პაროლი", "New password (8 or more characters)": "ახალი პაროლი (8 ან მეტი სიმბოლო)",
   "Changing it signs you out everywhere.": "შეცვლისას ყველგან გამოხვალთ ანგარიშიდან.",
+  // the new look
+  "{0} d ago": "{0} დღის წინ", "Today": "დღეს", "Yesterday": "გუშინ", "slide {0} of {1}": "სლაიდი {0} / {1}",
+  "+{0} more": "+{0} კიდევ", "Waiting for the hall's computer: Settings → Cloud, address and code.": "ველოდებით დარბაზის კომპიუტერს: Settings → Cloud, მისამართი და კოდი.",
+  "Control": "მართვა", "all halls": "ყველა დარბაზი", "need attention": "ყურადღება სჭირდება", "Find a hall…": "დარბაზის ძებნა…",
+  "No halls yet": "დარბაზები ჯერ არ არის", "No hall matches.": "ასეთი დარბაზი ვერ მოიძებნა.",
+  "Add a hall here, then type its code in the hall's program: Settings → Cloud.": "დაამატეთ დარბაზი აქ, მერე მისი კოდი ჩაწერეთ დარბაზის პროგრამაში: Settings → Cloud.",
+  "An administrator adds the halls.": "დარბაზებს ადმინისტრატორი ამატებს.",
+  "On the hall's computer open Stage Display Controller → Settings → Cloud.": "დარბაზის კომპიუტერზე გახსენით Stage Display Controller → Settings → Cloud.",
+  "Type the address and the code below, then Pair.": "ჩაწერეთ ქვემოთ მოცემული მისამართი და კოდი, მერე დააჭირეთ Pair-ს.",
+  "Copy": "კოპირება", "Copied.": "დაკოპირდა.", "Code": "კოდი", "The code works once, for 30 minutes.": "კოდი ერთხელ მუშაობს, 30 წუთის განმავლობაში.",
+  "Give it a name everyone knows - you get a code for its computer.": "დაარქვით სახელი, რომელსაც ყველა იცნობს - მიიღებთ კოდს მისი კომპიუტერისთვის.",
+  "e.g. Assembly hall": "მაგ. საკონფერენციო დარბაზი", "More": "მეტი", "Message": "შეტყობინება", "On the stage now": "სცენაზე ახლა",
+  "offline": "გათიშულია", "pictures need the remote desk": "სურათებს დისტანციური მართვა სჭირდება", "…": "…",
+  "Message for the operator": "შეტყობინება ოპერატორს", "It opens on the hall's desk and by its clock, with your name.": "გამოჩნდება დარბაზის მაგიდაზე და საათთან, თქვენი სახელით.",
+  "Write a message…": "დაწერეთ შეტყობინება…", "Send": "გაგზავნა", "Install version {0}?": "დავაყენო ვერსია {0}?",
+  "The program closes, installs and opens again - about a minute with the stage screens dark.": "პროგრამა დაიხურება, დაყენდება და თავიდან გაიხსნება - დაახლოებით ერთი წუთი, სცენის ეკრანები ჩაბნელებული.",
+  "Pair again (new code)": "ხელახლა დაკავშირება (ახალი კოდი)", "Remove the hall": "დარბაზის წაშლა", "Pair again": "ხელახლა დაკავშირება",
+  "connecting…": "უკავშირდება…", "All halls": "ყველა დარბაზი", "Sees every hall and what is on its screens.": "ხედავს ყველა დარბაზს და რა გადის მათ ეკრანებზე.",
+  "Also sends messages and updates, and runs halls from the remote desk.": "ასევე აგზავნის შეტყობინებებს და განახლებებს, და დისტანციურად მართავს დარბაზებს.",
+  "Also adds halls and people.": "ასევე ამატებს დარბაზებსა და ადამიანებს.", "New password": "ახალი პაროლი",
+  "They can no longer sign in.": "ის ვეღარ შევა საიტზე.", "Give them the password yourself; they can change it under Account.": "პაროლი თავად გადაეცით; შეცვლა „ანგარიშში“ შეუძლია.",
+  "Look": "იერსახე", "Language": "ენა", "Theme": "თემა", "Auto": "ავტო", "Light": "ღია", "Dark": "მუქი",
+  "Welcome": "მოგესალმებით", "Install": "დაყენება", "Update": "განახლება",
+  "The event starts in 10 minutes.": "ღონისძიება 10 წუთში იწყება.", "Please check the microphones.": "გთხოვთ, შეამოწმეთ მიკროფონები.",
+  "Please open the stage screens.": "გთხოვთ, ჩართეთ სცენის ეკრანები.", "Please call me.": "გთხოვთ, დამირეკეთ.",
+  "The next speaker is ready.": "შემდეგი გამომსვლელი მზადაა.",
   // the cloud's answers
   "wrong setup key": "დაყენების გასაღები არასწორია", "already set up": "უკვე შექმნილია", "name and role": "სახელი და როლი",
   "password: at least 8 characters": "პაროლი: მინიმუმ 8 სიმბოლო", "that name is taken": "ეს სახელი დაკავებულია",
@@ -74,4 +100,29 @@ function setLang(code) {
   try { localStorage.setItem("stageCloudLang", lang); } catch (e) { /* */ }
 }
 const t = text => (lang === "ka" && KA[text]) || text;
+
+// the journal's lines, as the cloud writes them (English), in Georgian
+const JOURNAL_KA = [
+  [/^signed in from (.+)$/, "შევიდა ($1)"],
+  [/^hall computer paired from (.+)$/, "დარბაზის კომპიუტერი დაკავშირდა ($1)"],
+  [/^pairing code made$/, "შეიქმნა დაკავშირების კოდი"],
+  [/^hall added: (.+)$/, "დაემატა დარბაზი: $1"],
+  [/^hall removed: (.+)$/, "წაიშალა დარბაზი: $1"],
+  [/^renamed: (.+)$/, "სახელი შეიცვალა: $1"],
+  [/^user added: (.+) \((\w+)\)(?: from (.+))?$/, (_, n, r) => `დაემატა ${n} (${t(r)})`],
+  [/^user removed: (.+)$/, "წაიშალა მომხმარებელი: $1"],
+  [/^role of (.+): (\w+)$/, (_, n, r) => `${n} - როლი: ${t(r)}`],
+  [/^own password changed$/, "შეცვალა საკუთარი პაროლი"],
+  [/^password of (.+) reset$/, "$1-ს შეეცვალა პაროლი"],
+  [/^file sent: (.+)$/, "გაიგზავნა ფაილი: $1"],
+  [/^remote: (.+)$/, "დისტანციურად: $1"],
+  [/^message: (.+) → (.+)$/, (_, m, r) => `შეტყობინება: ${m} → ${r === "ok" ? "შესრულდა" : r}`],
+  [/^check_update → (.+)$/, (_, r) => `განახლების შემოწმება → ${r === "ok" ? "შესრულდა" : r}`],
+  [/^install_update → (.+)$/, (_, r) => `განახლების დაყენება → ${r === "ok" ? "შესრულდა" : r}`],
+];
+const jt = text => {
+  if (lang !== "ka") return text;
+  for (const [pattern, replacement] of JOURNAL_KA) if (pattern.test(text)) return text.replace(pattern, replacement);
+  return text;
+};
 const tf = (text, ...args) => t(text).replace(/\{(\d)\}/g, (_, i) => args[i] ?? "");

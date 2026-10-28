@@ -28,7 +28,8 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QAbstractSocket, QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 
-STATUS_MS = 30_000                   # how often the hall says how it is
+STATUS_MS = 30_000                   # how often the hall says how it is, anyway
+WATCH_MS = 3_000                     # and a change (a screen, a file, a step) is told within this
 PING_MS = 25_000                     # keeps proxies from closing a quiet connection
 RETRY_MS = (3_000, 6_000, 15_000, 30_000, 60_000)
 TIMEOUT_S = 20
@@ -71,6 +72,9 @@ class CloudLink(QObject):
         self.socket.errorOccurred.connect(self._on_error)
         self._status_timer = QTimer(self)
         self._status_timer.timeout.connect(self.send_status)
+        self._watch_timer = QTimer(self)
+        self._watch_timer.timeout.connect(self._watch)
+        self._last_summary = ""
         self._ping_timer = QTimer(self)
         self._ping_timer.timeout.connect(lambda: self._send({"t": "ping"}))
         self._retry = QTimer(self)
@@ -156,6 +160,7 @@ class CloudLink(QObject):
     def _stop(self) -> None:
         self._retry.stop()
         self._status_timer.stop()
+        self._watch_timer.stop()
         self._ping_timer.stop()
         if self.socket.state() != QAbstractSocket.UnconnectedState:
             self.socket.close()
@@ -165,10 +170,12 @@ class CloudLink(QObject):
         self._set(ONLINE)
         self.send_status()
         self._status_timer.start(STATUS_MS)
+        self._watch_timer.start(WATCH_MS)
         self._ping_timer.start(PING_MS)
 
     def _on_disconnected(self) -> None:
         self._status_timer.stop()
+        self._watch_timer.stop()
         self._ping_timer.stop()
         if not self.is_paired() or self.state in (OFF, UNPAIRED, CONNECTING):
             return                                    # never connected: _on_error looks into it
@@ -235,13 +242,24 @@ class CloudLink(QObject):
         self.socket.sendTextMessage(json.dumps(message, ensure_ascii=False))
         return True
 
-    def send_status(self) -> None:
+    def _collect(self) -> dict:
+        try:
+            return self.status()
+        except Exception as error:  # noqa: BLE001 - a status is never worth a crash
+            return {"summary": {"error": str(error)}}
+
+    def send_status(self, status: dict = None) -> None:
         if self.state == ONLINE:
-            try:
-                status = self.status()
-            except Exception as error:  # noqa: BLE001 - a status is never worth a crash
-                status = {"summary": {"error": str(error)}}
+            status = status or self._collect()
+            self._last_summary = json.dumps(status.get("summary"), sort_keys=True, ensure_ascii=False)
             self._send({"t": "status", "status": status})
+
+    def _watch(self) -> None:
+        """What the dashboard shows changed (a screen opened, another file, the next step): say so now."""
+        if self.state == ONLINE:
+            status = self._collect()
+            if json.dumps(status.get("summary"), sort_keys=True, ensure_ascii=False) != self._last_summary:
+                self.send_status(status)
 
     def send_event(self, text: str, level: str = "info") -> None:
         self._send({"t": "event", "level": level, "text": text})
