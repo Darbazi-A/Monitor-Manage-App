@@ -134,7 +134,7 @@ if QApplication.instance() is None:
 # Constants
 # --------------------------------------------------------------------------- #
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 APP_NAME = "Stage Display Controller"
 
 # Run from the source folder, the code and the hall's files (presets, running

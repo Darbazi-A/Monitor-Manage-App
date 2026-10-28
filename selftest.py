@@ -21,6 +21,7 @@ import traceback
 WORK = tempfile.mkdtemp(prefix="sdc-selftest-")
 os.environ["SDC_SETTINGS_APP"] = "StageDisplayControllerSELFTEST"
 os.environ["SDC_DATA_DIR"] = os.path.join(WORK, "data")
+os.environ["SDC_NO_UPDATE_CHECK"] = "1"   # never asks GitHub, never downloads
 
 results = []
 
@@ -142,6 +143,23 @@ def run(report: str) -> int:
     pump(app, 12, lambda: "page" in answer)
     check("the phone server answers", error is None and b"Stage remote" in answer.get("page", b""), error or answer.get("page", b"")[:80])
     panel.remote.stop()
+
+    # updates: HTTPS with Windows' own certificates, and GitHub's answer understood (no internet needed)
+    import ssl
+    import updater
+    try:
+        authorities = len(ssl.create_default_context().get_ca_certs())
+    except Exception as problem:  # noqa: BLE001
+        authorities = 0
+        check("updates: HTTPS works", False, problem)
+    else:
+        check("updates: HTTPS works", authorities > 0, f"{authorities} certificate authorities")
+    sample = updater.release_from_json({"tag_name": "v99.0.0", "assets": [{
+        "name": "StageDisplayController-Setup-99.0.0.exe", "size": 1, "digest": "sha256:AB",
+        "browser_download_url": "https://example.invalid/setup.exe"}]})
+    check("updates: a release is understood", sample is not None and sample.sha256 == "ab"
+          and updater.is_newer(sample.version, VERSION), sample)
+    check("updates: not looked for in the self-test", not panel.updater.scheduled())
 
     # the presets go to the right place
     panel.presets.put("Self-test", panel._collect_preset())

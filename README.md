@@ -161,6 +161,19 @@ source version used (the originals stay where they are); the settings, the PIN
 and the screens' wiring are shared already. Uninstalling removes the program and
 keeps those files for the next installation.
 
+**Updates.** The installed program looks for a new version on its own — a
+little after it starts, then every six hours — on this repository's
+[Releases](../../releases/latest). A newer one is downloaded in the background
+and checked against the SHA-256 GitHub keeps for it; then it waits, and a chip in
+the status bar says so. Nothing changes during a show: the update goes in when the
+program is closed (it installs silently and the program stays closed), or at once
+with *Settings → Updates → Install now* (the program closes, installs with a small
+progress window, and opens again — about a minute). The presets, running orders,
+the hall and the settings stay. Both — looking by itself, and installing on
+closing — can be switched off there; *Check now* looks at once. A computer
+without internet just tries again later. Run from source, the program only says
+that a new version is out: `git pull` brings it.
+
 **From source**:
 
 ```
@@ -186,6 +199,18 @@ PDF slides, the DJ desk's decoder process, the phone server, where files go —
 with settings and files of its own, no stage window, no sound) and makes the
 installer (Inno Setup, `StageDisplay.iss`) only if every check passed. The
 result: `dist\installer\StageDisplayController-Setup-<version>.exe`.
+
+**Publishing a new version** — every installed copy then updates itself: raise
+`VERSION` in `config.py`, write its section at the top of `CHANGELOG.md`
+(`## 1.2.0 — <date> · <title>`), commit on `main`, then
+
+```
+powershell -ExecutionPolicy Bypass -File installer\release.ps1
+```
+
+It builds the installer (the self-test must pass), tags the version, pushes, and
+makes the GitHub release with the installer and the changelog's words
+(`gh`, signed in to GitHub).
 
 ## Running a show
 
@@ -1161,7 +1186,8 @@ The running order and the remote are separate modules too; the dashboard
 | `hall.py` | Setting a hall up: the wizard (find the screens, number them, name them, the strip), saving and opening `.stagehall` files; the hall itself is read by `config.py` |
 | `stage_display.py` | The installed program's entry point: the desk, the DJ decoder (`--dj-decoder`) or the self-test (`--selftest`) |
 | `selftest.py` | The built program checks itself before an installer is made |
-| `installer\` | `build.ps1`, the PyInstaller recipe, the Inno Setup script, the .exe's version information |
+| `updater.py` | Updates: the newest GitHub release, its installer downloaded and checked in the background, run silently when the desk closes |
+| `installer\` | `build.ps1`, `release.ps1` (publish a version), the PyInstaller recipe, the Inno Setup script, the .exe's version information |
 | `school_timer.py` | The school timer: `TimerClock` (countdown, until, stopwatch, clock), `paint_timer` (every look and size), `TimerItem` (the stage layer), `TimerPage` |
 | `timer_control.py` | The dashboard's side of the timer: which screens show it, the ticks, the beeps, remembering it |
 | `phone_control.py` | The phone as a whole desk: its state, every action (screens, files, running order, slides, text, sound, scenes, web, laptops, rehearsal), the folders it may see, `UploadSink` |

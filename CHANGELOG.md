@@ -3,6 +3,23 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.2.0 — 2026-10-28 · Updates by themselves
+
+- **The program updates itself.** It looks for a new version on GitHub a little
+  after it starts, then every six hours; a newer one is downloaded in the
+  background and checked against GitHub's SHA-256. A chip in the status bar says
+  an update is ready.
+- **Nothing changes during a show**: the update goes in when the program is
+  closed — or at once with *Settings → Updates → Install now*, which closes the
+  program, installs it and opens it again (about a minute). The presets, running
+  orders, the hall and the settings stay.
+- *Settings → Updates*: this version, what was found, **Check now**, *What's new*,
+  and both switches (looking by itself, installing on closing).
+- A computer without internet tries again later; run from source, the program only
+  says a new version is out.
+- From this version on, every hall updates itself: 1.0.0 and 1.1.0 need this one
+  installed by hand, once.
+
 ## 1.1.0 — 2026-10-27 · Any hall
 
 - **Any hall, not only this one.** *Settings → Hall → Set up the hall…*: up to

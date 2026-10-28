@@ -6,11 +6,17 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
-#define AppName "Stage Display Controller"
+#ifndef AppName
+  #define AppName "Stage Display Controller"
+#endif
+; a test build installs beside the real one under a name and AppId of its own
+#ifndef AppGuid
+  #define AppGuid "{{6F2C1B9E-4A7D-4C5E-9B1F-5D3A2E8C7B41}"
+#endif
 #define AppExe "Stage Display Controller.exe"
 
 [Setup]
-AppId={{6F2C1B9E-4A7D-4C5E-9B1F-5D3A2E8C7B41}
+AppId={#AppGuid}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -40,7 +46,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\{#AppName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Stage Display Controller\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -53,6 +59,8 @@ Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 ; only); without, Windows asks the first time they are switched on.
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""{#AppName}"" dir=in action=allow program=""{app}\{#AppExe}"" enable=yes profile=private"; Flags: runhidden; Check: IsAdminInstallMode
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; an update the program started itself (Install now): open it again when done
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: Relaunch
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#AppName}"""; Flags: runhidden; Check: IsAdminInstallMode; RunOnceId: "DelFirewallRule"
@@ -61,3 +69,10 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 ; the program's own folder only - the hall's presets, running orders and backups in
 ; AppData\Roaming\StageDisplayController are kept, for the next installation
 Type: filesandordirs; Name: "{app}"
+
+[Code]
+// /RELAUNCH: the program started this update and wants to be opened again afterwards
+function Relaunch: Boolean;
+begin
+  Result := WizardSilent and (Pos('/RELAUNCH', Uppercase(GetCmdTail)) > 0);
+end;

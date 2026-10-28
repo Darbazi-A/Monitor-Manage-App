@@ -54,6 +54,7 @@ from i18n import LANGUAGES, language as current_language, set_language, tr  # no
 import argparse
 import ctypes
 from contextlib import contextmanager
+from html import escape as html_escape
 import json
 import os
 import shutil
@@ -98,6 +99,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QDesktopServices,
     QFont,
     QGuiApplication,
     QIcon,
@@ -140,6 +142,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QProgressDialog,
     QPushButton,
     QScroller,
@@ -175,6 +178,7 @@ import tray as tray_mod  # noqa: E402 - the icon by the clock, where the minimis
 import phone_control as phone_mod  # noqa: E402 - the phone as a whole stage desk
 import hall as hall_mod  # noqa: E402 - setting a hall up: its screens
 import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
+import updater as update_mod  # noqa: E402 - new versions from GitHub, installed when the desk says so
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files, normalise_step,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(DATA_DIR, "presets.json")
@@ -521,6 +525,15 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self._tray_ticker = QTimer(self)
         self._tray_ticker.timeout.connect(self._refresh_tray)
         self._tray_ticker.start(2000)
+        # New versions: looked for now and then, downloaded quietly, installed only when closing or asked.
+        self.updater = update_mod.Updater(VERSION, can_install=FROZEN, parent=self)
+        self.updater.stateChanged.connect(self._refresh_updates)
+        self.updater.ready.connect(self._on_update_ready)
+        self._update_requested = False       # Install now: the program closes for it, and opens again
+        self._restarting = False
+        self._relaunch_by_installer = False
+        self._update_announced = ""
+        self._updates_section = 0
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -704,7 +717,17 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self.health = desk_mod.HealthBar(THEME)
         self.health.checkRequested.connect(self._open_ready_check)
         self.health.helpRequested.connect(self._show_shortcuts)
+        self.update_chip = QPushButton()     # an update waits: a click opens Settings → Updates
+        self.update_chip.setIcon(Icons.get("refresh", CLR_ACCENT, 15))
+        self.update_chip.setFlat(True)
+        self.update_chip.setCursor(Qt.PointingHandCursor)
+        self.update_chip.clicked.connect(lambda: self.open_settings(self._updates_section))
+        self.update_chip.hide()
+        self.statusBar().addPermanentWidget(self.update_chip)
         self.statusBar().addPermanentWidget(self.health)
+        if self._updates_auto() and not os.environ.get("SDC_NO_UPDATE_CHECK"):
+            self.updater.start_schedule()
+        self._refresh_updates()
         self._health_timer = QTimer(self)
         self._health_timer.timeout.connect(self._refresh_health)
         self._health_timer.start(2000)
@@ -1535,9 +1558,158 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
 
     def restart_app(self) -> None:
         """Close properly (it asks first if screens are live), then start again - without the autostart."""
-        if self.close():
+        self._restarting = True
+        if not self.close():
+            self._restarting = False
+        elif not self._relaunch_by_installer:   # an update waiting went in: the installer opens it again
             # installed, the program is its own .exe; from source, python runs this file
             QProcess.startDetached(sys.executable, [] if FROZEN else [os.path.abspath(__file__)])
+
+    # -- updates ------------------------------------------------------------------ #
+
+    def _updates_auto(self) -> bool:
+        return str(self.settings.value("updates/auto", "true")).lower() == "true"
+
+    def _updates_on_exit(self) -> bool:
+        return str(self.settings.value("updates/on_exit", "true")).lower() == "true"
+
+    def _build_updates_card(self) -> QWidget:
+        card, box = self._settings_card(tr('Updates'))
+        version = QLabel(tr('This version: <b>{0}</b>').format(VERSION))
+        version.setTextFormat(Qt.RichText)
+        box.addWidget(version)
+        self.update_status = QLabel()
+        self.update_status.setWordWrap(True)
+        self.update_status.setTextFormat(Qt.RichText)
+        box.addWidget(self.update_status)
+        self.update_progress = QProgressBar()
+        self.update_progress.setRange(0, 100)
+        self.update_progress.setTextVisible(False)
+        self.update_progress.setFixedHeight(6)
+        self.update_progress.hide()
+        box.addWidget(self.update_progress)
+        row = QHBoxLayout()
+        self.update_install_btn = QPushButton(tr('  Install now…'))
+        self.update_install_btn.setObjectName("primary")
+        self.update_install_btn.setIcon(Icons.get("refresh", CLR_INK, 16))
+        self.update_install_btn.setToolTip(tr('The program closes, the update goes in and the program opens again'))
+        self.update_install_btn.clicked.connect(self.install_update_now)
+        row.addWidget(self.update_install_btn)
+        self.update_check_btn = QPushButton(tr('  Check now'))
+        self.update_check_btn.setIcon(Icons.get("refresh", CLR_TEXT, 15))
+        self.update_check_btn.clicked.connect(self.updater.check)
+        row.addWidget(self.update_check_btn)
+        self.update_notes_btn = QPushButton(tr("  What's new"))
+        self.update_notes_btn.setIcon(Icons.get("globe", CLR_TEXT, 15))
+        self.update_notes_btn.setToolTip(tr("The version's page on GitHub, in the browser"))
+        self.update_notes_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(self.updater.release.page if self.updater.release
+                                                  else update_mod.RELEASES_PAGE)))
+        row.addWidget(self.update_notes_btn)
+        row.addStretch(1)
+        box.addLayout(row)
+        auto = QCheckBox(tr('Look for new versions by themselves - a little after start, then every six hours'))
+        auto.setChecked(self._updates_auto())
+        auto.toggled.connect(self._set_updates_auto)
+        box.addWidget(auto)
+        on_exit = QCheckBox(tr('A downloaded update goes in by itself when the program is closed'))
+        on_exit.setChecked(self._updates_on_exit())
+        on_exit.toggled.connect(lambda on: self.settings.setValue("updates/on_exit", "true" if on else "false"))
+        box.addWidget(on_exit)
+        note = QLabel(tr('Nothing changes during a show: a new version is downloaded in the background and goes in '
+                         'only when you say so, or when the program is closed. The presets, running orders, the hall '
+                         'and the settings stay.'))
+        note.setObjectName("cardHint")
+        note.setWordWrap(True)
+        box.addWidget(note)
+        return card
+
+    def _set_updates_auto(self, on: bool) -> None:
+        self.settings.setValue("updates/auto", "true" if on else "false")
+        if on:
+            self.updater.start_schedule(2000)
+        else:
+            self.updater.stop_schedule()
+
+    def _refresh_updates(self) -> None:
+        updater = self.updater
+        release = updater.release
+        version = release.version if release else ""
+        state = updater.state
+        if state == update_mod.CHECKING:
+            text = tr('Looking for a new version…')
+        elif state == update_mod.LATEST:
+            text = tr('This is the newest version.')
+        elif state == update_mod.AVAILABLE:
+            text = tr('Version {0} is out. Run from source, <i>git pull</i> brings it.').format(version)
+        elif state == update_mod.DOWNLOADING:
+            text = tr('Downloading version {0}… {1}%').format(version, int(updater.progress * 100))
+        elif state == update_mod.READY:
+            text = tr('<b>Version {0} is downloaded and ready.</b> It goes in when the program is closed - '
+                      'or now, with <i>Install now</i>.').format(version)
+        elif state == update_mod.FAILED:
+            text = tr('Could not look for updates - no internet? It tries again in half an hour.') + \
+                f"<br><span style='color:{CLR_MUTED}'>{html_escape(updater.detail[:160])}</span>"
+        elif not FROZEN:
+            text = tr('Run from source: new versions come with git. <i>Check now</i> still says if one is out.')
+        else:
+            text = tr('Not looked yet.')
+        if updater.last_check and state not in (update_mod.CHECKING, update_mod.DOWNLOADING):
+            text += "<br><span style='color:%s'>%s</span>" % (
+                CLR_MUTED, tr('Last looked: {0}').format(time.strftime("%H:%M", time.localtime(updater.last_check))))
+        if hasattr(self, "update_status"):
+            self.update_status.setText(text)
+            self.update_progress.setVisible(state == update_mod.DOWNLOADING)
+            self.update_progress.setValue(int(updater.progress * 100))
+            self.update_install_btn.setVisible(updater.waiting())
+            self.update_check_btn.setEnabled(not updater.busy() and not updater.waiting())
+            self.update_notes_btn.setVisible(release is not None)
+        waiting = updater.waiting()
+        self.update_chip.setVisible(waiting)
+        if waiting:
+            self.update_chip.setText(tr(' Update {0} ready').format(version))
+            self.update_chip.setToolTip(tr('Goes in when the program is closed - or now: Settings → Updates'))
+
+    def _on_update_ready(self, release) -> None:
+        if self._update_announced == release.version:
+            return
+        self._update_announced = release.version
+        self.tray.notify(tr('Update {0} ready').format(release.version),
+                         tr('Goes in when the program is closed - or now: Settings → Updates'))
+        self.statusBar().showMessage(
+            tr('Version {0} is downloaded: it goes in when the program is closed.').format(release.version), 10000)
+
+    def install_update_now(self) -> None:
+        updater = self.updater
+        if not updater.waiting():
+            return
+        if not update_mod.file_matches(updater.installer, updater.release):
+            QMessageBox.warning(self, tr('Updates'), tr('The downloaded update is damaged. It is downloaded again.'))
+            updater.installer = ""
+            updater.state = update_mod.IDLE
+            updater.check()
+            return
+        answer = QMessageBox.question(
+            self, tr('Install the update'),
+            tr('Install version {0} now?\n\nThe program closes, the update goes in (about a minute) and the program '
+               'opens again. The stage screens are dark meanwhile. The presets, running orders, the hall and the '
+               'settings stay.').format(updater.release.version))
+        if answer != QMessageBox.Yes:
+            return
+        self._update_requested = True
+        if not self.close():
+            self._update_requested = False
+
+    def _install_waiting_update(self) -> None:
+        """Closing with an update downloaded: Install now, a restart, or - when allowed - any closing puts it in."""
+        if not self.updater.waiting():
+            return
+        asked = self._update_requested or self._restarting
+        app = QGuiApplication.instance()
+        if not asked and (not self._updates_on_exit() or (app is not None and app.isSavingSession())):
+            return                           # Windows shutting down is no time to install
+        if self.updater.install(relaunch=asked, visible=asked):
+            self._relaunch_by_installer = asked
 
     def _build_backups_card(self) -> QWidget:
         card = QFrame()
@@ -4219,9 +4391,12 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
              (self._build_security_card(),)),
             ("save", tr('Backups'), tr('Copies of the presets and running orders, taken before they change.'),
              (self._build_backups_card(),)),
+            ("refresh", tr('Updates'), tr('New versions of the program, from the internet.'),
+             (self._build_updates_card(),)),
             ("help", tr('Help'), tr('Keys, and how a show is run.'),
              (self._build_help_card(),)),
         )
+        self._updates_section = [section[1] for section in sections].index(tr('Updates'))
         for icon, name, lead, cards in sections:
             self.settings_nav.addItem(QListWidgetItem(Icons.get(icon, CLR_DIM, 18), name))
             section = QWidget()
@@ -5667,6 +5842,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, QMainWind
         self._tray_ticker.stop()
         self._timer_ticker.stop()
         self.tray.hide()                     # or its ghost stays by the clock until hovered
+        self._install_waiting_update()       # last: everything above has let go of its files
         event.accept()
         QApplication.quit()
 
