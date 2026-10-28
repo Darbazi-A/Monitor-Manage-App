@@ -35,7 +35,9 @@ $text = (($body -join "`n").Trim() + "`n`n## Install`n`nDownload **StageDisplayC
 $setup = "$root\dist\installer\StageDisplayController-Setup-$version.exe"
 if (-not (Test-Path $setup)) { throw "No installer: $setup" }
 
+$ErrorActionPreference = "Continue"     # git and gh write progress to stderr; their exit codes count
 git tag -a $tag -m "Stage Display Controller $version"
+if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
 git push origin main $tag
 if ($LASTEXITCODE -ne 0) { throw "git push failed" }
 & $gh release create $tag $setup --title "Stage Display Controller $version — $title" --notes-file $notes --latest

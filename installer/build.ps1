@@ -15,6 +15,10 @@ $info = $info -replace "'FileVersion', '[0-9.]+'", "'FileVersion', '$version'" -
 [IO.File]::WriteAllText("$root\installer\version_info.txt", $info, (New-Object Text.UTF8Encoding $false))
 Write-Host "Stage Display Controller $version"
 
+# from here on the tools write their progress to stderr: with "Stop", Windows PowerShell
+# would take that for a failure once the output is redirected - their exit codes say instead
+$ErrorActionPreference = "Continue"
+
 # 1. the program
 python -m PyInstaller --noconfirm --clean --distpath "$root\dist" --workpath "$root\build" "installer\stage_display.spec"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
