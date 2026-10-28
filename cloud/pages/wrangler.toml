@@ -1,0 +1,11 @@
+# The same Stage Cloud at a second address, https://<project>.pages.dev: some networks block the
+# workers.dev addresses (188.114.96.0/23) and let these through. Every request - the pages, the API,
+# the WebSockets - goes on to the stage-cloud Worker; nothing is kept here.
+#   npx wrangler pages deploy        (from this folder)
+name = "stage-cloud"
+pages_build_output_dir = "./dist"
+compatibility_date = "2026-09-01"
+
+[[services]]
+binding = "CLOUD"
+service = "stage-cloud"

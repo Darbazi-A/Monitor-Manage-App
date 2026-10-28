@@ -20,7 +20,9 @@ import base64
 import json
 import platform
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable
 
@@ -32,18 +34,24 @@ STATUS_MS = 30_000                   # how often the hall says how it is, anyway
 WATCH_MS = 3_000                     # and a change (a screen, a file, a step) is told within this
 PING_MS = 25_000                     # keeps proxies from closing a quiet connection
 RETRY_MS = (3_000, 6_000, 15_000, 30_000, 60_000)
+PAIR_RETRY_S = (3, 6, 10)            # pairing tries four times, for about half a minute
 TIMEOUT_S = 20
 TEXT_TYPES = ("application/json", "text/")
 
 OFF, CONNECTING, ONLINE, OFFLINE, UNPAIRED = "off", "connecting", "online", "offline", "unpaired"
+UNREACHABLE = "unreachable: "        # pairing's answer when the cloud was not reached at all
 
 
 def clean_address(text: str) -> str:
-    """'stage-cloud.x.workers.dev' -> 'https://stage-cloud.x.workers.dev' (no path, no slash at the end)."""
-    text = str(text or "").strip().rstrip("/")
-    if text and "://" not in text:
+    """'stage-cloud.x.workers.dev', or the whole address from a browser ('https://…/#/hall/…')
+    -> 'https://stage-cloud.x.workers.dev': the scheme and the host, nothing else."""
+    text = str(text or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
         text = ("http://" if text.startswith(("127.0.0.1", "localhost")) else "https://") + text
-    return text
+    parts = urllib.parse.urlsplit(text)
+    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else ""
 
 
 def socket_address(address: str) -> str:
@@ -116,16 +124,25 @@ class CloudLink(QObject):
                 data=json.dumps({"code": code, "computer": platform.node()}).encode("utf-8"),
                 headers={"Content-Type": "application/json", "X-SDC-Client": "hall",
                          "User-Agent": "StageDisplayController-cloud"})
-            try:
-                with urllib.request.urlopen(request, timeout=TIMEOUT_S) as answer:
-                    result = json.loads(answer.read().decode("utf-8"))
-            except urllib.error.HTTPError as error:
+            # some networks refuse Cloudflare's addresses now and then: try again a few times first
+            for wait in PAIR_RETRY_S + (None,):
                 try:
-                    result = json.loads(error.read().decode("utf-8"))
-                except ValueError:
-                    result = {"ok": False, "message": f"HTTP {error.code}"}
-            except Exception as error:  # noqa: BLE001 - no internet, a wrong address
-                result = {"ok": False, "message": str(error) or error.__class__.__name__}
+                    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as answer:
+                        result = json.loads(answer.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as error:
+                    try:
+                        result = json.loads(error.read().decode("utf-8"))
+                    except ValueError:
+                        result = {"ok": False, "message": f"HTTP {error.code}"}
+                    break
+                except (urllib.error.URLError, OSError) as error:      # not reached at all
+                    result = {"ok": False, "unreachable": True, "message": str(getattr(error, "reason", error))}
+                except Exception as error:  # noqa: BLE001 - not the cloud's answer: a wrong address
+                    result = {"ok": False, "message": str(error) or error.__class__.__name__}
+                    break
+                if wait is not None:
+                    time.sleep(wait)
             self._answer.emit("pair", {"address": address, **result})
         threading.Thread(target=work, name="cloud-pair", daemon=True).start()
 
@@ -221,7 +238,8 @@ class CloudLink(QObject):
                 self.settings.setValue("cloud/hall", result.get("name", ""))
                 self._tries = 0
                 self.connect_now()
-            self.paired.emit(bool(result.get("ok")), str(result.get("message") or result.get("name") or ""))
+            said = str(result.get("message") or result.get("name") or "")
+            self.paired.emit(bool(result.get("ok")), UNREACHABLE + said if result.get("unreachable") else said)
         elif what == "token":
             if result == "unpaired":
                 self._stop()

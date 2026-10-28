@@ -1443,4 +1443,9 @@ KA = {
     "From the dashboard ({0}): {1}": "საიტიდან ({0}): {1}",
     "<b style='color:{0}'>Not connected</b> - it tries again by itself.": "<b style='color:{0}'>არ არის დაკავშირებული</b> - თავისით ისევ სცდის.",
     "<b style='color:{0}'>Paired again elsewhere, or removed</b> - pair this hall again with a new code.": "<b style='color:{0}'>სხვაგან დაუკავშირდა, ან წაიშალა</b> - დააკავშირეთ თავიდან ახალი კოდით.",
+"{0} could not be reached from this computer.\n\nThe address may be mistyped - or the internet here is not letting it through just now (some networks block Cloudflare's addresses for a while). Check the address, and try again in a few minutes.": "{0} ამ კომპიუტერიდან ვერ მოიძებნა.\n\nშეიძლება მისამართი არასწორად წერია - ან აქაური ინტერნეტი ახლა არ უშვებს (ზოგი ქსელი Cloudflare-ის მისამართებს დროებით ბლოკავს). შეამოწმეთ მისამართი და რამდენიმე წუთში ისევ სცადეთ.",
+    "The dashboard": "საიტი",
+    "this code is wrong or has expired": "კოდი არასწორია ან ვადა გაუვიდა",
+    "too many tries - wait a quarter of an hour": "ძალიან ბევრი მცდელობა - დაელოდეთ 15 წუთი",
+    "address and code": "მისამართი და კოდი",
 }

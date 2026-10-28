@@ -304,8 +304,17 @@ class CloudControl:
         if ok:
             self.cloud_code.clear()
             self.statusBar().showMessage(tr('Paired with Stage Cloud as “{0}”.').format(message), 8000)
+        elif message.startswith(cloud_mod.UNREACHABLE):
+            box = QMessageBox(QMessageBox.Warning, tr('Stage Cloud'), tr(
+                "{0} could not be reached from this computer.\n\nThe address may be mistyped - or the internet "
+                "here is not letting it through just now (some networks block Cloudflare's addresses for a while). "
+                "Check the address, and try again in a few minutes.").format(
+                cloud_mod.clean_address(self.cloud_address.text()).replace("https://", "") or tr("The dashboard")),
+                QMessageBox.Ok, self)
+            box.setDetailedText(message[len(cloud_mod.UNREACHABLE):])
+            box.exec()
         else:
-            QMessageBox.warning(self, tr('Stage Cloud'), tr('Not paired: {0}').format(message))
+            QMessageBox.warning(self, tr('Stage Cloud'), tr('Not paired: {0}').format(tr(message)))
         self._refresh_cloud()
 
     def _forget_cloud(self) -> None:
