@@ -3,6 +3,15 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.3.2 — 2026-10-29 · A new look for the remote
+
+- **The phone remote looks new** — on a phone, and in Stage Cloud's remote desk: real icons in
+  coloured chips instead of emoji, the screens' pictures with ON AIR badges, a big NEXT, a clean
+  bar for BLACKOUT, Undo and Stop sound, new sliders, sheets and PIN pad, Stage Cloud's colours.
+  On a wider screen, more tiles in a row. Everything works as before.
+- Pairing with Stage Cloud tries again for about half a minute when the network refuses, and
+  says so plainly; an address copied whole from the browser is cut down to the site's name.
+
 ## 1.3.1 — 2026-10-28 · Stage Cloud, at once
 
 - A change in the hall — a screen opened or closed, another file, the next step — reaches Stage
