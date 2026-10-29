@@ -276,4 +276,13 @@ KA = {
     "silent": "უხმოდ",
     "Logo": "ლოგო",
     "Line": "ხაზი",
+"Unlock the desk?": "განვბლოკო მაგიდა?",
+    "The stage computer's desk opens again, without the PIN.": "სცენის კომპიუტერის მაგიდა PIN-ის გარეშე გაიხსნება.",
+    "Unlock": "განბლოკვა",
+    "Lock the desk?": "ჩავკეტო მაგიდა?",
+    "The stage computer's desk needs the admin PIN; the stage, this phone and the clicker keep working.": "სცენის კომპიუტერის მაგიდას ადმინის PIN დასჭირდება; სცენა, ეს ტელეფონი და კლიკერი მუშაობას აგრძელებს.",
+    "Lock": "ჩაკეტვა",
+    "The desk is locked": "მაგიდა ჩაკეტილია",
+    "Lock the desk": "მაგიდის ჩაკეტვა",
+    "The desk is locked - the stage keeps going.": "მაგიდა ჩაკეტილია - სცენა მუშაობას აგრძელებს.",
 }

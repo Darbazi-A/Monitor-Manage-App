@@ -3,6 +3,20 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.4.0 — 2026-10-29 · The desk lock
+
+- **Lock the desk, not the show.** A lock screen on the control monitor only - the time, the
+  hall, what is on the stage, a PIN pad (the admin PIN) - while the stage screens, the sound, the
+  phone remote, Stage Cloud and the clicker keep working.
+- On the locked desk Win, Alt+Tab, Alt+F4, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc do nothing, the mouse
+  stays on the lock screen, and the program cannot be closed; Ctrl+Alt+Del still works.
+- Locked from the status bar's **Lock**, the tray, *Settings → Admin & simple desk*, the phone
+  remote (the lock in its header) or Stage Cloud (**Lock** on a hall's page); unlocked with the
+  PIN, or from the phone or Stage Cloud. It can lock by itself after 5-60 minutes with nobody at
+  the desk, and a program started again while locked locks again at once.
+- While locked, a file that will not play is told to the phone and Stage Cloud instead of a
+  dialog nobody can answer.
+
 ## 1.3.3 — 2026-10-29 · Signing in on web pages
 
 - **Canva, Kahoot and other pages: signing in with Google (or Microsoft, Apple, Facebook) works.**

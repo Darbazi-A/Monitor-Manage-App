@@ -173,7 +173,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shad
 .hero-top { display: flex; gap: 14px; align-items: center; }
 .hero-top .hall-ico { width: 52px; height: 52px; border-radius: 15px; }
 .hero h2 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
-.actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .action { display: grid; place-items: center; gap: 6px; padding: 12px 6px; min-height: 76px; border-radius: 14px; border: 1px solid var(--line);
   background: var(--surface); font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; text-align: center; }
 .action:hover { background: var(--surface-2); }

@@ -73,6 +73,8 @@ header .mark { width:34px; height:34px; border-radius:10px; flex:none; display:g
   background:linear-gradient(135deg,var(--brand),var(--brand2)); box-shadow:0 6px 16px rgba(91,140,255,.35); }
 header.sub .mark { display:none; }
 header h1 { font-size:18px; font-weight:700; margin:0; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; letter-spacing:-.01em; }
+header .hlock { width:42px; min-height:42px; padding:0; border-radius:12px; color:var(--dim); }
+header .hlock.on { color:#111; background:var(--gold); border-color:var(--gold); }
 .conn { display:flex; align-items:center; gap:8px; padding:6px 11px; border-radius:99px; background:var(--raised); border:1px solid var(--edge); }
 header .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
 header .dot.on { background:var(--ok); box-shadow:0 0 0 3px rgba(52,211,153,.2); }
@@ -255,7 +257,7 @@ main { padding:14px 14px 18px; max-width:860px; margin:0 auto; }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
 </style></head>
 <body>
-<header id="head"><button class="back ghost" id="back" aria-label="Back"></button><div class="mark" id="mark"></div><h1 id="title">Stage remote</h1><div class="conn"><div class="dot" id="dot"></div><div class="clock" id="clock"></div></div></header>
+<header id="head"><button class="back ghost" id="back" aria-label="Back"></button><div class="mark" id="mark"></div><h1 id="title">Stage remote</h1><button class="hlock" id="lockbtn" aria-label="Desk lock"></button><div class="conn"><div class="dot" id="dot"></div><div class="clock" id="clock"></div></div></header>
 <div id="rehearsal"><span id="rehtext"></span><button id="rehend"></button></div>
 <main id="view"></main>
 <div class="quick"><button class="blackout hold" id="qblack"></button><button id="qundo"></button><button id="qsilence"></button></div>
@@ -288,6 +290,8 @@ const IC = {
   scrollup: '<path d="M12 19V5M5 12l7-7 7 7"/>', scrolldown: '<path d="M12 5v14M19 12l-7 7-7-7"/>', reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   rw: '<path d="M11 19 2 12l9-7zM22 19l-9-7 9-7z"/>', ff: '<path d="m13 19 9-7-9-7zM2 19l9-7-9-7z"/>', live: '<circle cx="12" cy="12" r="3"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/>',
   next: '<path d="M5 4v16l11-8z"/><path d="M19 5v14"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
 };
 const ico = (n, s) => `<svg class="i ${s || ""}" viewBox="0 0 24 24" aria-hidden="true">${IC[n] || ""}</svg>`;
 const tf = (s, ...a) => t(s).replace(/\{(\d)\}/g, (m, i) => a[+i] ?? "");
@@ -403,6 +407,11 @@ $("qundo").onclick = () => act("undo");
 $("qsilence").innerHTML = ico("mute", "s") + `<span>${esc(t("Stop sound"))}</span>`;
 $("qsilence").onclick = () => act("silence");
 $("rehend").textContent = t("End");
+$("lockbtn").onclick = async () => {
+  if (!state) return;
+  if (state.desk.locked) { if (await confirmBox(t("Unlock the desk?"), t("The stage computer's desk opens again, without the PIN."), t("Unlock"))) act("desk_unlock"); }
+  else if (await confirmBox(t("Lock the desk?"), t("The stage computer's desk needs the admin PIN; the stage, this phone and the clicker keep working."), t("Lock"))) act("desk_lock");
+};
 $("rehend").onclick = () => act("rehearsal", { on: false });
 setInterval(() => { $("clock").textContent = new Date().toTimeString().slice(0, 5); }, 1000);
 
@@ -419,6 +428,8 @@ function frame() {
   $("rehearsal").classList.toggle("show", state.rehearsal.on);
   $("rehtext").textContent = t("REHEARSAL - the hall sees nothing of it");
   $("qundo").disabled = !state.undo;
+  const lk = $("lockbtn"); lk.classList.toggle("on", !!state.desk.locked); lk.innerHTML = ico(state.desk.locked ? "lock" : "unlock", "s");
+  lk.title = state.desk.locked ? t("The desk is locked") : t("Lock the desk");
   if (state.notice && state.notice.id !== seenNotice) {
     if (seenNotice >= 0 && state.notice.text) toast(state.notice.text, true);    // something asked for went wrong
     seenNotice = state.notice.id;
@@ -447,13 +458,15 @@ function drawMv() {
 
 /* HOME */
 V.home = {
-  build() { $("view").innerHTML = `<div id="h-banner"></div><div id="h-mv"></div><div id="h-now"></div><div class="tiles" id="h-tiles"></div>`;
+  build() { $("view").innerHTML = `<div id="h-lock"></div><div id="h-banner"></div><div id="h-mv"></div><div id="h-now"></div><div class="tiles" id="h-tiles"></div>`;
     $("view").onclick = e => { const g = e.target.closest("[data-go]"); if (g && g.closest("#mv")) go("screen", { role: g.dataset.go }); }; },
   draw() {
     const s = state;
     put("h-banner", s.outputs.open < 3 && s.outputs.can_open && !s.rehearsal.on
       ? `<div class="banner"><span>${esc(tf("{0} of 3 stage screens open", s.outputs.open))}</span><button id="openscr">${esc(t("Open them"))}</button></div>` : "");
     const ob = $("openscr"); if (ob) ob.onclick = () => act("screens_open");
+    put("h-lock", s.desk.locked ? `<div class="banner" style="border-color:rgba(245,180,67,.4)">${ico("lock", "s")}<span>${esc(t("The desk is locked - the stage keeps going."))}</span><button id="hunlock">${esc(t("Unlock"))}</button></div>` : "");
+    const hu = $("hunlock"); if (hu) hu.onclick = async () => { if (await confirmBox(t("Unlock the desk?"), t("The stage computer's desk opens again, without the PIN."), t("Unlock"))) act("desk_unlock"); };
     if (!$("mv")) put("h-mv", mvHtml());
     drawMv();
     const show = s.show, steps = show.steps, now = show.index >= 0 ? steps[show.index] : null, next = steps[show.index + 1];

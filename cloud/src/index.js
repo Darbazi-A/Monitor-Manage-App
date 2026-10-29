@@ -9,7 +9,7 @@ import { ROLES, cleanName, cookie, fail, json, rank, sameText } from "./util.js"
 export { Directory, Hall };
 
 const SESSION_COOKIE = "sdc_session";
-const SAFE_COMMANDS = new Set(["check_update", "install_update", "message", "status"]);
+const SAFE_COMMANDS = new Set(["check_update", "install_update", "message", "status", "lock_desk", "unlock_desk"]);
 
 export default {
   async fetch(request, env) {

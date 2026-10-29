@@ -349,6 +349,7 @@ class PhoneControl:
                           if share.running else [],
                           "links": links, "stage": list(receiver.stage), "layout": receiver.layout}
         state["timer"] = self.timer_state()
+        state["desk"] = {"locked": self.desk_locked(), "pin": self.access.has_pin()}
         state["notice"] = dict(self._phone_notice)
         state["lang"] = language()
         return state
@@ -364,6 +365,7 @@ class PhoneControl:
         "web_open", "web_stage", "web_off", "web_close", "web_key", "web_click", "web_type", "web_scroll",
         "share_on", "share_preview", "share_take", "share_decline", "share_end", "share_silence",
         "timer_set", "timer_toggle", "timer_reset", "timer_add", "timer_show", "timer_hide", "timer_look",
+        "desk_lock", "desk_unlock",
     ))
 
     def phone_action(self, action: str, data: dict):
@@ -374,6 +376,12 @@ class PhoneControl:
             return handler(data)
         except (TypeError, ValueError, KeyError) as error:
             return False, tr("That did not work: {0}").format(error)
+
+    def _phone_desk_lock(self, _data: dict):
+        return self.lock_desk("phone")
+
+    def _phone_desk_unlock(self, _data: dict):
+        return self.unlock_desk(tr("the phone remote"))
 
     def _phone_role(self, data: dict) -> str:
         role = str(data.get("role", ""))

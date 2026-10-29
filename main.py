@@ -180,6 +180,7 @@ import hall as hall_mod  # noqa: E402 - setting a hall up: its screens
 import timer_control as timer_ctl_mod  # noqa: E402 - the school timer on a stage screen
 import updater as update_mod  # noqa: E402 - new versions from GitHub, installed when the desk says so
 import cloud_control as cloud_ctl_mod  # noqa: E402 - Stage Cloud: every hall on one dashboard
+import lock_control as lock_ctl_mod  # noqa: E402 - the desk lock: the control monitor behind the PIN
 from show import (ShowStore, ShowTab, fold as show_fold, missing_files as show_missing_files, normalise_step,  # noqa: E402
                   new_step, summary as step_summary)
 PRESET_FILE = os.path.join(DATA_DIR, "presets.json")
@@ -441,7 +442,8 @@ WM_HOTKEY = 0x0312
 VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
 
 
-class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl_mod.CloudControl, QMainWindow):
+class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl_mod.CloudControl,
+                   lock_ctl_mod.LockControl, QMainWindow):
     """Operator-facing window: a Live tab for the show, a Screens tab for setup."""
 
     WIDE_ASPECT_THRESHOLD = 2.5
@@ -518,7 +520,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         # The icon by the clock: minimising hides the desk there, and the show goes on.
         self.tray = tray_mod.StageTray(QIcon(ICON_FILE) if os.path.exists(ICON_FILE) else self.windowIcon(), self)
         self.tray.openRequested.connect(self.restore_from_tray)
-        self.tray.barRequested.connect(lambda: self.shrink_to_bar())
+        self.tray.barRequested.connect(lambda: None if self.desk_locked() else self.shrink_to_bar())
+        self.tray.lockRequested.connect(lambda: self.lock_desk("desk"))
         self.tray.blackoutRequested.connect(lambda: self._blackout_all())
         self.tray.stopSoundRequested.connect(lambda: self._stop_all_sound())
         self.tray.quitRequested.connect(self._quit_from_tray)
@@ -536,6 +539,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         self._update_announced = ""
         self._updates_section = 0
         self._cloud_setup()                  # Stage Cloud: this hall on the dashboard of every hall
+        self._lock_setup()                   # the desk lock
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -734,6 +738,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         self.cloud_chip.clicked.connect(lambda: self.open_settings(self._cloud_section))
         self.cloud_chip.hide()
         self.statusBar().addPermanentWidget(self.cloud_chip)
+        self.lock_chip = self._make_lock_chip()
+        self.statusBar().addPermanentWidget(self.lock_chip)
         self.statusBar().addPermanentWidget(self.health)
         if self._updates_auto() and not os.environ.get("SDC_NO_UPDATE_CHECK"):
             self.updater.start_schedule()
@@ -2466,6 +2472,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
 
     @Slot()
     def restore_from_tray(self) -> None:
+        if self.desk_locked():
+            return                               # the lock screen is what the desk shows
         if self.mini is not None and self.mini.isVisible():
             self.restore_from_bar()
             return
@@ -2478,6 +2486,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
 
     @Slot()
     def _quit_from_tray(self) -> None:
+        if self.desk_locked():
+            return
         self.restore_from_tray()                        # so its question is seen
         self.close()
 
@@ -4686,6 +4696,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         row.addStretch(1)
         box.addLayout(row)
         stack.addWidget(card)
+        stack.addWidget(self._build_lock_card())
         return holder
 
     def _build_help_card(self) -> QWidget:
@@ -5021,7 +5032,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
     def _report_media_problem(self, role: str, path: str, problem: MediaProblem) -> None:
         """One clear dialog instead of a frozen or blank screen."""
         self._cloud_event(tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title))
-        if hasattr(self, "_phone_sent") and self.phone_owns_problem(role):
+        if hasattr(self, "_phone_sent") and (self.phone_owns_problem(role) or self.desk_locked()):
             # asked for from a phone: the phone hears about it (a dialog would wait at an empty desk)
             text = tr('{0}: {1} refused — {2}').format(ROLE_LABELS[role], os.path.basename(path), problem.title)
             self.statusBar().showMessage(text, 12000)
@@ -5811,6 +5822,9 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Closing the control panel tears down every stage window, then quits."""
+        if self.desk_locked():
+            event.ignore()                       # a locked desk is not closed: the PIN unlocks it first
+            return
         live = self._outputs()
         if live and not self._cloud_closing:     # the cloud's Install now: asked on the dashboard already
             # Quitting mid-show blacks out the hall; make it a deliberate act.

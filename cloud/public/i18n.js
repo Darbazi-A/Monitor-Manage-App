@@ -77,6 +77,12 @@ const KA = {
   "The event starts in 10 minutes.": "ღონისძიება 10 წუთში იწყება.", "Please check the microphones.": "გთხოვთ, შეამოწმეთ მიკროფონები.",
   "Please open the stage screens.": "გთხოვთ, ჩართეთ სცენის ეკრანები.", "Please call me.": "გთხოვთ, დამირეკეთ.",
   "The next speaker is ready.": "შემდეგი გამომსვლელი მზადაა.",
+  // the desk lock
+  "Lock": "ჩაკეტვა", "Unlock": "განბლოკვა", "desk locked": "მაგიდა ჩაკეტილია", "Lock the desk?": "ჩავკეტო მაგიდა?", "Unlock the desk?": "განვბლოკო მაგიდა?",
+  "The hall's computer opens again without the PIN.": "დარბაზის კომპიუტერი PIN-ის გარეშე გაიხსნება.",
+  "The hall's computer needs the admin PIN; the stage, the phone remote and the clicker keep working.": "დარბაზის კომპიუტერს ადმინის PIN დასჭირდება; სცენა, ტელეფონის პულტი და კლიკერი მუშაობას აგრძელებს.",
+  "Set an admin PIN first (Settings → Admin & simple desk).": "ჯერ დააყენეთ ადმინის PIN (Settings → Admin & simple desk).",
+  "The desk is locked.": "მაგიდა ჩაკეტილია.", "The desk is unlocked.": "მაგიდა განიბლოკა.", "The desk is not locked.": "მაგიდა არ არის ჩაკეტილი.",
   // the cloud's answers
   "wrong setup key": "დაყენების გასაღები არასწორია", "already set up": "უკვე შექმნილია", "name and role": "სახელი და როლი",
   "password: at least 8 characters": "პაროლი: მინიმუმ 8 სიმბოლო", "that name is taken": "ეს სახელი დაკავებულია",

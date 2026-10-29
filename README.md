@@ -799,6 +799,22 @@ order, fire the eight cues, silence the sound, blackout. Cue buttons light green
 while playing and gold while paused, exactly as the full pads do. ⤢ brings the
 dashboard back where it was.
 
+## The desk lock
+
+Windows' own lock (Win+L) covers every monitor - the hall would see the lock screen. The desk
+lock locks only the control monitor: a full-screen lock screen with the time, the hall, what is
+on the stage and a PIN pad (the admin PIN), while the stage screens, the sound, the phone remote,
+Stage Cloud and the clicker (Page Down / Up, or a key it was taught) go on working. On the locked
+desk Win, Alt+Tab, Alt+F4, Alt+Esc, Ctrl+Esc and Ctrl+Shift+Esc do nothing (a low-level keyboard
+hook), the mouse cannot leave the lock screen, and the program cannot be closed; Ctrl+Alt+Del
+still works, and the lock screen does not fight Task Manager for the front.
+
+Lock it with **Lock** in the status bar, the tray icon's menu, *Settings → Admin & simple desk*,
+the lock in the phone remote's header, or **Lock** on the hall's page in Stage Cloud; unlock it
+with the PIN or from the phone or Stage Cloud. *Lock by itself after* locks it when nobody has
+touched the PC for 5-60 minutes. If the program is started again while locked (Task Manager, a
+crash), it locks again at once.
+
 ## Stage Cloud: every hall on one website
 
 [Stage Cloud](cloud/README.md) is a website for all the halls at once: which are on, their
@@ -1209,6 +1225,7 @@ The running order and the remote are separate modules too; the dashboard
 | `selftest.py` | The built program checks itself before an installer is made |
 | `updater.py` | Updates: the newest GitHub release, its installer downloaded and checked in the background, run silently when the desk closes |
 | `cloud.py` | Stage Cloud's connection: pairing with a code, the WebSocket (back by itself), status, answering commands and the remote desk |
+| `desklock.py` / `lock_control.py` | The desk lock: the lock screen, the keyboard guard and the held mouse; locking from the desk, the phone, Stage Cloud or by itself |
 | `cloud_control.py` | The dashboard's side of Stage Cloud: the status it sends, the commands and remote desk it allows, Settings → Cloud |
 | `cloud\` | The Stage Cloud website itself (Cloudflare Worker + Durable Objects) — see [cloud/README.md](cloud/README.md) |
 | `installer\` | `build.ps1`, `release.ps1` (publish a version), the PyInstaller recipe, the Inno Setup script, the .exe's version information |

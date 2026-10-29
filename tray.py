@@ -26,6 +26,7 @@ class StageTray(QObject):
     blackoutRequested = Signal()
     stopSoundRequested = Signal()
     quitRequested = Signal()
+    lockRequested = Signal()
 
     def __init__(self, icon: QIcon, parent: QObject = None) -> None:
         super().__init__(parent)
@@ -55,6 +56,9 @@ class StageTray(QObject):
         stop = QAction(tr("Stop all sound"), menu)
         stop.triggered.connect(self.stopSoundRequested.emit)
         menu.addAction(stop)
+        lock = QAction(tr("Lock the desk"), menu)
+        lock.triggered.connect(self.lockRequested.emit)
+        menu.addAction(lock)
         menu.addSeparator()
         leave = QAction(tr("Quit…"), menu)
         leave.triggered.connect(self.quitRequested.emit)

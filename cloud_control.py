@@ -106,6 +106,7 @@ class CloudControl:
             "update": {"state": updater.state, "version": updater.release.version if updater.release else ""},
             "problems": self._cloud_problems()[:8],
             "control": self.cloud.control_allowed(),
+            "locked": self.desk_locked(),
             "computer": platform.node(),
             "language": language(),
         }
@@ -223,6 +224,10 @@ class CloudControl:
                 return True, tr("Installing version {0}: the program closes and opens again in about a minute.").format(
                     updater.release.version)
             return True, tr("Version {0} goes in when the program is closed.").format(updater.release.version)
+        if cmd == "lock_desk":
+            return self.lock_desk("cloud")
+        if cmd == "unlock_desk":
+            return self.unlock_desk(user or "Stage Cloud")
         return False, tr("Unknown command.")
 
     def _cloud_install_now(self) -> None:

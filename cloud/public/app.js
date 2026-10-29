@@ -244,7 +244,8 @@ function hallCard(h) {
     ${h.paired ? screensMini(sum.screens, on) : `<p class="sub" style="margin:0">${esc(t("Waiting for the hall's computer: Settings → Cloud, address and code."))}</p>`}
     ${on ? nowLine(sum) : ""}${problemsLine(sum)}
     <div class="hall-foot">${sum.version ? `<span class="badge">v${esc(sum.version)}</span>` : ""}${updateBadge(sum)}
-      ${sum.control === false ? `<span class="badge" title="${esc(t("remote desk off"))}">${icon("lock", "s")}</span>` : ""}
+      ${sum.locked ? `<span class="badge warn">${icon("lock", "s")}${esc(t("desk locked"))}</span>` : ""}
+      ${sum.control === false ? `<span class="badge" title="${esc(t("remote desk off"))}">${icon("eye", "s")}</span>` : ""}
       <span class="grow"></span>${desk ? `<button class="btn primary small" data-desk="${esc(h.id)}">${icon("remote", "s")}${esc(t("Control"))}</button>` : ""}</div>
   </article>`;
 }
@@ -382,7 +383,8 @@ async function hallPage(id) {
         <button class="action primary" id="desk" ${desk ? "" : "disabled"}>${icon("remote")}${esc(t("Control"))}</button>
         <button class="action" id="msg" ${on ? "" : "disabled"}>${icon("message")}${esc(t("Message"))}</button>
         <button class="action" id="upd" ${on ? "" : "disabled"}>${icon(ready ? "download" : "update")}${esc(t(ready ? "Install" : "Update"))}
-          ${ready ? `<span class="tag">${esc(sum.update.version)}</span>` : ""}</button></div>` : ""}</section>
+          ${ready ? `<span class="tag">${esc(sum.update.version)}</span>` : ""}</button>
+        <button class="action" id="lk" ${on ? "" : "disabled"}>${icon("lock")}${esc(t(sum.locked ? "Unlock" : "Lock"))}</button></div>` : ""}</section>
       <div class="cols"><div>
         <div class="section-title"><h2>${esc(t("On the stage now"))}</h2>${on && !picturesOff ? `<span class="badge ok"><span class="dot"></span>${esc(t("live"))}</span>` : ""}</div>
         ${(sum.screens || []).length ? `<div class="stage">${sum.screens.map(s => `<div class="card tile ${s.kind === "strip" ? "strip" : ""}">
@@ -410,6 +412,10 @@ async function hallPage(id) {
     $("desk")?.addEventListener("click", () => location.hash = `#/hall/${id}/desk`);
     $("msg")?.addEventListener("click", () => messageSheet(id));
     $("upd")?.addEventListener("click", () => updateAction(id, sum));
+    $("lk")?.addEventListener("click", async () => {
+      if (sum.locked) { if (await ask(t("Unlock the desk?"), t("The hall's computer opens again without the PIN."), t("Unlock"))) window.hallCommand("unlock_desk"); }
+      else if (await ask(t("Lock the desk?"), t("The hall's computer needs the admin PIN; the stage, the phone remote and the clicker keep working."), t("Lock"))) window.hallCommand("lock_desk");
+    });
   };
 
   const command = async (cmd, args) => {
