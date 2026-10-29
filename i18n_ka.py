@@ -1448,4 +1448,5 @@ KA = {
     "this code is wrong or has expired": "კოდი არასწორია ან ვადა გაუვიდა",
     "too many tries - wait a quarter of an hour": "ძალიან ბევრი მცდელობა - დაელოდეთ 15 წუთი",
     "address and code": "მისამართი და კოდი",
+    "Sign in": "შესვლა",
 }

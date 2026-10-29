@@ -3,6 +3,18 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.3.3 — 2026-10-29 · Signing in on web pages
+
+- **Canva, Kahoot and other pages: signing in with Google (or Microsoft, Apple, Facebook) works.**
+  The sign-in opens in a small window of its own on the desk, and closes by itself once done;
+  the page that asked for it gets the answer. Before, the sign-in replaced the page and left it
+  white. The login is remembered, as before.
+- The desk's live picture of a web page on the stage follows closely while it is worked on (a
+  click, a key, the clicker) and is taken about once a second otherwise - much less work for the
+  computer.
+- The clicker is as it was: while a page is on the stage, Page Down / Page Up turn it from any
+  program, and the rest of the keyboard stays free.
+
 ## 1.3.2 — 2026-10-29 · A new look for the remote
 
 - **The phone remote looks new** — on a phone, and in Stage Cloud's remote desk: real icons in

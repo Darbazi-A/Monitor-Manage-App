@@ -40,7 +40,13 @@ DEFAULT_LINKS: List[Tuple[str, str]] = [
     ("Kahoot", "https://create.kahoot.it/"),
 ]
 PROFILE_NAME = "StageDisplayWeb"
-MIRROR_MS = 180                 # the desk's live picture of the stage page, about five a second
+MIRROR_MS = 150                 # the desk's live picture of the stage page: this often while it is worked on,
+MIRROR_IDLE_S = 0.8             # this often when nobody touches it (a 1080p picture is no small thing to take)
+MIRROR_BUSY_S = 4.0             # how long after a click, a key or the clicker it counts as worked on
+# Sign-in pages that report back to the page that opened them (Canva's "Continue with Google"): they
+# get a window of their own, or the answer has nowhere to go and the page stays white.
+SIGN_IN_HOSTS = ("accounts.google.com", "login.microsoftonline.com", "login.live.com", "appleid.apple.com",
+                 "www.facebook.com", "m.facebook.com", "auth.kahoot.it", "clever.com", "login.clever.com")
 BOUNCE_S = 0.4                  # a key handed back by the page this soon after we sent it is ours
 
 # Keys a web page should get even though the dashboard has a shortcut for them -
@@ -74,6 +80,11 @@ def load_links(stored) -> List[Tuple[str, str]]:
 
 def dump_links(links: List[Tuple[str, str]]) -> str:
     return json.dumps([list(entry) for entry in links], ensure_ascii=False)
+
+
+def is_sign_in(url: QUrl) -> bool:
+    host = url.host().lower()
+    return any(host == h or host.endswith("." + h) for h in SIGN_IN_HOSTS)
 
 
 def _wants_page(event) -> bool:
@@ -118,6 +129,9 @@ class WebStage(QObject):
         self.shortcut_owner: Optional[QWidget] = None    # the dashboard, whose shortcuts step aside for keys
         self._mirror_timer = QTimer(self)
         self._mirror_timer.timeout.connect(self._refresh_mirror)
+        self._mirror_taken = 0.0
+        self._busy_until = 0.0
+        self.popups: List[QWidget] = []             # sign-in windows open now
 
     def available(self) -> bool:
         try:
@@ -142,18 +156,28 @@ class WebStage(QObject):
         view = QWebEngineView()
         view.setContextMenuPolicy(Qt.NoContextMenu)
         view.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        stage = self
 
         class Page(QWebEnginePage):
-            def createWindow(self, _kind):  # noqa: N802
-                # A link that wants a new tab ("Present", "Start") opens here instead.
-                spare = QWebEnginePage(self.profile(), self)
+            def createWindow(self, kind):  # noqa: N802
+                spare = Page(self.profile(), stage)
+                if kind in (QWebEnginePage.WebDialog, QWebEnginePage.WebBrowserWindow):
+                    stage._popup(spare)         # a sign-in window: it reports back to this page
+                    return spare
 
-                def follow(url: QUrl) -> None:
-                    if url.isValid() and not url.isEmpty() and url.scheme() != "about":
+                # A link that wants a new tab ("Present", "Start") opens here instead -
+                # unless it is a sign-in, which must keep the page that asked for it.
+                def first(url: QUrl) -> None:
+                    if not url.isValid() or url.isEmpty() or url.scheme() == "about":
+                        return
+                    spare.urlChanged.disconnect(first)
+                    if is_sign_in(url):
+                        stage._popup(spare)
+                    else:
                         self.setUrl(url)
                         spare.deleteLater()
 
-                spare.urlChanged.connect(follow)
+                spare.urlChanged.connect(first)
                 return spare
 
             def javaScriptConsoleMessage(self, *_args):  # noqa: N802
@@ -187,6 +211,38 @@ class WebStage(QObject):
         self.loading = False
         self._watch_keys()
         self.changed.emit()
+
+    # -- sign-in windows ------------------------------------------------------------- #
+    def _popup(self, page) -> None:
+        """
+        A page the site opened as a window of its own - "Continue with Google" and the like:
+        a small window on the desk, over the dashboard. It keeps its link to the page that
+        opened it, so the sign-in's answer gets back; when the site closes it, it goes.
+        """
+        from PySide6.QtWebEngineWidgets import QWebEngineView
+        owner = self.shortcut_owner
+        window = QWidget(owner, Qt.Window)
+        window.setAttribute(Qt.WA_DeleteOnClose)
+        window.setWindowTitle(tr("Sign in"))
+        box = QVBoxLayout(window)
+        box.setContentsMargins(0, 0, 0, 0)
+        view = QWebEngineView(window)
+        view.setContextMenuPolicy(Qt.NoContextMenu)
+        page.setParent(window)                  # it goes with its window - and before the profile
+        view.setPage(page)
+        box.addWidget(view)
+        page.setAudioMuted(True)
+        page.windowCloseRequested.connect(window.close)
+        page.titleChanged.connect(lambda title: window.setWindowTitle(title or tr("Sign in")))
+        window.resize(520, 700)
+        screen = (owner.screen() if owner is not None else None) or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        window.move(area.center() - QPoint(260, 350))
+        self.popups.append(window)
+        window.destroyed.connect(lambda *_: self.popups.remove(window) if window in self.popups else None)
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     # -- what it shows -------------------------------------------------------------- #
     def is_open(self) -> bool:
@@ -316,7 +372,17 @@ class WebStage(QObject):
     def _refresh_mirror(self) -> None:
         if self.mirror is None or not self.mirror.isVisible() or self.where != "stage":
             return
+        if self.mirror.window().isMinimized():
+            return                              # nobody can see it
+        now = time.monotonic()
+        if now > self._busy_until and now - self._mirror_taken < MIRROR_IDLE_S:
+            return                              # nothing touched it lately: about once a second is plenty
+        self._mirror_taken = now
         self.mirror.set_picture(self.view.grab())
+
+    def _poke(self) -> None:
+        """Someone is working the page: its picture on the desk follows closely for a while."""
+        self._busy_until = time.monotonic() + MIRROR_BUSY_S
 
     # -- input from the desk to the stage page ----------------------------------------- #
     def _target(self) -> Optional[QWidget]:
@@ -331,6 +397,7 @@ class WebStage(QObject):
                        point.y() * self.view.height() / max(1, self.mirror.height()))
 
     def send_mouse(self, kind, point: QPointF, button, buttons, modifiers) -> None:
+        self._poke()
         target = self._target()
         if target is None or self.where != "stage":
             return
@@ -342,6 +409,7 @@ class WebStage(QObject):
         QApplication.sendEvent(target, event)
 
     def send_wheel(self, event) -> None:
+        self._poke()
         target = self._target()
         if target is None or self.where != "stage":
             return
@@ -353,6 +421,7 @@ class WebStage(QObject):
 
     def send_key(self, key: int, modifiers=Qt.NoModifier, text: str = "") -> None:
         """A key for the stage page; the desk keeps the keyboard."""
+        self._poke()
         self._with_focus(lambda: self._deliver_key(key, modifiers, text))
 
     def press(self, direction: str) -> None:
@@ -408,6 +477,7 @@ class WebStage(QObject):
     # -- from a phone: a tap, typing, scrolling ------------------------------------------- #
     def click_at(self, fx: float, fy: float) -> None:
         """A click at a point of the page given as fractions of its width and height."""
+        self._poke()
         target = self._target()
         if target is None or self.view is None or not self.is_open():
             return
@@ -428,6 +498,7 @@ class WebStage(QObject):
 
     def scroll(self, amount: float) -> None:
         """Scroll by a share of the page's height: positive down, negative up."""
+        self._poke()
         if self.page is not None:
             self.page.runJavaScript(f"window.scrollBy(0, window.innerHeight * {float(amount):.3f})")
 
@@ -514,6 +585,10 @@ class WebStage(QObject):
 
         self._mirror_timer.stop()
         self._attach_window(None)
+        for window in list(self.popups):             # sign-in windows first: their pages use the profile too
+            if Shiboken.isValid(window):
+                Shiboken.delete(window)
+        self.popups = []
         page, view = self.page, self.view
         self.page = self.view = None
         self.where = ""
