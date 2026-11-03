@@ -33,6 +33,7 @@ from config import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ROLE_LABELS, ROLE_MAIN, R
 from media import MediaProblem
 from presentation import PDF_EXTENSIONS, POWERPOINT_EXTENSIONS
 from show import new_step
+import webstage as web_mod
 
 DECK_EXTENSIONS = PDF_EXTENSIONS | POWERPOINT_EXTENSIONS
 UPLOAD_EXTENSIONS = set(IMAGE_EXTENSIONS) | set(VIDEO_EXTENSIONS) | set(AUDIO_EXTENSIONS) | DECK_EXTENSIONS
@@ -749,7 +750,9 @@ class PhoneControl:
         if "index" in data:
             url = self.web_tab._links[int(data["index"])][1]
         else:
-            url = str(data.get("url", ""))
+            url = web_mod.normalise_url(str(data.get("url", "")))
+            if url and not web_mod.is_web_address(url):
+                return False, tr("Only web addresses (https://...) can be opened from a phone or Stage Cloud.")
         if not self.web.available():
             return False, tr("This installation of PySide6 has no QtWebEngine.")
         if not self.web.open(url, self.web_tab.host):

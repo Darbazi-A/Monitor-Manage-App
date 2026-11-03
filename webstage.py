@@ -64,6 +64,12 @@ def normalise_url(text: str) -> str:
     return url.toString() if url.isValid() else ""
 
 
+def is_web_address(url: str) -> bool:
+    """http(s) only - for what comes from a phone or Stage Cloud: never a file on this computer
+    (C:\\..., file:, \\\\server\\share) nor the browser's own pages."""
+    return QUrl(url).scheme() in ("http", "https")
+
+
 def load_links(stored) -> List[Tuple[str, str]]:
     try:
         data = json.loads(stored) if isinstance(stored, str) and stored else None

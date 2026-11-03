@@ -1181,6 +1181,8 @@ KA = {
     "Address:": "მისამართი:",
     "Name in the list:": "სახელი სიაში:",
     "That is not an address that can be opened.": "ეს მისამართი ვერ გაიხსნება.",
+    "Only web addresses (https://...) can be opened from a phone or Stage Cloud.":
+        "ტელეფონიდან და Stage Cloud-იდან მხოლოდ ვებმისამართი (https://...) იხსნება.",
     "ON THE MAIN STAGE  ·  {0}": "მთავარ სცენაზეა  ·  {0}",
     "·  loading…": "·  იტვირთება…",
     "On the desk only - silent, not on a screen  ·  {0}": "მხოლოდ მაგიდაზე - უხმოდ, ეკრანზე არ არის  ·  {0}",
