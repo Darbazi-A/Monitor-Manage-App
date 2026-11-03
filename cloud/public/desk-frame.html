@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remote desk</title></head>
+<body>
+<script>
+// The remote desk's frame: sandboxed (an opaque origin, no cookies, nothing of the dashboard's),
+// with rules of its own that let the hall's phone page run its inline scripts. The dashboard
+// sends the page once; it replaces this one, and this listener goes with it.
+addEventListener("message", function (e) {
+  if (e.source !== parent || !e.data || typeof e.data.sdcPage !== "string") return;
+  document.open();
+  document.write(e.data.sdcPage);
+  document.close();
+});
+</script>
+</body></html>

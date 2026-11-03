@@ -36,6 +36,7 @@ function open(url, headers) {
     ws.inbox = [];
     ws.onmessage = e => ws.inbox.push(JSON.parse(e.data));
     ws.onopen = () => resolve(ws);
+    ws.onclose = e => { ws.closedWith = e.code; };
     ws.onerror = e => reject(new Error("socket refused"));
   });
 }
@@ -182,11 +183,60 @@ check("the journal has who did what", texts.some(t => t.startsWith("message: Eve
 r = await viewer.call("/api/journal");
 check("viewers do not read the journal", r.status === 403);
 
+r = await viewer.call(`/api/halls/${hallId}/journal`);
+check("... nor a hall's journal", r.status === 403);
+
+// -- the web from the cloud: web addresses only ------------------------------------------------- //
+for (const [url, ok] of [["file:///C:/Users/x/secret.pdf", false], ["C:\\Users\\x\\a.pdf", false], ["\\\\server\\share", false],
+                         ["chrome://settings", false], ["javascript:alert(1)", false], ["https://kahoot.it", true], ["canva.com/design/abc", true]]) {
+  desk.send(JSON.stringify({ t: "rpc", id: 40, method: "POST", path: "/api/action", body: JSON.stringify({ action: "web_open", url }) }));
+  if (ok) {
+    const there = await waitFor(hall, m => m.t === "rpc" && m.path === "/api/action");
+    check(`a web address reaches the hall: ${url}`, !!there);
+    hall.send(JSON.stringify({ t: "reply", id: there.id, status: 200, type: "application/json", body: '{"ok":true}' }));
+    await waitFor(desk, m => m.t === "reply" && m.id === 40);
+  } else {
+    const answer = await waitFor(desk, m => m.t === "reply" && m.id === 40);
+    check(`not a web address, refused: ${url}`, answer?.status === 403 && !(await waitFor(hall, m => m.t === "rpc", 300)), answer);
+  }
+}
+
+// -- the site's own pages: security headers ---------------------------------------------------- //
+let page = await fetch(BASE + "/");
+let csp = page.headers.get("content-security-policy") || "";
+check("the dashboard: its own scripts only, never framed", /script-src 'self'(;|$)/.test(csp) && /frame-ancestors 'none'/.test(csp)
+      && page.headers.get("x-frame-options") === "DENY" && page.headers.get("x-content-type-options") === "nosniff", csp);
+page = await fetch(BASE + "/desk-frame");
+csp = page.headers.get("content-security-policy") || "";
+check("the remote desk's frame: inline scripts, reaches nothing, framed by this site only",
+      page.status === 200 && /script-src 'unsafe-inline'/.test(csp) && /connect-src 'none'/.test(csp) && csp.includes("frame-ancestors " + BASE)
+      && !page.headers.get("x-frame-options"), [page.status, csp]);
+r = await admin.call("/api/me");
+check("API answers carry them too", r.status === 200);
+
+// -- rights that change while a desk is open ---------------------------------------------------- //
+r = await admin.call("/api/users", { op: "role", name: "Ana", role: "viewer" });
+await sleep(300);
+check("a new role closes the open desk at once", desk.closedWith === 4401, desk.closedWith);
+const again1 = await operator.socket(`/api/halls/${hallId}/live`);
+const hello2 = await waitFor(again1, m => m.t === "hello");
+check("... and the desk opened again has the new role", hello2?.you?.role === "viewer", hello2?.you);
+again1.send(JSON.stringify({ t: "rpc", id: 9, method: "POST", path: "/api/action", body: '{"action":"screen_black"}' }));
+check("... which only looks", (await waitFor(again1, m => m.t === "reply" && m.id === 9))?.status === 403);
+r = await admin.call("/api/users", { op: "remove", name: "Gio" });
+await sleep(300);
+check("removing someone closes their live page", watching.closedWith === 4401, watching.closedWith);
+await operator.call("/api/logout", {});
+await sleep(300);
+check("signing out closes the desks of that session", again1.closedWith === 4401, again1.closedWith);
+
 // -- pairing again, going offline, removing ------------------------------------------------------ //
+const watch = await admin.socket(`/api/halls/${hallId}/live`);
+await waitFor(watch, m => m.t === "hello");
 r = await admin.call(`/api/halls/${hallId}/pair`, {});
 const second = await pair(r.data.code);
 check("pairing again gives a new token", second.data?.ok && second.data.token !== token);
-const closed = await waitFor(desk, m => m.t === "online", 300);
+const closed = await waitFor(watch, m => m.t === "online", 300);
 const again = await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + second.data.token });
 await sleep(300);
 check("the new connection takes over", again.readyState === 1 && hall.readyState >= 2, [hall.readyState, closed]);
@@ -194,12 +244,13 @@ let oldRefused = false;
 try { await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + token }); } catch (e) { oldRefused = true; }
 check("the old token no longer works", oldRefused);
 again.close();
-const off = await waitFor(desk, m => m.t === "online" && m.online === false, 3000);
+const off = await waitFor(watch, m => m.t === "online" && m.online === false, 3000);
 r = await admin.call("/api/halls");
 check("closing: offline, in the desk and the list", off && r.data?.[0]?.online === false, r.data?.[0]);
 
 r = await admin.call("/api/password", { old: "wrong", password: "new-boss-password" });
 check("own password: the old one is needed", !r.data?.ok);
+await operator.call("/api/login", { name: "ana", password: "ana-password" });
 r = await operator.call(`/api/halls/${hallId}/remove`, {});
 check("only administrators remove halls", r.status === 403);
 r = await admin.call(`/api/halls/${hallId}/remove`, {});
@@ -209,6 +260,6 @@ r = await admin.call("/api/logout", {});
 r = await admin.call("/api/me");
 check("signed out", r.status === 401);
 
-desk.close(); watching.close();
+watch.close();
 console.log("\nFAILURES:", failures.length ? failures : "none");
 process.exit(failures.length ? 1 : 0);

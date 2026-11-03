@@ -336,10 +336,12 @@ class Live {
       if (m.t === "reply" && this.pending.has(m.id)) { this.pending.get(m.id)(m); this.pending.delete(m.id); return; }
       this.onMessage(m);
     };
-    this.ws.onclose = () => {
+    this.ws.onclose = e => {
       for (const [, resolve] of this.pending) resolve({ status: 503, type: "application/json", body: '{"ok":false,"message":"disconnected"}' });
       this.pending.clear();
       if (this.closed) return;
+      // the cloud closed it: signed out, removed, or a new role - ask again who I am
+      if (e.code === 4401) { this.closed = true; me = null; route(); return; }
       this.onMessage({ t: "socket", on: false });
       setTimeout(() => !this.closed && this.open(), Math.min(15000, 1000 * 2 ** this.tries++));
     };
@@ -355,6 +357,15 @@ class Live {
     });
   }
   close() { this.closed = true; try { this.ws.close(); } catch (e) { /* */ } }
+}
+
+// a screen's picture from the hall, as a data: address - only a real image; anything else the
+// hall sends (a hall's computer can be taken over) never reaches the page's HTML
+function pictureUrl(answer) {
+  const type = String(answer.type || "").split(";")[0].trim().toLowerCase();
+  const b64 = String(answer.b64 || "");
+  if (!/^image\/(jpeg|png|webp)$/.test(type) || !b64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return "";
+  return `data:${type};base64,${b64}`;
 }
 
 const MESSAGES = ["The event starts in 10 minutes.", "Please check the microphones.", "Please open the stage screens.",
@@ -388,7 +399,7 @@ async function hallPage(id) {
       <div class="cols"><div>
         <div class="section-title"><h2>${esc(t("On the stage now"))}</h2>${on && !picturesOff ? `<span class="badge ok"><span class="dot"></span>${esc(t("live"))}</span>` : ""}</div>
         ${(sum.screens || []).length ? `<div class="stage">${sum.screens.map(s => `<div class="card tile ${s.kind === "strip" ? "strip" : ""}">
-          <div class="pic" data-role="${esc(s.role)}">${on && s.open && pictures[s.role] ? `<img alt="" src="${pictures[s.role]}">`
+          <div class="pic" data-role="${esc(s.role)}">${on && s.open && pictures[s.role] ? `<img alt="" src="${esc(pictures[s.role])}">`
             : esc(!on ? t("offline") : !s.open ? t("closed") : picturesOff ? t("pictures need the remote desk") : t("…"))}</div>
           <div class="meta"><span class="mon-dot badge ${on && s.open ? "ok" : ""}" style="height:22px;padding:0 8px"><span class="dot"></span></span>
             <div class="grow"><b class="ell" style="display:block">${esc(s.name)}</b><span class="sub ell" style="display:block">${s.open ? esc(s.what || t("black / nothing")) : esc(t("closed"))}</span></div></div>
@@ -432,10 +443,11 @@ async function hallPage(id) {
     for (const s of (sum.screens || []).filter(x => x.open)) {
       const answer = await live.rpc("GET", "/api/screen", { role: s.role }, null);
       if (answer.status === 403) { picturesOff = true; draw(); return; }
-      if (answer.status === 200 && answer.b64) {
-        pictures[s.role] = `data:${answer.type};base64,${answer.b64}`;
+      const url = answer.status === 200 ? pictureUrl(answer) : "";
+      if (url) {
+        pictures[s.role] = url;
         const box = document.querySelector(`.pic[data-role="${CSS.escape(s.role)}"]`);
-        if (box) box.innerHTML = `<img alt="" src="${pictures[s.role]}">`;
+        if (box) box.innerHTML = `<img alt="" src="${esc(url)}">`;
       }
     }
   };
@@ -567,10 +579,19 @@ async function remoteDesk(id) {
       return say(message);
     }
     loaded = true;
+    // the frame is a page of its own (/desk-frame, with its own looser rules for the hall's
+    // inline scripts); this dashboard keeps its strict ones. It gets the hall's page once.
     frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals");
     frame.setAttribute("title", t("Remote desk"));
-    frame.srcdoc = page.body.replace(/<head>/i, "<head>" + SHIM);
+    const html = page.body.replace(/<head>/i, "<head>" + SHIM);
+    let sent = false;
+    frame.addEventListener("load", () => {
+      if (sent) return;
+      sent = true;
+      frame.contentWindow?.postMessage({ sdcPage: html }, "*");
+    });
+    frame.src = "/desk-frame";
     $("stage").innerHTML = "";
     $("stage").appendChild(frame);
   };

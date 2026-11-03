@@ -9,7 +9,7 @@ workers_dev = true
 [assets]
 directory = "./public"
 binding = "ASSETS"
-run_worker_first = ["/api/*", "/hall/*"]
+run_worker_first = true             # every answer gets the security headers (src/index.js)
 not_found_handling = "single-page-application"
 
 [[durable_objects.bindings]]

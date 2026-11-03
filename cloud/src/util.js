@@ -3,9 +3,34 @@
 export const ROLES = ["viewer", "operator", "admin"];
 export const rank = role => ROLES.indexOf(role);
 
+// every answer: no sniffing, no framing by other sites, no referrer, HTTPS from now on
+export const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Strict-Transport-Security": "max-age=31536000",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+};
+
+// the dashboard: its own scripts only (no inline ones), its own frame (the remote desk), nobody frames it
+export const PAGE_CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src https://fonts.gstatic.com", "img-src 'self' data: blob:", "connect-src 'self'", "frame-src 'self'",
+  "manifest-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+].join("; ");
+
+// the remote desk's frame: the hall's phone page and its inline scripts, but it reaches nothing -
+// its requests go to the dashboard by postMessage - and only this site's dashboard may frame it
+// (by its address: the frame is sandboxed, an opaque origin, which 'self' would not match)
+export const frameCsp = origin => [
+  "default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", "img-src data: blob:",
+  "media-src data: blob:", "font-src data:", "connect-src 'none'", "object-src 'none'", "base-uri 'none'",
+  "form-action 'none'", `frame-ancestors ${origin}`,
+].join("; ");
+
 export function json(value, status = 200, headers = {}) {
   return new Response(JSON.stringify(value), {
-    status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers },
+    status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...SECURITY_HEADERS, ...headers },
   });
 }
 

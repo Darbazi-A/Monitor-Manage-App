@@ -8,8 +8,9 @@ import { join } from "node:path";
 const PORT = process.env.PORT || "8799";
 const here = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const state = mkdtempSync(join(tmpdir(), "stage-cloud-test-"));
-const server = spawn("npx.cmd", ["wrangler", "dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", state,
-                                 "--show-interactive-dev-session=false"], { cwd: decodeURIComponent(here), shell: true });
+const windows = process.platform === "win32";
+const server = spawn(windows ? "npx.cmd" : "npx", ["wrangler", "dev", "--ip", "127.0.0.1", "--port", PORT, "--persist-to", state,
+                                 "--show-interactive-dev-session=false"], { cwd: decodeURIComponent(here), shell: windows, detached: !windows });
 let log = "";
 const ready = new Promise((resolve, reject) => {
   const look = chunk => { log += chunk; if (/Ready on/.test(log)) resolve(); };
@@ -20,7 +21,10 @@ const ready = new Promise((resolve, reject) => {
 });
 
 function stop() {
-  try { execSync(`taskkill /PID ${server.pid} /T /F`, { stdio: "ignore" }); } catch (e) { /* gone */ }
+  try {
+    if (windows) execSync(`taskkill /PID ${server.pid} /T /F`, { stdio: "ignore" });
+    else process.kill(-server.pid, "SIGTERM");            // the whole group: npx, wrangler, workerd
+  } catch (e) { /* gone */ }
   try { rmSync(state, { recursive: true, force: true }); } catch (e) { /* busy */ }
 }
 

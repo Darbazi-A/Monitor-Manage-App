@@ -65,20 +65,22 @@ export class Directory extends DurableObject {
 
   users() { return this.rows("SELECT name, role, created FROM users ORDER BY name COLLATE NOCASE"); }
 
-  setRole(name, role, by) {
+  async setRole(name, role, by) {
     if (!ROLES.includes(role) || !this.one("SELECT name FROM users WHERE name = ?", name)) return { ok: false, message: "no such user" };
     if (role !== "admin" && this.lastAdmin(name)) return { ok: false, message: "the last administrator stays one" };
     this.sql.exec("UPDATE users SET role = ? WHERE name = ?", role, name);
     this.note(by, "", `role of ${name}: ${role}`);
+    await this.dropViewers({ user: name });
     return { ok: true };
   }
 
-  removeUser(name, by) {
+  async removeUser(name, by) {
     if (!this.one("SELECT name FROM users WHERE name = ?", name)) return { ok: false, message: "no such user" };
     if (this.lastAdmin(name)) return { ok: false, message: "the last administrator stays" };
     this.sql.exec("DELETE FROM users WHERE name = ?", name);
     this.sql.exec("DELETE FROM sessions WHERE name = ?", name);
     this.note(by, "", `user removed: ${name}`);
+    await this.dropViewers({ user: name });
     return { ok: true };
   }
 
@@ -96,6 +98,7 @@ export class Directory extends DurableObject {
     this.sql.exec("UPDATE users SET salt = ?, hash = ? WHERE name = ?", salt, hash, name);
     this.sql.exec("DELETE FROM sessions WHERE name = ?", name);    // signed out everywhere
     this.note(by, "", by === name ? "own password changed" : `password of ${name} reset`);
+    await this.dropViewers({ user: name });
     return { ok: true };
   }
 
@@ -118,13 +121,31 @@ export class Directory extends DurableObject {
 
   async session(token) {
     if (!token) return null;
-    const row = this.one(`SELECT u.name, u.role, s.expires FROM sessions s JOIN users u ON u.name = s.name
-                          WHERE s.hash = ?`, await sha256(token));
-    if (!row || row.expires < Date.now()) return null;
-    return { name: row.name, role: row.role };
+    return this.sessionByHash(await sha256(token));
   }
 
-  async logout(token) { this.sql.exec("DELETE FROM sessions WHERE hash = ?", await sha256(token)); }
+  // who a session is now (its role as it is now), or null once it has ended
+  sessionByHash(hash) {
+    if (!hash) return null;
+    const row = this.one(`SELECT u.name, u.role, s.expires FROM sessions s JOIN users u ON u.name = s.name
+                          WHERE s.hash = ?`, hash);
+    if (!row || row.expires < Date.now()) return null;
+    return { name: row.name, role: row.role, expires: row.expires };
+  }
+
+  async logout(token) {
+    const hash = await sha256(token);
+    this.sql.exec("DELETE FROM sessions WHERE hash = ?", hash);
+    await this.dropViewers({ session: hash });
+  }
+
+  // the halls' open remote desks and live pages of someone whose rights changed: closed now,
+  // not when they next reload (a removed person must not keep a desk open for days)
+  async dropViewers(match) {
+    for (const { id } of this.rows("SELECT id FROM halls")) {
+      try { await this.env.HALL.get(this.env.HALL.idFromName(id)).dropViewers(match); } catch (e) { /* that hall's object is busy: it checks again on the next request */ }
+    }
+  }
 
   // -- halls ------------------------------------------------------------------------------- //
   async addHall(name, by) {

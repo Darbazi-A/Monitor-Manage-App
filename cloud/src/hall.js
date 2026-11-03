@@ -23,8 +23,22 @@ export class Hall extends DurableObject {
   viewers() { return this.ctx.getWebSockets("viewer"); }
 
   broadcast(message) {
-    const text = JSON.stringify(message);
-    for (const ws of this.viewers()) { try { ws.send(text); } catch (e) { /* gone */ } }
+    const text = JSON.stringify(message), now = Date.now();
+    for (const ws of this.viewers()) {
+      const who = ws.deserializeAttachment() || {};
+      if (who.expires && who.expires < now) { this.drop(ws, "signed out"); continue; }    // the session ran out
+      try { ws.send(text); } catch (e) { /* gone */ }
+    }
+  }
+
+  drop(ws, why) { try { ws.close(4401, why); } catch (e) { /* already */ } }
+
+  // the directory: someone's rights changed (removed, a new role or password, signed out)
+  dropViewers(match) {
+    for (const ws of this.viewers()) {
+      const who = ws.deserializeAttachment() || {};
+      if ((match.user && who.user === match.user) || (match.session && who.session === match.session)) this.drop(ws, "signed out");
+    }
   }
 
   // -- connections (the Worker has checked who it is) ------------------------------------ //
@@ -44,8 +58,9 @@ export class Hall extends DurableObject {
     } else {
       const id = crypto.randomUUID().slice(0, 8);
       const user = request.headers.get("X-SDC-User"), role = request.headers.get("X-SDC-Role");
+      const session = request.headers.get("X-SDC-Session") || "", expires = Number(request.headers.get("X-SDC-Expires")) || 0;
       this.ctx.acceptWebSocket(server, ["viewer", "v:" + id]);
-      server.serializeAttachment({ kind: "viewer", id, user, role });
+      server.serializeAttachment({ kind: "viewer", id, user, role, session, expires });
       server.send(JSON.stringify({ t: "hello", ...(await this.snapshot()), you: { user, role } }));
     }
     return new Response(null, { status: 101, webSocket: client });
@@ -101,8 +116,14 @@ export class Hall extends DurableObject {
     if (message.t !== "rpc") return;
     const reply = (status, body) => ws.send(JSON.stringify({ t: "reply", id: message.id, status, type: "application/json",
                                                                body: JSON.stringify(body) }));
+    // who it is now, not when the socket opened: a removed person, a lower role, a session ended
+    const now = await this.directory().sessionByHash(who.session);
+    if (!now || now.name !== who.user) { reply(401, { ok: false, message: "signed out" }); return this.drop(ws, "signed out"); }
+    if (now.role !== who.role) ws.serializeAttachment({ ...who, role: now.role });
     const method = message.method === "POST" ? "POST" : "GET";
-    if (rank(who.role) < rank("operator") && method !== "GET") return reply(403, { ok: false, message: "viewing only" });
+    if (rank(now.role) < rank("operator") && method !== "GET") return reply(403, { ok: false, message: "viewing only" });
+    const refused = method === "POST" ? refusedAction(message) : "";
+    if (refused) return reply(403, { ok: false, message: refused });
     const hall = this.hallSocket();
     if (!hall) return reply(503, { ok: false, message: "the hall is not connected" });
     hall.send(JSON.stringify({ t: "rpc", id: `v:${who.id}|${message.id}`, user: who.user, method,
@@ -146,13 +167,36 @@ export class Hall extends DurableObject {
   }
 }
 
+// the remote desk's body, as an object
+function actionBody(message) {
+  let body = message.body;
+  try { if (typeof body === "string") body = JSON.parse(body); } catch (e) { body = {}; }
+  return body && typeof body === "object" ? body : {};
+}
+
+// a web page from the cloud is a web address and nothing else: never a file on the hall's
+// computer (C:\..., file:, \\server\share), nor the browser's own pages
+export function webAddressRefused(text) {
+  const url = String(text ?? "").trim();
+  if (!url) return "";
+  if (/^https?:\/\/[^\s\/\\]/i.test(url)) return "";
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d{1,5})?([\/?#][^\s]*)?$/i.test(url)) return "";   // canva.com/design/...
+  return "Only web addresses (https://...) can be opened from Stage Cloud.";
+}
+
+function refusedAction(message) {
+  if (String(message.path || "") !== "/api/action") return "";
+  const body = actionBody(message);
+  if (body.action === "web_open" && !("index" in body)) return webAddressRefused(body.url);
+  return "";
+}
+
 // what goes in the journal for a request from the remote desk
 function describe(message) {
   const path = String(message.path || "");
   if (path === "/api/upload" && message.params?.op === "begin") return "file sent: " + String(message.params.name || "").slice(0, 120);
   if (path !== "/api/action") return "";
-  let body = message.body;
-  try { if (typeof body === "string") body = JSON.parse(body); } catch (e) { body = {}; }
+  const body = actionBody(message);
   const action = String(body?.action || "?");
   if (/^(web_key|web_scroll|screen_seek|screen_volume|break_seek)$/.test(action)) return "";   // too many to note
   const detail = body?.role ? ` (${body.role})` : "";

@@ -44,6 +44,17 @@ buttons, actions in sheets that slide up from below, and *Add to Home screen* ma
   WebSocket to the hall, which answers them as it answers a phone. A hall can switch it off:
   *Settings → Cloud → Allow running this hall from the dashboard*. Whatever is done shows at the
   hall's desk, with who did it, and goes in the **journal**.
+- **What a hall sends is not trusted.** A hall's computer can be taken over, so its pictures go
+  into the page only as real images (JPEG, PNG, WebP), and the dashboard runs its own scripts only
+  (`Content-Security-Policy: script-src 'self'`, never framed by another site). The remote desk's
+  frame is a page of its own, `/desk-frame` (sandboxed, with rules that let the hall's page run
+  but reach nothing): the hall's page comes in by `postMessage`.
+- **Rights are checked on every request.** A remote desk or a live page that is open checks its
+  session with each request; a new role, a new password, signing out or being removed closes it
+  at once.
+- **Web pages from the cloud are web addresses** (`https://…`, `canva.com/…`): never a file on the
+  hall's computer (`C:\…`, `file:`, `\\server\share`) nor the browser's own pages - checked
+  here and again in the hall's program.
 
 ## Putting it online
 
@@ -70,7 +81,7 @@ node test/with_server.mjs test/server_test.mjs   # the cloud's own test, on a fr
 node test/words_test.cjs                      # every word of the dashboard has its Georgian
 ```
 
-`.dev.vars` (not in git) holds `SETUP_KEY=…` for `wrangler dev`.
+`.dev.vars` (not in git) holds `SETUP_KEY=…` for `wrangler dev`. The test runs on Windows, macOS and Linux.
 
 | File | What |
 | --- | --- |

@@ -4,7 +4,7 @@
 //   /hall/...    the halls' programs: pairing with a code, then a WebSocket with their token
 import { Directory } from "./directory.js";
 import { Hall } from "./hall.js";
-import { ROLES, cleanName, cookie, fail, json, rank, sameText } from "./util.js";
+import { PAGE_CSP, ROLES, SECURITY_HEADERS, cleanName, cookie, fail, frameCsp, json, rank, sameText, sha256 } from "./util.js";
 
 export { Directory, Hall };
 
@@ -17,13 +17,26 @@ export default {
     try {
       if (url.pathname.startsWith("/hall/")) return await hallRoutes(request, env, url);
       if (url.pathname.startsWith("/api/")) return await apiRoutes(request, env, url);
-      return env.ASSETS.fetch(request);
+      return withHeaders(await env.ASSETS.fetch(request), url);
     } catch (error) {
       console.error(error);
       return fail(500, "server error");
     }
   },
 };
+
+// the site's files, with the security headers (the Worker runs first for every request)
+function withHeaders(response, url) {
+  const path = url.pathname, out = new Response(response.body, response);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) out.headers.set(name, value);
+  const type = out.headers.get("Content-Type") || "";
+  if (type.startsWith("text/html")) {
+    out.headers.set("Content-Security-Policy", path === "/desk-frame.html" || path === "/desk-frame" ? frameCsp(url.origin) : PAGE_CSP);
+    out.headers.set("Cache-Control", "no-cache");
+  }
+  if (path !== "/desk-frame.html" && path !== "/desk-frame") out.headers.set("X-Frame-Options", "DENY");
+  return out;
+}
 
 const directory = env => env.DIRECTORY.get(env.DIRECTORY.idFromName("main"));
 const hallObject = (env, id) => env.HALL.get(env.HALL.idFromName(id));
@@ -98,7 +111,7 @@ async function apiRoutes(request, env, url) {
     await dir.logout(cookie(request, SESSION_COOKIE));
     return json({ ok: true }, 200, { "Set-Cookie": `${SESSION_COOKIE}=; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Strict; Path=/; Max-Age=0` });
   }
-  if (path === "/api/me") return json(me);
+  if (path === "/api/me") return json({ name: me.name, role: me.role });
   if (path === "/api/password" && method === "POST") {
     const data = await body(request);
     return reply(await dir.setPassword(me.name, data.password, me.name, String(data.old || "")));
@@ -118,9 +131,14 @@ async function apiRoutes(request, env, url) {
     if (!verb && method === "GET") return json({ ...hall, ...(await hallObject(env, id).snapshot()) });
     if (verb === "live") {
       if (request.headers.get("Upgrade") !== "websocket") return fail(426, "a WebSocket");
-      return hallObject(env, id).fetch(forwarded(request, { "X-SDC-Kind": "viewer", "X-SDC-User": me.name, "X-SDC-Role": me.role }));
+      // the hall checks this session again on every request, and closes the socket when it ends
+      return hallObject(env, id).fetch(forwarded(request, { "X-SDC-Kind": "viewer", "X-SDC-User": me.name, "X-SDC-Role": me.role,
+        "X-SDC-Session": await sha256(cookie(request, SESSION_COOKIE)), "X-SDC-Expires": String(me.expires) }));
     }
-    if (verb === "journal" && method === "GET") return json(await dir.journal(id, 100));
+    if (verb === "journal" && method === "GET") {
+      if (!need("operator")) return fail(403, "operators and administrators only");
+      return json(await dir.journal(id, 100));
+    }
     if (method !== "POST") return fail(405, "POST");
     const data = await body(request);
     if (verb === "command") {
