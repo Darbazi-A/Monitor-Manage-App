@@ -9,6 +9,8 @@ const LOG_KEEP = 200;
 const SUMMARY_EVERY_MS = 25000;       // the directory's copy: on a change, at most this often
 const COMMAND_MS = 15000;
 const MAX_MESSAGE = 900 * 1024;
+const ALIVE_MS = 75000;               // a hall that said something (a status, a ping) this recently is there
+const DUPLICATE_NOTE_MS = 10 * 60000; // a second computer with this hall's pairing: told at most this often
 
 export class Hall extends DurableObject {
   constructor(ctx, env) {
@@ -33,6 +35,11 @@ export class Hall extends DurableObject {
 
   drop(ws, why) { try { ws.close(4401, why); } catch (e) { /* already */ } }
 
+  // the directory: this hall was paired again - the computer connected now is no longer it
+  dropHall() {
+    for (const ws of this.ctx.getWebSockets("hall")) { try { ws.close(4000, "this hall was paired again"); } catch (e) { /* */ } }
+  }
+
   // the directory: someone's rights changed (removed, a new role or password, signed out)
   dropViewers(match) {
     for (const ws of this.viewers()) {
@@ -46,11 +53,21 @@ export class Hall extends DurableObject {
     if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket", { status: 426 });
     const kind = request.headers.get("X-SDC-Kind");
     const hallId = request.headers.get("X-SDC-Hall");
+    if (kind === "hall") {
+      const ip = request.headers.get("X-SDC-IP") || "";
+      // two computers with one pairing pushed each other off, over and over: the one that is
+      // connected and alive stays, one from somewhere else is refused (and the hall's page says so)
+      const there = this.hallSocket();
+      if (there && this.alive(there) && !samePlace((there.deserializeAttachment() || {}).ip || "", ip)) {
+        await this.noteDuplicate(ip);
+        return new Response("this hall is connected from another computer", { status: 409 });
+      }
+    }
     const { 0: client, 1: server } = new WebSocketPair();
     if (kind === "hall") {
       for (const old of this.ctx.getWebSockets("hall")) { try { old.close(4000, "another connection took over"); } catch (e) { /* */ } }
       this.ctx.acceptWebSocket(server, ["hall"]);
-      server.serializeAttachment({ kind: "hall" });
+      server.serializeAttachment({ kind: "hall", ip: request.headers.get("X-SDC-IP") || "", heard: Date.now() });
       await this.ctx.storage.put("id", hallId);
       await this.ctx.storage.put("lastSeen", Date.now());
       await this.directory().hallSeen(hallId, true);
@@ -66,6 +83,22 @@ export class Hall extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // the hall's socket said something lately: its own message, or a ping the runtime answered
+  alive(ws) {
+    let heard = (ws.deserializeAttachment() || {}).heard || 0;
+    try { heard = Math.max(heard, this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() || 0); } catch (e) { /* not known */ }
+    return Date.now() - heard < ALIVE_MS;
+  }
+
+  async noteDuplicate(ip) {
+    const last = (await this.ctx.storage.get("duplicateNoted")) || 0;
+    if (Date.now() - last < DUPLICATE_NOTE_MS) return;
+    await this.ctx.storage.put("duplicateNoted", Date.now());
+    await this.fromHall({ t: "event", level: "warn",
+      text: `Another computer (${ip || "?"}) tries to connect as this hall and was refused. If it should not be this hall: Settings → Cloud → Forget on that computer.` });
+    await this.directory().note("(cloud)", await this.ctx.storage.get("id"), `a second computer tried to connect as this hall, from ${ip || "?"}`);
+  }
+
   async snapshot() {
     const [status, lastSeen, log] = await Promise.all([
       this.ctx.storage.get("status"), this.ctx.storage.get("lastSeen"), this.ctx.storage.get("log")]);
@@ -78,7 +111,10 @@ export class Hall extends DurableObject {
     let message;
     try { message = JSON.parse(raw); } catch (e) { return; }
     const who = ws.deserializeAttachment() || {};
-    if (who.kind === "hall") await this.fromHall(message);
+    if (who.kind === "hall") {
+      if (Date.now() - (who.heard || 0) > 5000) ws.serializeAttachment({ ...who, heard: Date.now() });
+      await this.fromHall(message);
+    }
     else if (who.kind === "viewer") await this.fromViewer(ws, who, message);
   }
 
@@ -165,6 +201,15 @@ export class Hall extends DurableObject {
     for (const ws of this.ctx.getWebSockets()) { try { ws.close(4001, "the hall was removed"); } catch (e) { /* */ } }
     await this.ctx.storage.deleteAll();
   }
+}
+
+// the same place: one address, or one network (a school's addresses change within a /24, or a /64)
+export function samePlace(a, b) {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  if (a.includes(".") && b.includes(".")) return a.split(".").slice(0, 3).join(".") === b.split(".").slice(0, 3).join(".");
+  if (a.includes(":") && b.includes(":")) return a.split(":").slice(0, 4).join(":") === b.split(":").slice(0, 4).join(":");
+  return false;
 }
 
 // the remote desk's body, as an object

@@ -133,6 +133,15 @@ r = await admin.call("/api/halls");
 check("... and its summary is in the list", r.data?.[0]?.summary?.screens?.[0]?.what === "intro.mp4", r.data?.[0]);
 hall.send(JSON.stringify({ t: "event", level: "warn", text: "a video would not play" }));
 
+// -- a second computer with the same pairing ----------------------------------------------------- //
+let twinRefused = false;
+try { await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + token, "CF-Connecting-IP": "203.0.113.9" }); }
+catch (e) { twinRefused = true; }
+await sleep(300);
+check("a second computer from elsewhere does not push the live hall off", twinRefused && hall.readyState === 1, [twinRefused, hall.readyState]);
+r = await admin.call("/api/halls/" + hallId);
+check("... and the hall's page says so", (r.data?.log || []).some(e => /Another computer \(203\.0\.113\.9\)/.test(e.text)), r.data?.log);
+
 // -- commands -------------------------------------------------------------------------------- //
 const answering = (async () => {
   const cmd = await waitFor(hall, m => m.t === "cmd", 5000);
@@ -152,7 +161,7 @@ check("a hall that does not answer: said so (in 15 s)", !r.data?.ok && /did not 
 const desk = await operator.socket(`/api/halls/${hallId}/live`);
 const hello = await waitFor(desk, m => m.t === "hello");
 check("the remote desk gets the hall's status at once", hello?.status?.summary?.version === "1.3.0" && hello.online
-      && hello.log?.[0]?.text === "a video would not play" && hello.you?.role === "operator", hello);
+      && hello.log?.some(e => e.text === "a video would not play") && hello.you?.role === "operator", hello);
 desk.send(JSON.stringify({ t: "rpc", id: 7, method: "POST", path: "/api/action", body: JSON.stringify({ action: "text_show", role: "main" }) }));
 const asked = await waitFor(hall, m => m.t === "rpc");
 check("its request reaches the hall, with who asked", asked?.path === "/api/action" && asked.user === "Ana" && asked.method === "POST", asked);
@@ -237,9 +246,9 @@ r = await admin.call(`/api/halls/${hallId}/pair`, {});
 const second = await pair(r.data.code);
 check("pairing again gives a new token", second.data?.ok && second.data.token !== token);
 const closed = await waitFor(watch, m => m.t === "online", 300);
-const again = await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + second.data.token });
+const again = await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + second.data.token, "CF-Connecting-IP": "198.51.100.7" });
 await sleep(300);
-check("the new connection takes over", again.readyState === 1 && hall.readyState >= 2, [hall.readyState, closed]);
+check("pairing again, from another computer: the new one takes over", again.readyState === 1 && hall.readyState >= 2, [hall.readyState, closed]);
 let oldRefused = false;
 try { await open(BASE.replace("http", "ws") + "/hall/connect", { Authorization: "Bearer " + token }); } catch (e) { oldRefused = true; }
 check("the old token no longer works", oldRefused);

@@ -59,7 +59,7 @@ async function hallRoutes(request, env, url) {
     const hall = await dir.hallByToken(token);
     if (!hall) return fail(401, "this hall is not paired (or was paired again elsewhere)");
     if (request.headers.get("Upgrade") !== "websocket") return json({ ok: true, id: hall.id, name: hall.name });
-    return hallObject(env, hall.id).fetch(forwarded(request, { "X-SDC-Kind": "hall", "X-SDC-Hall": hall.id }));
+    return hallObject(env, hall.id).fetch(forwarded(request, { "X-SDC-Kind": "hall", "X-SDC-Hall": hall.id, "X-SDC-IP": clientIp(request) }));
   }
   return fail(404, "not found");
 }

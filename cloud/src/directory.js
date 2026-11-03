@@ -180,6 +180,8 @@ export class Directory extends DurableObject {
     this.sql.exec("UPDATE halls SET token_hash = ?, pair_hash = NULL, pair_expires = 0, computer = ? WHERE id = ?",
       await sha256(token), cleanName(computer, 80), hall.id);
     this.note(cleanName(computer, 80) || "(hall)", hall.id, "hall computer paired from " + ip);
+    // the computer paired before loses its connection now (its token no longer works either)
+    try { await this.env.HALL.get(this.env.HALL.idFromName(hall.id)).dropHall(); } catch (e) { /* it finds out on its next connection */ }
     return { ok: true, id: hall.id, name: hall.name, token };
   }
 
