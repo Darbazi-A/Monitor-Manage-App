@@ -47,7 +47,8 @@ async function call(path, body) {
   const r = await fetch(path, options);
   let data = {};
   try { data = await r.json(); } catch (e) { /* none */ }
-  if (r.status === 401 && path !== "/api/login" && path !== "/api/password") { me = null; route(); throw new Error("signed out"); }
+  if (r.status === 401 && !path.startsWith("/api/login") && path !== "/api/password") { me = null; route(); throw new Error("signed out"); }
+  if (r.status === 403 && data.need && me) { me.need = data.need; route(); throw new Error("first: " + data.need); }
   return { status: r.status, ok: r.ok && data.ok !== false, data };
 }
 
@@ -152,6 +153,8 @@ async function route() {
     try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch (e) { /* offline */ }
   }
   if (!me) return signIn();
+  if (me.need === "password") return firstPassword();
+  if (me.need === "setup2fa") return setupTotp(true);
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "hall" && parts[1]) return parts[2] === "desk" ? remoteDesk(parts[1]) : hallPage(parts[1]);
   if (parts[0] === "journal" && can("operator")) return journalPage();
@@ -195,10 +198,138 @@ async function signIn() {
       }
       const r = await call("/api/login", { name, password });
       if (!r.ok) { $("err").textContent = t(r.data.message || "That did not work."); return; }
-      me = { name: r.data.name, role: r.data.role };
+      if (r.data.need === "code") return codeStep(r.data.ticket);
+      me = null;
       route();
     } finally { if ($("go")) $("go").disabled = false; }
   };
+}
+
+// the second step: the six digits from the app (or a recovery code)
+function codeStep(ticket) {
+  app.innerHTML = `<div class="auth-page"><div class="auth card">
+    <div class="row" style="justify-content:space-between"><div class="brand"><div class="logo">${icon("shield", "s")}</div>Stage Cloud</div></div>
+    <h1>${esc(t("Two-step sign-in"))}</h1>
+    <p class="sub">${esc(t("Open the authenticator app on your phone and type the six digits for Stage Cloud."))}</p>
+    <form id="f"><label class="field"><span>${esc(t("Code"))}</span>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required class="code-input" placeholder="123 456"></label>
+      <div class="error" id="err"></div>
+      <button class="btn primary block" id="go">${esc(t("Sign in"))}</button></form>
+    <p class="muted" style="font-size:13px;margin:14px 0 0">${esc(t("No phone? A recovery code works too, once each."))}</p>
+    <button class="btn ghost block" id="back" style="margin-top:8px">${esc(t("Back"))}</button></div></div>`;
+  $("code").focus();
+  $("back").onclick = () => signIn();
+  $("f").onsubmit = async e => {
+    e.preventDefault();
+    $("go").disabled = true;
+    try {
+      const r = await call("/api/login/code", { ticket, code: $("code").value.trim() });
+      if (!r.ok) {
+        $("err").textContent = t(r.data.message || "That did not work.");
+        if (r.data.again) setTimeout(signIn, 1500);
+        $("code").select();
+        return;
+      }
+      if (r.data.recoveryLeft !== undefined) toast(tf("Signed in with a recovery code: {0} left.", r.data.recoveryLeft), r.data.recoveryLeft < 3);
+      me = null;
+      route();
+    } finally { if ($("go")) $("go").disabled = false; }
+  };
+}
+
+// a password an administrator gave: the person's own, before anything else
+function firstPassword() {
+  app.innerHTML = `<div class="auth-page"><div class="auth card">
+    <div class="row" style="justify-content:space-between"><div class="brand"><div class="logo">${icon("key", "s")}</div>Stage Cloud</div>
+      <button class="btn ghost small" id="out">${esc(t("Sign out"))}</button></div>
+    <h1>${esc(t("Your own password"))}</h1>
+    <p class="sub">${esc(t("You signed in with a password an administrator gave you. Choose your own - only you will know it."))}</p>
+    <form id="f"><label class="field"><span>${esc(t("Password now"))}</span><input id="o" type="password" autocomplete="current-password" required></label>
+      <label class="field"><span>${esc(t("New password (8 or more characters)"))}</span><input id="p" type="password" minlength="8" autocomplete="new-password" required></label>
+      <div class="error" id="err"></div><button class="btn primary block">${esc(t("Save"))}</button></form></div></div>`;
+  $("out").onclick = signOut;
+  $("o").focus();
+  $("f").onsubmit = async e => {
+    e.preventDefault();
+    const x = await call("/api/password", { old: $("o").value, password: $("p").value });
+    if (!x.ok) { $("err").textContent = t(x.data.message || "That did not work."); return; }
+    toast("Saved."); me = null; route();
+  };
+}
+
+// the authenticator app: a QR code to scan, a code to prove it, the recovery codes once
+async function loadQr() {
+  if (window.qrcode) return;
+  await new Promise((resolve, reject) => {
+    const tag = document.createElement("script");
+    tag.src = "/vendor/qrcode.js"; tag.onload = resolve; tag.onerror = reject;
+    document.head.appendChild(tag);
+  });
+}
+async function setupTotp(required) {
+  const frame = inner => {
+    if (required) {
+      app.innerHTML = `<div class="auth-page"><div class="auth card wide">
+        <div class="row" style="justify-content:space-between"><div class="brand"><div class="logo">${icon("shield", "s")}</div>Stage Cloud</div>
+          <button class="btn ghost small" id="out">${esc(t("Sign out"))}</button></div>${inner}</div></div>`;
+      $("out").onclick = signOut;
+    } else {
+      shell("account", t("Two-step sign-in"), `<div class="card pad">${inner}</div>`, { back: "#/account" });
+    }
+  };
+  const start = await call("/api/2fa/start", {});
+  if (!start.ok) { toast(start.data.message || "That did not work.", true); return; }
+  try { await loadQr(); } catch (e) { /* the secret can be typed */ }
+  let picture = "";
+  if (window.qrcode) {
+    const qr = window.qrcode(0, "M");
+    qr.addData(start.data.uri);
+    qr.make();
+    picture = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
+  }
+  frame(`<h1>${esc(t("Two-step sign-in"))}</h1>
+    <p class="sub">${esc(t(required ? "Your role can change what is on the stage, so signing in takes a code from your phone as well as the password. It takes a minute, once." : "A code from your phone as well as the password."))}</p>
+    <ol class="steps"><li>${esc(t("Install an authenticator app: Google Authenticator or Microsoft Authenticator."))}</li>
+      <li>${esc(t("In the app: add an account, scan the QR code."))}</li><li>${esc(t("Type the six digits it shows."))}</li></ol>
+    <div class="qr">${picture}</div>
+    <details class="secret"><summary>${esc(t("Cannot scan? Type this key in the app"))}</summary>
+      <div class="copy"><input readonly value="${esc(start.data.secret.replace(/(.{4})/g, "$1 ").trim())}" id="sec">
+        <button type="button" class="btn icon" id="cps" title="${esc(t("Copy"))}">${icon("copy")}</button></div></details>
+    <form id="f"><label class="field"><span>${esc(t("Code"))}</span>
+      <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required class="code-input" placeholder="123 456"></label>
+      <div class="error" id="err"></div><button class="btn primary block" id="go">${esc(t("Turn it on"))}</button></form>`);
+  $("cps").onclick = () => navigator.clipboard?.writeText(start.data.secret).then(() => toast("Copied."));
+  $("code").focus();
+  $("f").onsubmit = async e => {
+    e.preventDefault();
+    $("go").disabled = true;
+    try {
+      const r = await call("/api/2fa/enable", { code: $("code").value.trim() });
+      if (!r.ok) { $("err").textContent = t(r.data.message || "That did not work."); $("code").select(); return; }
+      showRecovery(r.data.codes, () => { me = null; location.hash = required ? "#/" : "#/account"; route(); });
+    } finally { if ($("go")) $("go").disabled = false; }
+  };
+}
+
+function showRecovery(codes, done) {
+  const text = codes.join("\n");
+  if (me) { me.need = ""; me.totp = true; }      // it is on now, whichever way this sheet is closed
+  sheet(`<h2>${esc(t("Recovery codes"))}</h2>
+    <p class="sub">${esc(t("If the phone is lost, each of these signs you in once. Keep them somewhere safe (not on the phone) - they are shown only now."))}</p>
+    <div class="recovery">${codes.map(c => `<code>${esc(c)}</code>`).join("")}</div>
+    <div class="buttons"><button type="button" class="btn" id="cpr">${icon("copy", "s")}${esc(t("Copy"))}</button>
+      <button type="button" class="btn" id="dlr">${icon("download", "s")}${esc(t("Download"))}</button>
+      <button class="btn primary" id="kept">${esc(t("I kept them"))}</button></div>`, (box, close) => {
+    box.querySelector("#cpr").onclick = () => navigator.clipboard?.writeText(text).then(() => toast("Copied."));
+    box.querySelector("#dlr").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([`Stage Cloud - ${me?.name || ""}\n${location.host}\n\n${text}\n`], { type: "text/plain" }));
+      a.download = "stage-cloud-recovery-codes.txt";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    box.querySelector("#kept").onclick = () => { close(); done?.(); };
+  });
 }
 
 // -- every hall ------------------------------------------------------------------------------------- //
@@ -646,16 +777,26 @@ async function peoplePage() {
   const draw = async () => {
     const users = (await call("/api/users")).data || [];
     $("u").innerHTML = users.map(u => `<div><div class="avatar">${esc(initials(u.name))}</div>
-      <div class="grow"><b class="ell" style="display:block">${esc(u.name)}${u.name === me.name ? ` <span class="badge brand" style="height:20px">${esc(t("you"))}</span>` : ""}</b>
+      <div class="grow"><b class="ell" style="display:block">${esc(u.name)}${u.name === me.name ? ` <span class="badge brand" style="height:20px">${esc(t("you"))}</span>` : ""}
+        ${u.totp ? `<span class="badge ok" style="height:20px" title="${esc(t("Two-step sign-in"))}">${icon("shield", "s")}2FA</span>` : ""}
+        ${u.mustChange ? `<span class="badge warn" style="height:20px">${esc(t("temporary password"))}</span>` : ""}</b>
         <select data-role="${esc(u.name)}" aria-label="${esc(t("Role"))}">${ROLES.map(r => `<option value="${r}" ${r === u.role ? "selected" : ""}>${esc(t(r))}</option>`).join("")}</select></div>
       <button class="btn ghost icon" data-menu="${esc(u.name)}" aria-label="${esc(t("More"))}">${icon("more")}</button></div>`).join("");
     document.querySelectorAll("[data-role]").forEach(s => s.onchange = async () => {
       const x = await call("/api/users", { op: "role", name: s.dataset.role, role: s.value }); toast(x.ok ? "Saved." : x.data.message, !x.ok); draw(); });
     document.querySelectorAll("[data-menu]").forEach(b => b.onclick = () => {
       const name = b.dataset.menu;
-      sheet(`<h2>${esc(name)}</h2><div class="menu" style="margin-top:8px"><button id="pw">${icon("key")}${esc(t("New password"))}</button>
+      const person = users.find(u => u.name === name) || {};
+      sheet(`<h2>${esc(name)}</h2><div class="menu" style="margin-top:8px">
+        ${name === me.name ? "" : `<button id="pw">${icon("key")}${esc(t("Temporary password"))}</button>`}
+        ${person.totp && name !== me.name ? `<button id="r2">${icon("shield")}${esc(t("Reset two-step sign-in (lost phone)"))}</button>` : ""}
         <button id="rm" class="danger">${icon("trash")}${esc(t("Remove"))}</button></div>`, (box, close) => {
-        box.querySelector("#pw").onclick = () => { close(); personForm(name, draw); };
+        box.querySelector("#pw")?.addEventListener("click", () => { close(); personForm(name, draw); });
+        box.querySelector("#r2")?.addEventListener("click", async () => {
+          close();
+          if (!await ask(tf("Reset {0}'s two-step sign-in?", name), t("They are signed out everywhere and set up the app again at their next sign-in."), t("Reset"), true)) return;
+          const x = await call("/api/users", { op: "reset2fa", name }); toast(x.ok ? "Done." : x.data.message, !x.ok); draw();
+        });
         box.querySelector("#rm").onclick = async () => {
           close();
           if (!await ask(tf("Remove {0}?", name), t("They can no longer sign in."), t("Remove"), true)) return;
@@ -671,8 +812,8 @@ async function peoplePage() {
 
 function personForm(name, done) {
   const suggestion = Array.from(crypto.getRandomValues(new Uint8Array(10)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
-  sheet(`<h2>${esc(name ? tf("New password for {0}", name) : t("Add a person"))}</h2>
-    <p class="sub">${esc(t("Give them the password yourself; they can change it under Account."))}</p><form id="f">
+  sheet(`<h2>${esc(name ? tf("Temporary password for {0}", name) : t("Add a person"))}</h2>
+    <p class="sub">${esc(t("A temporary password: give it to them yourself. At their first sign-in they choose their own (and set up the authenticator app, if their role needs it)."))}</p><form id="f">
     ${name ? "" : `<label class="field"><span>${esc(t("Name"))}</span><input id="n" maxlength="40" required autocapitalize="off"></label>
       <label class="field"><span>${esc(t("Role"))}</span><select id="r">${ROLES.map(r => `<option value="${r}" ${r === "operator" ? "selected" : ""}>${esc(t(r))}</option>`).join("")}</select></label>`}
     <label class="field"><span>${esc(t("Password (8 or more characters)"))}</span><div class="copy"><input id="p" type="text" minlength="8" required autocomplete="off" value="${suggestion}">
@@ -701,12 +842,21 @@ function accountPage() {
       <div class="row"><span class="grow">${esc(t("Language"))}</span>${langSeg()}</div>
       <div class="row"><span class="grow">${esc(t("Theme"))}</span><div class="seg">${[["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]]
         .map(([k, n]) => `<button type="button" class="${theme === k ? "on" : ""}" data-theme="${k}">${esc(t(n))}</button>`).join("")}</div></div></div>
+    <div class="section-title"><h2>${esc(t("Two-step sign-in"))}</h2></div>
+    <div class="card pad" style="display:grid;gap:12px">
+      <div class="row"><span class="grow">${esc(t(me.totp ? "On: a code from the authenticator app as well as the password." : "Off: the password alone signs you in."))}</span>
+        <span class="badge ${me.totp ? "ok" : "warn"}">${esc(t(me.totp ? "on" : "off"))}</span></div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">${me.totp
+        ? `<button class="btn" id="rc">${icon("key", "s")}${esc(t("New recovery codes"))}</button>${me.totpRequired ? "" : `<button class="btn danger" id="off">${esc(t("Turn off"))}</button>`}`
+        : `<button class="btn primary" id="on">${icon("shield", "s")}${esc(t("Turn on"))}</button>`}</div></div>
+    <div class="section-title"><h2>${esc(t("Where I am signed in"))}</h2></div>
+    <div class="card feed" id="sess"><div class="muted">…</div></div>
     <div class="section-title"><h2>${esc(t("Change my password"))}</h2></div>
     <div class="card pad"><form id="f">
       <label class="field"><span>${esc(t("Password now"))}</span><input id="o" type="password" autocomplete="current-password" required></label>
       <label class="field"><span>${esc(t("New password (8 or more characters)"))}</span><input id="p" type="password" minlength="8" autocomplete="new-password" required></label>
       <div class="error" id="err"></div><button class="btn primary">${esc(t("Save"))}</button>
-      <p class="muted" style="font-size:13px;margin:12px 0 0">${esc(t("Changing it signs you out everywhere."))}</p></form></div>
+      <p class="muted" style="font-size:13px;margin:12px 0 0">${esc(t("Changing it signs you out everywhere else."))}</p></form></div>
     <button class="btn block danger mobile-only" style="margin-top:22px" id="out2">${icon("out")}${esc(t("Sign out"))}</button>`);
   wireLang();
   document.querySelectorAll("[data-theme]").forEach(b => b.onclick = () => {
@@ -714,6 +864,41 @@ function accountPage() {
     accountPage();
   });
   $("out2").onclick = signOut;
+  $("on")?.addEventListener("click", () => setupTotp(false));
+  const withPassword = (title, then) => sheet(`<h2>${esc(title)}</h2><form id="f"><label class="field"><span>${esc(t("Password"))}</span>
+      <input id="pw" type="password" autocomplete="current-password" required></label><div class="error" id="err"></div>
+      <div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button><button class="btn primary">${esc(t("Go on"))}</button></div></form>`,
+    (box, close) => box.querySelector("#f").onsubmit = async e => {
+      e.preventDefault();
+      const x = await then(box.querySelector("#pw").value);
+      if (!x.ok) { box.querySelector("#err").textContent = t(x.data.message || "That did not work."); return; }
+      close();
+    });
+  $("rc")?.addEventListener("click", () => withPassword(t("New recovery codes"), async password => {
+    const x = await call("/api/2fa/recovery", { password });
+    if (x.ok) showRecovery(x.data.codes);
+    return x;
+  }));
+  $("off")?.addEventListener("click", () => withPassword(t("Turn off two-step sign-in"), async password => {
+    const x = await call("/api/2fa/disable", { password });
+    if (x.ok) { me.totp = false; toast("Saved."); accountPage(); }
+    return x;
+  }));
+  const device = agent => /iPhone|iPad/.test(agent) ? "iPhone / iPad" : /Android/.test(agent) ? "Android"
+    : /Windows/.test(agent) ? "Windows" : /Mac OS/.test(agent) ? "Mac" : /Linux/.test(agent) ? "Linux" : t("a device");
+  const browser = agent => /Edg\//.test(agent) ? "Edge" : /Chrome\//.test(agent) ? "Chrome" : /Firefox\//.test(agent) ? "Firefox" : /Safari\//.test(agent) ? "Safari" : "";
+  const drawSessions = async () => {
+    const list = (await call("/api/sessions")).data || [];
+    if (!$("sess")) return;
+    $("sess").innerHTML = list.map(x => `<div>${icon(/iPhone|Android/.test(x.agent) ? "phone" : "laptop", "s")}<div class="grow">
+        <b>${esc(device(x.agent))}${browser(x.agent) ? " · " + esc(browser(x.agent)) : ""}</b>${x.current ? ` <span class="badge brand" style="height:20px">${esc(t("this one"))}</span>` : ""}
+        <div class="sub">${esc([x.ip, x.created ? tf("signed in {0}", ago(x.created)) : "", x.seen ? tf("last seen {0}", ago(x.seen)) : ""].filter(Boolean).join(" · "))}</div></div>
+        ${x.current ? "" : `<button class="btn ghost small" data-end="${esc(x.id)}">${esc(t("Sign out"))}</button>`}</div>`).join("")
+      + (list.length > 1 ? `<div><span class="grow"></span><button class="btn small danger" id="endall">${esc(t("Sign out everywhere else"))}</button></div>` : "");
+    $("sess").querySelectorAll("[data-end]").forEach(b => b.onclick = async () => { await call("/api/sessions", { id: b.dataset.end }); drawSessions(); });
+    $("endall")?.addEventListener("click", async () => { await call("/api/sessions", { all: true }); toast("Done."); drawSessions(); });
+  };
+  drawSessions();
   $("f").onsubmit = async e => {
     e.preventDefault();
     const x = await call("/api/password", { old: $("o").value, password: $("p").value });

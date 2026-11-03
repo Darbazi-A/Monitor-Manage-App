@@ -44,6 +44,7 @@ export class Hall extends DurableObject {
   dropViewers(match) {
     for (const ws of this.viewers()) {
       const who = ws.deserializeAttachment() || {};
+      if (match.except && who.session === match.except) continue;
       if ((match.user && who.user === match.user) || (match.session && who.session === match.session)) this.drop(ws, "signed out");
     }
   }

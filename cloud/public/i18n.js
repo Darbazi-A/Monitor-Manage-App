@@ -95,6 +95,42 @@ const KA = {
   "operators and administrators only": "მხოლოდ ოპერატორებისა და ადმინისტრატორებისთვის", "unknown command": "უცნობი ბრძანება",
   "an empty message": "შეტყობინება ცარიელია", "disconnected": "კავშირი გაწყდა", "no answer": "პასუხი არ მოვიდა",
   "Running this hall from the dashboard is switched off here (Settings → Cloud).": "ამ დარბაზის საიტიდან მართვა აქ გამორთულია (Settings → Cloud).",
+  // two-step sign-in, sessions, temporary passwords
+  "Two-step sign-in": "ორეტაპიანი შესვლა",
+  "Changing it signs you out everywhere else.": "შეცვლისას ყველა სხვა მოწყობილობიდან გამოხვალთ.",
+  "Open the authenticator app on your phone and type the six digits for Stage Cloud.": "გახსენით ტელეფონზე ავთენტიფიკატორის აპი და ჩაწერეთ Stage Cloud-ის ექვსნიშნა კოდი.",
+  "No phone? A recovery code works too, once each.": "ტელეფონი არ გაქვთ? აღდგენის კოდიც მუშაობს - თითოეული ერთხელ.",
+  "Signed in with a recovery code: {0} left.": "შეხვედით აღდგენის კოდით: დარჩა {0}.",
+  "Your own password": "თქვენი საკუთარი პაროლი",
+  "You signed in with a password an administrator gave you. Choose your own - only you will know it.": "შეხვედით ადმინისტრატორის მოცემული პაროლით. აირჩიეთ საკუთარი - მას მხოლოდ თქვენ გეცოდინებათ.",
+  "Install an authenticator app: Google Authenticator or Microsoft Authenticator.": "დააყენეთ ავთენტიფიკატორის აპი: Google Authenticator ან Microsoft Authenticator.",
+  "In the app: add an account, scan the QR code.": "აპში: დაამატეთ ანგარიში და დაასკანერეთ QR კოდი.",
+  "Type the six digits it shows.": "ჩაწერეთ ექვსნიშნა კოდი, რომელსაც აპი გაჩვენებთ.",
+  "Cannot scan? Type this key in the app": "ვერ ასკანერებთ? ჩაწერეთ ეს გასაღები აპში",
+  "Turn it on": "ჩართვა", "Turn on": "ჩართვა", "Turn off": "გამორთვა", "on": "ჩართულია",
+  "Recovery codes": "აღდგენის კოდები", "New recovery codes": "ახალი აღდგენის კოდები",
+  "If the phone is lost, each of these signs you in once. Keep them somewhere safe (not on the phone) - they are shown only now.": "ტელეფონი თუ დაიკარგა, თითოეული კოდი ერთხელ შეგიყვანთ. შეინახეთ უსაფრთხო ადგილას (არა ტელეფონში) - მათ მხოლოდ ახლა ხედავთ.",
+  "Download": "ჩამოტვირთვა", "I kept them": "შევინახე",
+  "temporary password": "დროებითი პაროლი", "Temporary password": "დროებითი პაროლი",
+  "Temporary password for {0}": "დროებითი პაროლი: {0}",
+  "A temporary password: give it to them yourself. At their first sign-in they choose their own (and set up the authenticator app, if their role needs it).": "დროებითი პაროლი: გადაეცით თავად. პირველი შესვლისას ადამიანი საკუთარს აირჩევს (და, თუ მისი როლი ითხოვს, ავთენტიფიკატორის აპსაც დააყენებს).",
+  "Reset two-step sign-in (lost phone)": "ორეტაპიანი შესვლის გაუქმება (დაკარგული ტელეფონი)",
+  "Reset {0}'s two-step sign-in?": "გაუქმდეს {0}-ის ორეტაპიანი შესვლა?",
+  "They are signed out everywhere and set up the app again at their next sign-in.": "ყველგან გამოვა სისტემიდან და შემდეგი შესვლისას აპს თავიდან დააყენებს.",
+  "Reset": "გაუქმება", "Go on": "გაგრძელება",
+  "Turn off two-step sign-in": "ორეტაპიანი შესვლის გამორთვა",
+  "Where I am signed in": "სად ვარ შესული", "a device": "მოწყობილობა", "this one": "ეს",
+  "signed in {0}": "შესვლა: {0}", "last seen {0}": "ბოლოს: {0}", "Sign out everywhere else": "ყველგან გასვლა, ამის გარდა",
+  "Your role can change what is on the stage, so signing in takes a code from your phone as well as the password. It takes a minute, once.": "თქვენს როლს სცენაზე ცვლილებების უფლება აქვს, ამიტომ შესვლას პაროლთან ერთად ტელეფონის კოდიც სჭირდება. ერთხელ, ერთი წუთის საქმეა.",
+  "A code from your phone as well as the password.": "პაროლთან ერთად - კოდი ტელეფონიდან.",
+  "On: a code from the authenticator app as well as the password.": "ჩართულია: პაროლთან ერთად საჭიროა კოდი აპიდან.",
+  "Off: the password alone signs you in.": "გამორთულია: შესვლისთვის მხოლოდ პაროლია საჭირო.",
+  // the cloud's answers
+  "wrong code": "არასწორი კოდი", "sign in again": "შედით თავიდან", "start again": "დაიწყეთ თავიდან",
+  "wrong code - check the phone's clock, or scan again": "არასწორი კოდი - შეამოწმეთ ტელეფონის საათი ან დაასკანერეთ თავიდან",
+  "two-step sign-in is off": "ორეტაპიანი შესვლა გამორთულია", "your role needs two-step sign-in": "თქვენს როლს ორეტაპიანი შესვლა სჭირდება",
+  "a new password, not the same one": "ახალი პაროლი, არა იგივე", "change your password first": "ჯერ შეცვალეთ პაროლი",
+  "set up two-step sign-in first": "ჯერ ჩართეთ ორეტაპიანი შესვლა", "change your own password under Account": "საკუთარი პაროლი შეცვალეთ ანგარიშის გვერდზე"
 };
 
 let lang = "ka";
@@ -125,6 +161,13 @@ const JOURNAL_KA = [
   [/^message: (.+) → (.+)$/, (_, m, r) => `შეტყობინება: ${m} → ${r === "ok" ? "შესრულდა" : r}`],
   [/^check_update → (.+)$/, (_, r) => `განახლების შემოწმება → ${r === "ok" ? "შესრულდა" : r}`],
   [/^install_update → (.+)$/, (_, r) => `განახლების დაყენება → ${r === "ok" ? "შესრულდა" : r}`],
+  [/^two-step sign-in turned on$/, "ჩართო ორეტაპიანი შესვლა"],
+  [/^two-step sign-in turned off$/, "გამორთო ორეტაპიანი შესვლა"],
+  [/^two-step sign-in of (.+) reset$/, "$1-ს გაუუქმდა ორეტაპიანი შესვლა"],
+  [/^new recovery codes$/, "ახალი აღდგენის კოდები"],
+  [/^signed out everywhere else$/, "გამოვიდა ყველა სხვა მოწყობილობიდან"],
+  [/^ended a session$/, "დახურა სესია"],
+  [/^a second computer tried to connect as this hall, from (.+)$/, "სხვა კომპიუტერი ცდილობდა ამ დარბაზად დაკავშირებას ($1)"],
 ];
 const jt = text => {
   if (lang !== "ka") return text;

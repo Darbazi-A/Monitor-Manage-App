@@ -2,6 +2,7 @@
 // a hall paired with a code and connected, its status, commands, the remote desk's requests,
 // what each role may do, and what strangers may not.   node test/server_test.mjs
 import { readFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 
 const BASE = process.env.CLOUD || "http://127.0.0.1:8787";
 const SETUP_KEY = /SETUP_KEY=(\S+)/.exec(readFileSync(new URL("../.dev.vars", import.meta.url), "utf8"))[1];
@@ -11,6 +12,27 @@ const check = (name, ok, extra = "") => {
   if (!ok) failures.push(name);
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// -- a phone with an authenticator app: the code for a secret, a time step not used yet --------- //
+function unbase32(text) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; let bits = 0, value = 0; const out = [];
+  for (const c of text) { value = (value << 5) | A.indexOf(c); bits += 5; if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8; } }
+  return Buffer.from(out);
+}
+function totp(secret, step) {
+  const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", unbase32(secret)).update(counter).digest();
+  const at = mac[19] & 15;
+  return String((mac.readUInt32BE(at) & 0x7fffffff) % 1000000).padStart(6, "0");
+}
+const phone = { secrets: {}, used: {} };
+async function codeFor(name) {
+  // a code works once: the next step not used yet (the cloud takes one step ahead, for a clock a little off)
+  let step = Math.max(Math.floor(Date.now() / 30000), (phone.used[name] || 0) + 1);
+  while (step > Math.floor(Date.now() / 30000) + 1) { await sleep(1000); }
+  phone.used[name] = step;
+  return totp(phone.secrets[name], step);
+}
 
 class Browser {
   constructor() { this.cookie = ""; }
@@ -24,6 +46,25 @@ class Browser {
     let data = null;
     try { data = await r.json(); } catch (e) { /* not JSON */ }
     return { status: r.status, data, set };
+  }
+  // signing in all the way: the password, the code, a given password changed, the app set up
+  async signIn(name, password, newPassword) {
+    let x = await this.call("/api/login", { name, password });
+    if (x.data?.need === "code") x = await this.call("/api/login/code", { ticket: x.data.ticket, code: await codeFor(name.toLowerCase()) });
+    if (!x.data?.ok) return x;
+    let me = (await this.call("/api/me")).data;
+    if (me.need === "password") {
+      await this.call("/api/password", { old: password, password: newPassword });
+      me = (await this.call("/api/me")).data;
+    }
+    if (me.need === "setup2fa") {
+      const start = await this.call("/api/2fa/start", {});
+      phone.secrets[name.toLowerCase()] = start.data.secret;
+      const on = await this.call("/api/2fa/enable", { code: await codeFor(name.toLowerCase()) });
+      this.recovery = on.data.codes;
+      me = (await this.call("/api/me")).data;
+    }
+    return { status: 200, data: { ok: true, ...me } };
   }
   socket(path) {
     return open(BASE.replace("http", "ws") + path, { Origin: BASE, Cookie: this.cookie });
@@ -71,6 +112,48 @@ r = await admin.call("/api/login", { name: "boss", password: "boss-password-1" }
 check("signed in (name in any case)", r.data?.ok && r.data.role === "admin" && /HttpOnly/.test(r.set) && /SameSite=Strict/.test(r.set), r);
 r = await admin.call("/api/me");
 check("who am I", r.data?.name === "Boss" && r.data.role === "admin", r.data);
+
+// -- two-step sign-in ------------------------------------------------------------------------- //
+check("an administrator must set up the authenticator first", r.data?.need === "setup2fa" && r.data.totpRequired === true, r.data);
+r = await admin.call("/api/halls");
+check("... nothing else before it", r.status === 403 && r.data?.need === "setup2fa", r);
+r = await admin.call("/api/2fa/start", {});
+check("the app's secret and its QR address", /^[A-Z2-7]{32}$/.test(r.data?.secret || "") && r.data.uri.startsWith("otpauth://totp/Stage%20Cloud%3ABoss?secret="), r.data);
+phone.secrets.boss = r.data.secret;
+r = await admin.call("/api/2fa/enable", { code: "000000" });
+check("a wrong code does not turn it on", !r.data?.ok);
+r = await admin.call("/api/2fa/enable", { code: await codeFor("boss") });
+const bossRecovery = r.data?.codes || [];
+check("the right code turns it on, with ten recovery codes", r.data?.ok && bossRecovery.length === 10 && /^[a-z2-9]{5}-[a-z2-9]{5}$/.test(bossRecovery[0]), r.data);
+r = await admin.call("/api/me");
+check("... and nothing waits any more", r.data?.need === "" && r.data.totp === true, r.data);
+
+const elsewhere = new Browser();
+r = await elsewhere.call("/api/login", { name: "boss", password: "boss-password-1" });
+check("the password alone is not enough now: a code is asked for", r.data?.need === "code" && r.data.ticket && !r.set, r);
+const ticket = r.data.ticket;
+r = await elsewhere.call("/api/login/code", { ticket, code: "123456" });
+check("a wrong code: refused", r.status === 401 && !r.set);
+r = await elsewhere.call("/api/login/code", { ticket, code: await codeFor("boss") });
+check("the right code: signed in", r.data?.ok && /HttpOnly/.test(r.set || ""), r);
+const reused = phone.used.boss;
+r = await new Browser().call("/api/login", { name: "boss", password: "boss-password-1" });
+r = await new Browser().call("/api/login/code", { ticket: r.data.ticket, code: totp(phone.secrets.boss, reused) });
+check("a code works once", r.status === 401);
+const third = new Browser();
+r = await third.call("/api/login", { name: "boss", password: "boss-password-1" });
+r = await third.call("/api/login/code", { ticket: r.data.ticket, code: bossRecovery[0].toUpperCase().replace("-", " ") });
+check("a recovery code signs in (any case, any spacing)", r.data?.ok && r.data.recoveryLeft === 9, r.data);
+r = await new Browser().call("/api/login", { name: "boss", password: "boss-password-1" });
+r = await new Browser().call("/api/login/code", { ticket: r.data.ticket, code: bossRecovery[0] });
+check("... once", r.status === 401);
+r = await admin.call("/api/sessions");
+check("my sessions: where, and which is this one", r.data?.length === 3 && r.data.filter(x => x.current).length === 1, r.data);
+r = await admin.call("/api/sessions", { all: true });
+check("signing out everywhere else", r.data?.ok && r.data.ended === 2 && (await elsewhere.call("/api/me")).status === 401
+      && (await admin.call("/api/me")).status === 200, r.data);
+r = await admin.call("/api/2fa/disable", { password: "boss-password-1" });
+check("an administrator cannot turn it off", !r.data?.ok);
 r = await admin.call("/api/halls", { name: "x" }, { headers: { Origin: "https://evil.example" } });
 check("another site cannot act for me", r.status === 403);
 
@@ -91,9 +174,15 @@ check("the last administrator stays", !r.data?.ok);
 r = await admin.call("/api/users", { op: "add", name: "Ana", role: "operator", password: "ana-password" });
 const operator = new Browser();
 r = await operator.call("/api/login", { name: "ana", password: "ana-password" });
+const meFirst = (await operator.call("/api/me")).data, hallsFirst = (await operator.call("/api/halls")).status;
+check("a password an administrator gave: changed first", meFirst?.need === "password" && hallsFirst === 403, [r.status, r.data, meFirst, hallsFirst]);
+r = await operator.call("/api/password", { old: "ana-password", password: "ana-password" });
+check("... to a new one", !r.data?.ok);
+r = await operator.signIn("ana", "ana-password", "ana-own-password");
 check("an operator signs in", r.data?.role === "operator");
 const viewer = new Browser();
-await viewer.call("/api/login", { name: "gio", password: "gio-password" });
+r = await viewer.signIn("gio", "gio-password", "gio-own-password");
+check("a viewer: no authenticator needed", r.data?.ok && r.data.need === "" && r.data.totp === false, r.data);
 
 // -- a hall ---------------------------------------------------------------------------------- //
 r = await operator.call("/api/halls", { name: "x" });
@@ -259,12 +348,17 @@ check("closing: offline, in the desk and the list", off && r.data?.[0]?.online =
 
 r = await admin.call("/api/password", { old: "wrong", password: "new-boss-password" });
 check("own password: the old one is needed", !r.data?.ok);
-await operator.call("/api/login", { name: "ana", password: "ana-password" });
+await operator.signIn("ana", "ana-own-password");
 r = await operator.call(`/api/halls/${hallId}/remove`, {});
 check("only administrators remove halls", r.status === 403);
 r = await admin.call(`/api/halls/${hallId}/remove`, {});
 r = await admin.call("/api/halls");
 check("a hall removed", r.data?.length === 0, r.data);
+r = await admin.call("/api/users", { op: "reset2fa", name: "Ana" });
+const anaAgain = new Browser();
+r = await anaAgain.call("/api/login", { name: "ana", password: "ana-own-password" });
+check("a lost phone: the administrator resets it - the password alone signs in again (a viewer by now)",
+      !r.data?.need && (await anaAgain.call("/api/me")).data?.totp === false, r.data);
 r = await admin.call("/api/logout", {});
 r = await admin.call("/api/me");
 check("signed out", r.status === 401);

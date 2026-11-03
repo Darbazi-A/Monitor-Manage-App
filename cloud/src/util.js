@@ -92,3 +92,58 @@ export function cookie(request, name) {
 }
 
 export const cleanName = (text, size = 60) => String(text || "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, size);
+
+// -- two-step sign-in: TOTP (RFC 6238 - Google / Microsoft Authenticator), recovery codes ----------- //
+const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+export function base32(bytes) {
+  let bits = 0, value = 0, out = "";
+  for (const byte of bytes) {
+    value = (value << 8) | byte; bits += 8;
+    while (bits >= 5) { out += B32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += B32[(value << (5 - bits)) & 31];
+  return out;
+}
+export function unbase32(text) {
+  let bits = 0, value = 0;
+  const out = [];
+  for (const char of String(text).toUpperCase().replace(/[^A-Z2-7]/g, "")) {
+    value = (value << 5) | B32.indexOf(char); bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8; }
+  }
+  return new Uint8Array(out);
+}
+export const newTotpSecret = () => base32(crypto.getRandomValues(new Uint8Array(20)));
+
+async function hotp(secret, counter) {
+  const key = await crypto.subtle.importKey("raw", unbase32(secret), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const message = new Uint8Array(8);
+  let c = counter;
+  for (let i = 7; i >= 0; i--) { message[i] = c & 255; c = Math.floor(c / 256); }
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, message));
+  const at = mac[19] & 15;
+  const number = ((mac[at] & 127) << 24) | (mac[at + 1] << 16) | (mac[at + 2] << 8) | mac[at + 3];
+  return String(number % 1000000).padStart(6, "0");
+}
+
+// the time step a code is right for (a step either side, for a clock a little off), or 0;
+// a step at or before `after` was used already and is refused (a code works once)
+export async function totpStep(secret, code, after = 0, now = Date.now()) {
+  code = String(code || "").replace(/\s/g, "");
+  if (!secret || !/^\d{6}$/.test(code)) return 0;
+  const step = Math.floor(now / 30000);
+  for (const s of [step, step - 1, step + 1]) {
+    if (s > after && sameText(await hotp(secret, s), code)) return s;
+  }
+  return 0;
+}
+
+// ten one-time codes for a lost phone: XXXXX-XXXXX, kept only as hashes
+export function recoveryCodes(count = 10) {
+  const letters = "abcdefghjkmnpqrstuvwxyz23456789";
+  return Array.from({ length: count }, () => {
+    const chars = [...crypto.getRandomValues(new Uint8Array(10))].map(b => letters[b % letters.length]).join("");
+    return chars.slice(0, 5) + "-" + chars.slice(5);
+  });
+}
+export const normaliseRecovery = code => String(code || "").toLowerCase().replace(/[^a-z0-9]/g, "");

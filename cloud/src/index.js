@@ -94,27 +94,48 @@ async function apiRoutes(request, env, url) {
     const result = await dir.setup(data.name, data.password, clientIp(request));
     return json(result, result.ok ? 200 : 400);
   }
+  const sessionCookie = token => `${SESSION_COOKIE}=${token}; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Strict; Path=/; Max-Age=${14 * 24 * 3600}`;
+  const signedIn = result => json({ ok: true, name: result.name, role: result.role, recoveryLeft: result.recoveryLeft }, 200,
+                                  { "Set-Cookie": sessionCookie(result.token) });
+  const agent = (request.headers.get("User-Agent") || "").slice(0, 200);
   if (path === "/api/login" && method === "POST") {
     const data = await body(request);
-    const result = await dir.login(String(data.name || ""), String(data.password || ""), clientIp(request));
+    const result = await dir.login(String(data.name || ""), String(data.password || ""), clientIp(request), agent);
     if (!result.ok) return json(result, result.locked ? 429 : 401);
-    return json({ ok: true, name: result.name, role: result.role }, 200, {
-      "Set-Cookie": `${SESSION_COOKIE}=${result.token}; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Strict; Path=/; Max-Age=${14 * 24 * 3600}`,
-    });
+    if (result.need === "code") return json({ ok: true, need: "code", ticket: result.ticket });
+    return signedIn(result);
+  }
+  if (path === "/api/login/code" && method === "POST") {
+    const data = await body(request);
+    const result = await dir.loginCode(String(data.ticket || ""), String(data.code || ""), clientIp(request), agent);
+    if (!result.ok) return json(result, result.locked ? 429 : 401);
+    return signedIn(result);
   }
 
-  const me = await dir.session(cookie(request, SESSION_COOKIE));
+  const token = cookie(request, SESSION_COOKIE);
+  const me = await dir.session(token);
   if (!me) return fail(401, "sign in");
   const need = role => rank(me.role) >= rank(role);
 
   if (path === "/api/logout" && method === "POST") {
-    await dir.logout(cookie(request, SESSION_COOKIE));
+    await dir.logout(token);
     return json({ ok: true }, 200, { "Set-Cookie": `${SESSION_COOKIE}=; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Strict; Path=/; Max-Age=0` });
   }
-  if (path === "/api/me") return json({ name: me.name, role: me.role });
+  if (path === "/api/me") return json({ name: me.name, role: me.role, totp: me.totp, need: me.need, totpRequired: totpRequired(me.role) });
   if (path === "/api/password" && method === "POST") {
     const data = await body(request);
-    return reply(await dir.setPassword(me.name, data.password, me.name, String(data.old || "")));
+    return reply(await dir.setPassword(me.name, data.password, me.name, String(data.old || ""), token));
+  }
+  if (path === "/api/2fa/start" && method === "POST") return reply(await dir.totpStart(me.name));
+  if (path === "/api/2fa/enable" && method === "POST") return reply(await dir.totpEnable(me.name, String((await body(request)).code || ""), token));
+  // a given password changed, the authenticator its role needs set up - before anything else
+  if (me.need) return json({ ok: false, need: me.need, message: me.need === "password" ? "change your password first" : "set up two-step sign-in first" }, 403);
+  if (path === "/api/2fa/recovery" && method === "POST") return reply(await dir.totpRecovery(me.name, (await body(request)).password));
+  if (path === "/api/2fa/disable" && method === "POST") return reply(await dir.totpDisable(me.name, (await body(request)).password));
+  if (path === "/api/sessions" && method === "GET") return json(await dir.sessions(me.name, token));
+  if (path === "/api/sessions" && method === "POST") {
+    const data = await body(request);
+    return reply(await dir.endSessions(me.name, token, data.all ? "*" : String(data.id || "")));
   }
 
   // halls
@@ -174,10 +195,15 @@ async function apiRoutes(request, env, url) {
     if (data.op === "add") return reply(await dir.addUser(data.name, ROLES.includes(data.role) ? data.role : "", data.password, me.name));
     if (data.op === "role") return reply(await dir.setRole(String(data.name), String(data.role), me.name));
     if (data.op === "remove") return reply(await dir.removeUser(String(data.name), me.name));
-    if (data.op === "password") return reply(await dir.setPassword(String(data.name), data.password, me.name));
+    if (data.op === "password") {
+      if (String(data.name) === me.name) return fail(400, "change your own password under Account");
+      return reply(await dir.setPassword(String(data.name), data.password, me.name));
+    }
+    if (data.op === "reset2fa") return reply(await dir.totpReset(String(data.name), me.name));
     return fail(400, "unknown");
   }
   return fail(404, "not found");
 }
 
 const reply = result => json(result, result.ok ? 200 : 400);
+const totpRequired = role => Directory.needsTotp(role);
