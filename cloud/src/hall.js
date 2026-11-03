@@ -3,7 +3,6 @@
 // (the phone page's API) to the hall and the answers back, and runs commands. WebSockets
 // hibernate: an idle hall costs nothing.
 import { DurableObject } from "cloudflare:workers";
-import { rank } from "./util.js";
 
 const LOG_KEEP = 200;
 const SUMMARY_EVERY_MS = 25000;       // the directory's copy: on a change, at most this often
@@ -75,11 +74,13 @@ export class Hall extends DurableObject {
       this.broadcast({ t: "online", online: true });
     } else {
       const id = crypto.randomUUID().slice(0, 8);
-      const user = request.headers.get("X-SDC-User"), role = request.headers.get("X-SDC-Role");
+      const user = request.headers.get("X-SDC-User"), hall = hallId || "";
       const session = request.headers.get("X-SDC-Session") || "", expires = Number(request.headers.get("X-SDC-Expires")) || 0;
+      const access = await this.directory().hallAccess(session, hall);
+      if (!access || access.name !== user) return new Response("not allowed", { status: 403 });
       this.ctx.acceptWebSocket(server, ["viewer", "v:" + id]);
-      server.serializeAttachment({ kind: "viewer", id, user, role, session, expires });
-      server.send(JSON.stringify({ t: "hello", ...(await this.snapshot()), you: { user, role } }));
+      server.serializeAttachment({ kind: "viewer", id, user, hall, session, expires });
+      server.send(JSON.stringify({ t: "hello", ...(await this.snapshot()), you: { user, role: access.role, rights: access.rights } }));
     }
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -153,12 +154,14 @@ export class Hall extends DurableObject {
     if (message.t !== "rpc") return;
     const reply = (status, body) => ws.send(JSON.stringify({ t: "reply", id: message.id, status, type: "application/json",
                                                                body: JSON.stringify(body) }));
-    // who it is now, not when the socket opened: a removed person, a lower role, a session ended
-    const now = await this.directory().sessionByHash(who.session);
+    // who it is now and what they may do here, not when the socket opened: a removed person,
+    // rights taken away, a session ended
+    const now = await this.directory().hallAccess(who.session, who.hall);
     if (!now || now.name !== who.user) { reply(401, { ok: false, message: "signed out" }); return this.drop(ws, "signed out"); }
-    if (now.role !== who.role) ws.serializeAttachment({ ...who, role: now.role });
     const method = message.method === "POST" ? "POST" : "GET";
-    if (rank(now.role) < rank("operator") && method !== "GET") return reply(403, { ok: false, message: "viewing only" });
+    const needed = method === "GET" ? "" : rightFor(message);
+    if (needed === null) return reply(403, { ok: false, message: "This cannot be done from Stage Cloud." });
+    if (needed && !now.rights.includes(needed)) return reply(403, { ok: false, message: "You do not have the right to do this in this hall." });
     const refused = method === "POST" ? refusedAction(message) : "";
     if (refused) return reply(403, { ok: false, message: refused });
     const hall = this.hallSocket();
@@ -211,6 +214,27 @@ export function samePlace(a, b) {
   if (a.includes(".") && b.includes(".")) return a.split(".").slice(0, 3).join(".") === b.split(".").slice(0, 3).join(".");
   if (a.includes(":") && b.includes(":")) return a.split(":").slice(0, 4).join(":") === b.split(":").slice(0, 4).join(":");
   return false;
+}
+
+// what each of the hall's actions needs; an action not listed here is refused (a newer program's
+// actions wait for the cloud to know them)
+const ACTION_RIGHTS = {};
+const give = (right, actions) => actions.split(/\s+/).forEach(action => { ACTION_RIGHTS[action] = right; });
+give("control", `screens_open screen_file screen_black screen_play screen_seek screen_loop screen_mute screen_volume undo
+  rehearsal rehearsal_sound show_select show_new step_capture step_recapture step_edit step_delete step_move preset_save
+  deck_open deck_show deck_end deck_close break_add break_play break_back break_toggle break_seek text_show text_hide marquee
+  cue_assign cue_stop cue_clear timer_set timer_toggle timer_reset timer_add timer_show timer_hide timer_look
+  next back goto restart blackout cue silence master preset slide_next slide_back slide_goto slide_live slide_black`);
+give("web", `web_open web_stage web_off web_close web_key web_click web_type web_scroll
+  share_on share_preview share_take share_decline share_end share_silence`);
+give("desk", "desk_lock desk_unlock");
+
+// the right a request from the remote desk needs ("" none, null never from the cloud)
+export function rightFor(message) {
+  const path = String(message.path || "");
+  if (path === "/api/upload") return "files";
+  if (path !== "/api/action") return null;
+  return ACTION_RIGHTS[String(actionBody(message).action || "")] || null;
 }
 
 // the remote desk's body, as an object

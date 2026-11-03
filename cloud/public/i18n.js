@@ -130,7 +130,56 @@ const KA = {
   "wrong code - check the phone's clock, or scan again": "არასწორი კოდი - შეამოწმეთ ტელეფონის საათი ან დაასკანერეთ თავიდან",
   "two-step sign-in is off": "ორეტაპიანი შესვლა გამორთულია", "your role needs two-step sign-in": "თქვენს როლს ორეტაპიანი შესვლა სჭირდება",
   "a new password, not the same one": "ახალი პაროლი, არა იგივე", "change your password first": "ჯერ შეცვალეთ პაროლი",
-  "set up two-step sign-in first": "ჯერ ჩართეთ ორეტაპიანი შესვლა", "change your own password under Account": "საკუთარი პაროლი შეცვალეთ ანგარიშის გვერდზე"
+  "set up two-step sign-in first": "ჯერ ჩართეთ ორეტაპიანი შესვლა", "change your own password under Account": "საკუთარი პაროლი შეცვალეთ ანგარიშის გვერდზე",
+  // the rights: main and hall administrators, roles in a hall, rights one by one
+  "Main administrator": "მთავარი ადმინისტრატორი", "all rights": "ყველა უფლება", "technician": "ტექნიკოსი", "hall admin": "დარბაზის ადმინი", "halladmin": "დარბაზის ადმინი",
+  "member": "წევრი", "no halls yet": "დარბაზები ჯერ არ აქვს", "{0} · {1} hall(s)": "{0} · {1} დარბაზი", "no access": "წვდომა არ აქვს",
+  "Who has rights here": "ვის აქვს აქ უფლებები", "Everyone": "ყველა", "Find…": "ძებნა…", "custom rights": "ხელით შეცვლილი უფლებები",
+  "view only": "მხოლოდ ნახვა", "Find a person…": "ადამიანის ძებნა…", "You see the rights in the halls you manage.": "ჩანს უფლებები იმ დარბაზებში, რომლებსაც თქვენ მართავთ.",
+  "No one matches.": "ვერავინ მოიძებნა.", "Person": "ადამიანი", "Rights": "უფლებები", "{0} with rights": "{0} ადამიანს აქვს უფლება",
+  "Tap a cell to change what that person may do in that hall. * marks rights changed by hand.": "დააჭირეთ უჯრას, რომ შეცვალოთ, რისი გაკეთება შეუძლია ამ ადამიანს ამ დარბაზში. * ნიშნავს ხელით შეცვლილ უფლებებს.",
+  "Your own rights are changed by someone else.": "საკუთარ უფლებებს სხვა ცვლის.", "What they may do in “{0}”.": "რისი გაკეთება შეუძლია „{0}“-ში.",
+  "changed by hand": "ხელით შეცვლილი", "no 2FA": "2FA არ აქვს",
+  "Every hall, every right, and the people. Needs two-step sign-in.": "ყველა დარბაზი, ყველა უფლება და ადამიანების მართვა. სჭირდება ორეტაპიანი შესვლა.",
+  "Every hall, every right, and the people.": "ყველა დარბაზი, ყველა უფლება და ადამიანების მართვა.",
+  "Rights in the halls": "უფლებები დარბაზებში", "A main administrator has every right in every hall.": "მთავარ ადმინისტრატორს ყველა დარბაზში ყველა უფლება აქვს.",
+  "does not see this hall": "ამ დარბაზს ვერ ხედავს", "Change": "შეცვლა", "Signing in": "შესვლა",
+  "For a forgotten password: they choose their own at the next sign-in.": "დავიწყებული პაროლისთვის: შემდეგ შესვლაზე თავად აირჩევს ახალს.",
+  "Give one": "მიცემა", "Where they are signed in": "სად არის შესული", "Sign out everywhere": "ყველგან გამოსვლა",
+  "Remove this person": "ამ ადამიანის წაშლა", "Sign {0} out everywhere?": "გამოვიყვანო {0} ყველა მოწყობილობიდან?",
+  "Every device of theirs needs the password (and the code) again.": "ყველა მის მოწყობილობაზე ისევ დასჭირდება პაროლი (და კოდი).",
+  "Not signed in anywhere.": "არსად არ არის შესული.", "Temporary password (8 or more characters)": "დროებითი პაროლი (8 ან მეტი სიმბოლო)",
+  "Give it to them yourself. At their next sign-in they choose their own; they are signed out everywhere now.":
+    "გადაეცით თავად. შემდეგ შესვლაზე საკუთარს აირჩევს; ახლა ყველა მოწყობილობიდან გამოვა.",
+  "Give them the temporary password yourself. At their first sign-in they choose their own (and set up the authenticator app, if their rights need it).":
+    "დროებითი პაროლი გადაეცით თავად. პირველ შესვლაზე საკუთარს აირჩევს (და, თუ მისი უფლებები ამას მოითხოვს, ავთენტიფიკატორს დააყენებს).",
+  "No hall yet": "ჯერ დარბაზის გარეშე", "Role in that hall": "როლი ამ დარბაზში", "Hall (they can be given more later)": "დარბაზი (სხვებიც შეიძლება მიეცეს მოგვიანებით)",
+  "My rights": "ჩემი უფლებები", "Off: the password alone signs them in.": "გამორთულია: შესვლისთვის მხოლოდ პაროლი სჭირდება.",
+  "Make them a main administrator?": "გავხადო მთავარი ადმინისტრატორი?", "No longer a main administrator?": "აღარ იყოს მთავარი ადმინისტრატორი?",
+  "They will see and manage every hall and every person.": "დაინახავს და მართავს ყველა დარბაზს და ყველა ადამიანს.",
+  "They keep only the rights given in each hall.": "დარჩება მხოლოდ თითოეულ დარბაზში მიცემული უფლებები.", "Make": "დიახ, გავხადო", "Yes": "დიახ",
+  "No hall has been given to you yet: an administrator gives you the halls you work in.": "დარბაზი ჯერ არ მოგცემიათ: ადმინისტრატორი მოგცემთ იმ დარბაზებს, სადაც მუშაობთ.",
+  "Your rights changed.": "თქვენი უფლებები შეიცვალა.",
+  "Run the stage": "სცენის მართვა", "Screens, shows, slides, timers and texts, from the remote desk.": "ეკრანები, შოუ, სლაიდები, ტაიმერი და ტექსტები - დისტანციური მართვიდან.",
+  "Web pages and laptops": "ვებგვერდები და ლეპტოპები", "Open web pages on the stage; take a laptop's screen.": "ვებგვერდების გახსნა სცენაზე; ლეპტოპის ეკრანის გამოტანა.",
+  "Send files": "ფაილების გაგზავნა", "Pictures, videos and slides to the hall's computer.": "სურათები, ვიდეოები და სლაიდები დარბაზის კომპიუტერზე.",
+  "Messages": "შეტყობინებები", "A message on the hall's desk, with their name.": "შეტყობინება დარბაზის მაგიდაზე, მისი სახელით.",
+  "Who did what in this hall.": "ვინ რა გააკეთა ამ დარბაზში.", "Desk lock": "მაგიდის ჩაკეტვა",
+  "Lock and unlock the hall's computer.": "დარბაზის კომპიუტერის ჩაკეტვა და განბლოკვა.", "Program updates": "პროგრამის განახლება",
+  "Look for the program's updates and install them.": "პროგრამის განახლებების შემოწმება და დაყენება.", "Pairing": "დაკავშირება",
+  "A new code, to pair the hall's computer again.": "ახალი კოდი დარბაზის კომპიუტერის ხელახლა დასაკავშირებლად.", "Manage the hall": "დარბაზის მართვა",
+  "Give people rights here (only rights they have themselves) and rename it.": "ადამიანებისთვის უფლებების მიცემა აქ (მხოლოდ ისეთის, რაც თავად აქვს) და სახელის შეცვლა.",
+  "No rights in this hall: they do not see it.": "ამ დარბაზში უფლება არ აქვს: ვერ ხედავს მას.", "Sees the hall and what is on its screens.": "ხედავს დარბაზს და რა გადის მის ეკრანებზე.",
+  "Runs the stage: the remote desk, web pages, files, messages.": "მართავს სცენას: დისტანციური მართვა, ვებგვერდები, ფაილები, შეტყობინებები.",
+  "Also program updates, the desk lock and pairing.": "ასევე პროგრამის განახლება, მაგიდის ჩაკეტვა და დაკავშირება.",
+  "Also gives people rights in this hall.": "ასევე აძლევს ადამიანებს უფლებებს ამ დარბაზში.",
+  // the cloud's answers about rights
+  "not allowed": "ამის უფლება არ გაქვთ", "main administrators only": "მხოლოდ მთავარი ადმინისტრატორებისთვის",
+  "only rights you have yourself": "მხოლოდ ისეთი უფლებები, რაც თავად გაქვთ", "your own rights are changed by someone else": "საკუთარ უფლებებს სხვა ცვლის",
+  "add them to a hall you manage": "დაამატეთ თქვენს სამართავ დარბაზში", "a main administrator has every right already": "მთავარ ადმინისტრატორს უკვე ყველა უფლება აქვს",
+  "unknown role": "უცნობი როლი", "You do not have the right to do this in this hall.": "ამ დარბაზში ამის უფლება არ გაქვთ.",
+  "This cannot be done from Stage Cloud.": "ეს Stage Cloud-იდან ვერ კეთდება.",
+
 };
 
 let lang = "ka";
@@ -142,6 +191,10 @@ function setLang(code) {
   try { localStorage.setItem("stageCloudLang", lang); } catch (e) { /* */ }
 }
 const t = text => (lang === "ka" && KA[text]) || text;
+
+// the rights by their keys, as the journal names a role's rights changed by hand
+const RIGHTS_KA = { control: "სცენის მართვა", web: "ვებგვერდები და ლეპტოპები", files: "ფაილები", message: "შეტყობინებები", journal: "ჟურნალი",
+                    desk: "მაგიდის ჩაკეტვა", updates: "განახლებები", pair: "დაკავშირება", manage: "დარბაზის მართვა" };
 
 // the journal's lines, as the cloud writes them (English), in Georgian
 const JOURNAL_KA = [
@@ -162,6 +215,13 @@ const JOURNAL_KA = [
   [/^check_update → (.+)$/, (_, r) => `განახლების შემოწმება → ${r === "ok" ? "შესრულდა" : r}`],
   [/^install_update → (.+)$/, (_, r) => `განახლების დაყენება → ${r === "ok" ? "შესრულდა" : r}`],
   [/^two-step sign-in turned on$/, "ჩართო ორეტაპიანი შესვლა"],
+  [/^rights of (.+): (\w+)(?: \((.+)\))?$/, (_, n, r, x) => `${n} - ${t(r === "halladmin" ? "hall admin" : r)}${x ? " (" + x.split(", ").map(k => RIGHTS_KA[k] || t(k)).join(", ") + ")" : ""}`],
+  [/^rights of (.+) taken away$/, "$1-ს ჩამოერთვა უფლებები"],
+  [/^rights of (.+): (\w+) in every hall$/, (_, n, r) => `${n} - ${t(r)} ყველა დარბაზში`],
+  [/^(.+) is a main administrator$/, "$1 გახდა მთავარი ადმინისტრატორი"],
+  [/^(.+) is no longer a main administrator$/, "$1 აღარ არის მთავარი ადმინისტრატორი"],
+  [/^(.+) signed out everywhere$/, "$1 გამოვიდა ყველა მოწყობილობიდან"],
+  [/^user added: (.+?)(?: \(main administrator\))?(?: from .+)?$/, "დაემატა $1"],
   [/^two-step sign-in turned off$/, "გამორთო ორეტაპიანი შესვლა"],
   [/^two-step sign-in of (.+) reset$/, "$1-ს გაუუქმდა ორეტაპიანი შესვლა"],
   [/^new recovery codes$/, "ახალი აღდგენის კოდები"],

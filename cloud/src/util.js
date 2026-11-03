@@ -1,7 +1,17 @@
 // Small helpers: answers, tokens, password hashing - WebCrypto only.
 
-export const ROLES = ["viewer", "operator", "admin"];
-export const rank = role => ROLES.indexOf(role);
+// who someone is in the whole cloud: a main administrator (every hall, the people), or a member
+// who has rights in the halls they were given
+export const GLOBAL_ROLES = ["member", "admin"];
+
+// what one may do in one hall. A role is a starting set of rights; each right can be given or
+// taken away person by person. Anything not listed here is refused.
+export const RIGHTS = ["control", "web", "files", "message", "journal", "desk", "updates", "pair", "manage"];
+export const HALL_ROLES = ["viewer", "operator", "technician", "halladmin"];
+const OPERATOR = ["control", "web", "files", "message", "journal"];
+const TECHNICIAN = [...OPERATOR, "desk", "updates", "pair"];
+export const ROLE_RIGHTS = { viewer: [], operator: OPERATOR, technician: TECHNICIAN, halladmin: [...TECHNICIAN, "manage"] };
+export const cleanRights = list => RIGHTS.filter(right => Array.isArray(list) && list.includes(right));
 
 // every answer: no sniffing, no framing by other sites, no referrer, HTTPS from now on
 export const SECURITY_HEADERS = {

@@ -57,14 +57,15 @@ class Browser {
       await this.call("/api/password", { old: password, password: newPassword });
       me = (await this.call("/api/me")).data;
     }
-    if (me.need === "setup2fa") {
-      const start = await this.call("/api/2fa/start", {});
-      phone.secrets[name.toLowerCase()] = start.data.secret;
-      const on = await this.call("/api/2fa/enable", { code: await codeFor(name.toLowerCase()) });
-      this.recovery = on.data.codes;
-      me = (await this.call("/api/me")).data;
-    }
+    if (me.need === "setup2fa") me = await this.setUp2fa(name);
     return { status: 200, data: { ok: true, ...me } };
+  }
+  async setUp2fa(name) {
+    const start = await this.call("/api/2fa/start", {});
+    phone.secrets[name.toLowerCase()] = start.data.secret;
+    const on = await this.call("/api/2fa/enable", { code: await codeFor(name.toLowerCase()) });
+    this.recovery = on.data.codes;
+    return (await this.call("/api/me")).data;
   }
   socket(path) {
     return open(BASE.replace("http", "ws") + path, { Origin: BASE, Cookie: this.cookie });
@@ -159,19 +160,19 @@ check("another site cannot act for me", r.status === 403);
 
 // lock-out: five wrong passwords
 const stranger = new Browser();
-await admin.call("/api/users", { op: "add", name: "Nino", role: "operator", password: "nino-password" });
+await admin.call("/api/users", { op: "add", name: "Nino", password: "nino-password" });
 for (let i = 0; i < 5; i++) await stranger.call("/api/login", { name: "nino", password: "guess" + i });
 r = await stranger.call("/api/login", { name: "nino", password: "nino-password" });
 check("five wrong tries: locked, even with the right password", r.status === 429, r);
 
 // -- people --------------------------------------------------------------------------------- //
-r = await admin.call("/api/users", { op: "add", name: "Gio", role: "viewer", password: "gio-password" });
-check("a viewer added", r.data?.ok, r.data);
-r = await admin.call("/api/users", { op: "add", name: "gio", role: "viewer", password: "gio-password" });
+r = await admin.call("/api/users", { op: "add", name: "Gio", password: "gio-password" });
+check("a person added", r.data?.ok, r.data);
+r = await admin.call("/api/users", { op: "add", name: "gio", password: "gio-password" });
 check("names are unique", !r.data?.ok);
 r = await admin.call("/api/users", { op: "remove", name: "Boss" });
 check("the last administrator stays", !r.data?.ok);
-r = await admin.call("/api/users", { op: "add", name: "Ana", role: "operator", password: "ana-password" });
+r = await admin.call("/api/users", { op: "add", name: "Ana", password: "ana-password" });
 const operator = new Browser();
 r = await operator.call("/api/login", { name: "ana", password: "ana-password" });
 const meFirst = (await operator.call("/api/me")).data, hallsFirst = (await operator.call("/api/halls")).status;
@@ -179,17 +180,40 @@ check("a password an administrator gave: changed first", meFirst?.need === "pass
 r = await operator.call("/api/password", { old: "ana-password", password: "ana-password" });
 check("... to a new one", !r.data?.ok);
 r = await operator.signIn("ana", "ana-password", "ana-own-password");
-check("an operator signs in", r.data?.role === "operator");
+check("a member with no rights yet signs in: no authenticator needed", r.data?.role === "member" && r.data.need === "" && !r.data.totp, r.data);
 const viewer = new Browser();
 r = await viewer.signIn("gio", "gio-password", "gio-own-password");
-check("a viewer: no authenticator needed", r.data?.ok && r.data.need === "" && r.data.totp === false, r.data);
+check("... and sees no hall", r.data?.ok && Object.keys(r.data.halls).length === 0 && (await viewer.call("/api/halls")).data?.length === 0, r.data);
 
 // -- a hall ---------------------------------------------------------------------------------- //
 r = await operator.call("/api/halls", { name: "x" });
-check("only administrators add halls", r.status === 403);
+check("only main administrators add halls", r.status === 403);
 r = await admin.call("/api/halls", { name: "Assembly Hall" });
 const hallId = r.data?.id, code = r.data?.code;
 check("a hall added, with a pairing code", r.data?.ok && /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code), r.data);
+r = await viewer.call("/api/halls/" + hallId);
+check("a hall one was not given: not there", r.status === 404 && (await viewer.call("/api/halls")).data?.length === 0, r);
+let notGiven = false;
+try { await viewer.socket(`/api/halls/${hallId}/live`); } catch (e) { notGiven = true; }
+check("... nor its live page", notGiven);
+
+// -- rights in the hall ------------------------------------------------------------------------- //
+r = await operator.call("/api/users", { op: "grant", name: "Ana", hall: hallId, role: "operator" });
+check("only those who manage a hall give rights in it", r.status === 403, r);
+r = await admin.call("/api/users", { op: "grant", name: "Ana", hall: hallId, role: "operator" });
+check("Ana: operator in the hall", r.data?.ok, r.data);
+r = await admin.call("/api/users", { op: "grant", name: "Gio", hall: hallId, role: "viewer" });
+r = await admin.call("/api/users", { op: "grant", name: "Boss", hall: hallId, role: "viewer" });
+check("a main administrator needs no rights", !r.data?.ok);
+r = await admin.call("/api/users", { op: "grant", name: "Gio", hall: hallId, role: "owner" });
+check("an unknown role is refused", !r.data?.ok);
+r = await operator.call("/api/halls");
+check("rights that change things: the authenticator first", r.status === 403 && r.data?.need === "setup2fa", r);
+const anaMe = await operator.setUp2fa("ana");
+check("... then the hall is there, with what Ana may do", anaMe?.need === "" && anaMe.halls?.[hallId]?.rights.includes("control")
+      && !anaMe.halls[hallId].rights.includes("updates"), anaMe);
+r = await viewer.call("/api/halls");
+check("a viewer sees the hall given, and needs no authenticator", r.data?.length === 1 && r.data[0].access.role === "viewer", r.data);
 const pair = async (c, ip) => {
   const x = await fetch(BASE + "/hall/pair", { method: "POST", headers: { "Content-Type": "application/json", "X-SDC-Client": "hall" },
                                                body: JSON.stringify({ code: c, computer: "STAGE-PC" }) });
@@ -244,13 +268,17 @@ check("a viewer cannot send commands", r.status === 403);
 r = await operator.call(`/api/halls/${hallId}/command`, { cmd: "format_disk" });
 check("unknown commands are refused", r.status === 400);
 r = await operator.call(`/api/halls/${hallId}/command`, { cmd: "check_update" });
+check("an operator does not update the hall's program", r.status === 403, r);
+r = await operator.call(`/api/halls/${hallId}/pair`, {});
+check("... nor pair it again", r.status === 403, r);
+r = await admin.call(`/api/halls/${hallId}/command`, { cmd: "check_update" });
 check("a hall that does not answer: said so (in 15 s)", !r.data?.ok && /did not answer/.test(r.data?.message), r.data);
 
 // -- the remote desk over a WebSocket --------------------------------------------------------- //
 const desk = await operator.socket(`/api/halls/${hallId}/live`);
 const hello = await waitFor(desk, m => m.t === "hello");
 check("the remote desk gets the hall's status at once", hello?.status?.summary?.version === "1.3.0" && hello.online
-      && hello.log?.some(e => e.text === "a video would not play") && hello.you?.role === "operator", hello);
+      && hello.log?.some(e => e.text === "a video would not play") && hello.you?.role === "operator" && hello.you.rights.includes("web"), hello);
 desk.send(JSON.stringify({ t: "rpc", id: 7, method: "POST", path: "/api/action", body: JSON.stringify({ action: "text_show", role: "main" }) }));
 const asked = await waitFor(hall, m => m.t === "rpc");
 check("its request reaches the hall, with who asked", asked?.path === "/api/action" && asked.user === "Ana" && asked.method === "POST", asked);
@@ -260,6 +288,13 @@ check("... and the answer comes back to that desk only", back?.status === 200 &&
 hall.send(JSON.stringify({ t: "status", status: { ...status, summary: { ...status.summary, version: "1.3.1" } } }));
 const pushed = await waitFor(desk, m => m.t === "status");
 check("status changes are pushed to the desk", pushed?.status?.summary?.version === "1.3.1");
+
+for (const [what, body, path] of [["locking the desk", { action: "desk_lock" }], ["an action the cloud does not know", { action: "format_disk" }],
+                                  ["another request", {}, "/api/pin"]]) {
+  desk.send(JSON.stringify({ t: "rpc", id: 30, method: "POST", path: path || "/api/action", body: JSON.stringify(body) }));
+  const answer = await waitFor(desk, m => m.t === "reply" && m.id === 30);
+  check(`an operator's desk: refused, ${what}`, answer?.status === 403 && !(await waitFor(hall, m => m.t === "rpc", 300)), answer);
+}
 
 const watching = await viewer.socket(`/api/halls/${hallId}/live`);
 await waitFor(watching, m => m.t === "hello");
@@ -283,6 +318,51 @@ check("viewers do not read the journal", r.status === 403);
 
 r = await viewer.call(`/api/halls/${hallId}/journal`);
 check("... nor a hall's journal", r.status === 403);
+
+// -- a hall administrator --------------------------------------------------------------------- //
+r = await admin.call("/api/users", { op: "add", name: "Dato", password: "dato-password", hall: hallId, hallRole: "halladmin" });
+check("a hall administrator added, straight into the hall", r.data?.ok, r.data);
+const hallAdmin = new Browser();
+r = await hallAdmin.signIn("dato", "dato-password", "dato-own-password");
+check("... signs in with the authenticator", r.data?.ok && r.data.totp && r.data.halls?.[hallId]?.rights.includes("manage"), r.data);
+r = await admin.call("/api/halls", { name: "Gym" });
+const gymId = r.data?.id;
+r = await hallAdmin.call("/api/users");
+check("a hall administrator sees the people, with rights in their hall only",
+      r.status === 200 && r.data.some(u => u.name === "Ana" && u.grants.length === 1) && r.data.every(u => u.totp === undefined), r.data);
+r = await hallAdmin.call("/api/users", { op: "grant", name: "Gio", hall: hallId, role: "technician" });
+check("... gives rights in their hall", r.data?.ok, r.data);
+r = await hallAdmin.call("/api/users", { op: "grant", name: "Gio", hall: gymId, role: "viewer" });
+check("... but not in another", r.status === 403, r);
+r = await hallAdmin.call("/api/users", { op: "role", name: "Gio", role: "admin" });
+check("... makes nobody a main administrator", r.status === 403);
+r = await hallAdmin.call("/api/users", { op: "remove", name: "Gio" });
+check("... removes nobody", r.status === 403);
+r = await hallAdmin.call("/api/users", { op: "grant", name: "Dato", hall: hallId, role: "viewer" });
+check("... and does not change their own rights", !r.data?.ok);
+r = await hallAdmin.call("/api/users", { op: "add", name: "Lika", password: "lika-password", hall: hallId, hallRole: "operator" });
+check("... adds a person to their hall", r.data?.ok, r.data);
+r = await hallAdmin.call("/api/users", { op: "add", name: "Mari", password: "mari-password" });
+check("... but only into their hall", r.status === 403);
+const allBut = ["control", "web", "files", "message", "journal", "desk", "pair", "manage"];
+r = await admin.call("/api/users", { op: "grant", name: "Dato", hall: hallId, role: "halladmin", rights: allBut });
+check("a right taken away from one person", r.data?.ok && (await hallAdmin.call("/api/me")).data?.halls?.[hallId]?.rights.includes("updates") === false);
+r = await hallAdmin.call("/api/users", { op: "grant", name: "Lika", hall: hallId, role: "technician" });
+check("... they cannot give it to others", r.status === 400 && /only rights you have/.test(r.data?.message), r.data);
+r = await hallAdmin.call("/api/users", { op: "grant", name: "Gio", hall: hallId, role: "viewer" });
+check("... nor change someone who has it", !r.data?.ok, r.data);
+r = await admin.call("/api/users", { op: "grant", name: "Gio", hall: hallId, role: "viewer" });
+r = await hallAdmin.call("/api/journal");
+check("a hall administrator's journal: their hall only", r.status === 200 && r.data.length > 0 && r.data.every(j => j.hall === hallId), r.data?.slice(0, 3));
+r = await hallAdmin.call(`/api/halls/${hallId}/rename`, { name: "Assembly Hall" });
+check("... and may rename it", r.data?.ok, r.data);
+r = await hallAdmin.call(`/api/halls/${hallId}/remove`, {});
+check("... but not remove it", r.status === 403);
+r = await admin.call("/api/users", { op: "sessions", name: "Dato" });
+check("a main administrator sees someone's sessions", r.data?.sessions?.length === 1, r.data);
+r = await admin.call("/api/users", { op: "signout", name: "Dato" });
+check("... and signs them out everywhere", r.data?.ended === 1 && (await hallAdmin.call("/api/me")).status === 401, r.data);
+await admin.call(`/api/halls/${gymId}/remove`, {});
 
 // -- the web from the cloud: web addresses only ------------------------------------------------- //
 for (const [url, ok] of [["file:///C:/Users/x/secret.pdf", false], ["C:\\Users\\x\\a.pdf", false], ["\\\\server\\share", false],
@@ -313,9 +393,9 @@ r = await admin.call("/api/me");
 check("API answers carry them too", r.status === 200);
 
 // -- rights that change while a desk is open ---------------------------------------------------- //
-r = await admin.call("/api/users", { op: "role", name: "Ana", role: "viewer" });
+r = await admin.call("/api/users", { op: "grant", name: "Ana", hall: hallId, role: "viewer" });
 await sleep(300);
-check("a new role closes the open desk at once", desk.closedWith === 4401, desk.closedWith);
+check("new rights close the open desk at once", desk.closedWith === 4401, desk.closedWith);
 const again1 = await operator.socket(`/api/halls/${hallId}/live`);
 const hello2 = await waitFor(again1, m => m.t === "hello");
 check("... and the desk opened again has the new role", hello2?.you?.role === "viewer", hello2?.you);
@@ -350,7 +430,7 @@ r = await admin.call("/api/password", { old: "wrong", password: "new-boss-passwo
 check("own password: the old one is needed", !r.data?.ok);
 await operator.signIn("ana", "ana-own-password");
 r = await operator.call(`/api/halls/${hallId}/remove`, {});
-check("only administrators remove halls", r.status === 403);
+check("only main administrators remove halls", r.status === 403);
 r = await admin.call(`/api/halls/${hallId}/remove`, {});
 r = await admin.call("/api/halls");
 check("a hall removed", r.data?.length === 0, r.data);

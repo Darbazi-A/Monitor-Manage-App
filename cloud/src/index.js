@@ -4,12 +4,14 @@
 //   /hall/...    the halls' programs: pairing with a code, then a WebSocket with their token
 import { Directory } from "./directory.js";
 import { Hall } from "./hall.js";
-import { PAGE_CSP, ROLES, SECURITY_HEADERS, cleanName, cookie, fail, frameCsp, json, rank, sameText, sha256 } from "./util.js";
+import { HALL_ROLES, PAGE_CSP, ROLE_RIGHTS, SECURITY_HEADERS, cleanName, cleanRights, cookie, fail, frameCsp, json, sameText, sha256 } from "./util.js";
 
 export { Directory, Hall };
 
 const SESSION_COOKIE = "sdc_session";
-const SAFE_COMMANDS = new Set(["check_update", "install_update", "message", "status", "lock_desk", "unlock_desk"]);
+// the hall's commands from the dashboard, each with the right it needs (any other is refused)
+const COMMAND_RIGHTS = { status: "control", message: "message", check_update: "updates", install_update: "updates",
+                         lock_desk: "desk", unlock_desk: "desk" };
 
 export default {
   async fetch(request, env) {
@@ -115,13 +117,16 @@ async function apiRoutes(request, env, url) {
   const token = cookie(request, SESSION_COOKIE);
   const me = await dir.session(token);
   if (!me) return fail(401, "sign in");
-  const need = role => rank(me.role) >= rank(role);
+  const isAdmin = me.role === "admin";
 
   if (path === "/api/logout" && method === "POST") {
     await dir.logout(token);
     return json({ ok: true }, 200, { "Set-Cookie": `${SESSION_COOKIE}=; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Strict; Path=/; Max-Age=0` });
   }
-  if (path === "/api/me") return json({ name: me.name, role: me.role, totp: me.totp, need: me.need, totpRequired: totpRequired(me.role) });
+  if (path === "/api/me") {
+    return json({ name: me.name, role: me.role, totp: me.totp, need: me.need, totpRequired: me.totpRequired,
+                  halls: me.need ? {} : await dir.accessMap(me.name) });
+  }
   if (path === "/api/password" && method === "POST") {
     const data = await body(request);
     return reply(await dir.setPassword(me.name, data.password, me.name, String(data.old || ""), token));
@@ -138,44 +143,49 @@ async function apiRoutes(request, env, url) {
     return reply(await dir.endSessions(me.name, token, data.all ? "*" : String(data.id || "")));
   }
 
-  // halls
-  if (path === "/api/halls" && method === "GET") return json(await dir.halls());
+  // what I may do: in every hall, and in one (nothing at all in a hall I was not given)
+  const mine = await dir.accessMap(me.name);
+  const may = (hall, right) => !!mine[hall]?.rights.includes(right);
+  const managed = Object.keys(mine).filter(id => may(id, "manage"));
+
+  // halls: the ones I have rights in, each with what I may do there
+  if (path === "/api/halls" && method === "GET") return json((await dir.halls()).filter(h => mine[h.id]).map(h => ({ ...h, access: mine[h.id] })));
   if (path === "/api/halls" && method === "POST") {
-    if (!need("admin")) return fail(403, "administrators only");
+    if (!isAdmin) return fail(403, "main administrators only");
     return reply(await dir.addHall((await body(request)).name, me.name));
   }
   const hallMatch = path.match(/^\/api\/halls\/([0-9a-f-]{36})(?:\/(\w+))?$/);
   if (hallMatch) {
     const [, id, verb = ""] = hallMatch;
     const hall = await dir.hall(id);
-    if (!hall) return fail(404, "no such hall");
-    if (!verb && method === "GET") return json({ ...hall, ...(await hallObject(env, id).snapshot()) });
+    if (!hall || !mine[id]) return fail(404, "no such hall");
+    if (!verb && method === "GET") return json({ ...hall, access: mine[id], ...(await hallObject(env, id).snapshot()) });
     if (verb === "live") {
       if (request.headers.get("Upgrade") !== "websocket") return fail(426, "a WebSocket");
-      // the hall checks this session again on every request, and closes the socket when it ends
-      return hallObject(env, id).fetch(forwarded(request, { "X-SDC-Kind": "viewer", "X-SDC-User": me.name, "X-SDC-Role": me.role,
+      // the hall checks this session's rights again on every request, and closes the socket when they end
+      return hallObject(env, id).fetch(forwarded(request, { "X-SDC-Kind": "viewer", "X-SDC-Hall": id, "X-SDC-User": me.name,
         "X-SDC-Session": await sha256(cookie(request, SESSION_COOKIE)), "X-SDC-Expires": String(me.expires) }));
     }
     if (verb === "journal" && method === "GET") {
-      if (!need("operator")) return fail(403, "operators and administrators only");
+      if (!may(id, "journal")) return fail(403, "not allowed");
       return json(await dir.journal(id, 100));
     }
     if (method !== "POST") return fail(405, "POST");
     const data = await body(request);
     if (verb === "command") {
-      if (!need("operator")) return fail(403, "operators and administrators only");
       const cmd = String(data.cmd || "");
-      if (!SAFE_COMMANDS.has(cmd)) return fail(400, "unknown command");
-      const args = cmd === "message" ? { text: cleanName(data.args?.text, 500) } : (data.args || {});
+      if (!COMMAND_RIGHTS[cmd]) return fail(400, "unknown command");
+      if (!may(id, COMMAND_RIGHTS[cmd])) return fail(403, "not allowed");
+      const args = cmd === "message" ? { text: cleanName(data.args?.text, 500) } : cmd === "install_update" ? { now: !!data.args?.now } : {};
       if (cmd === "message" && !args.text) return fail(400, "an empty message");
       const result = await hallObject(env, id).command(cmd, args, me.name);
       await dir.note(me.name, id, `${cmd}${cmd === "message" ? ": " + args.text.slice(0, 80) : ""} → ${result.ok ? "ok" : result.message}`);
       return reply(result);
     }
-    if (!need("admin")) return fail(403, "administrators only");
-    if (verb === "pair") return reply(await dir.newCode(id, me.name));
-    if (verb === "rename") return reply(await dir.renameHall(id, data.name, me.name));
+    if (verb === "pair") return may(id, "pair") ? reply(await dir.newCode(id, me.name)) : fail(403, "not allowed");
+    if (verb === "rename") return may(id, "manage") ? reply(await dir.renameHall(id, data.name, me.name)) : fail(403, "not allowed");
     if (verb === "remove") {
+      if (!isAdmin) return fail(403, "main administrators only");
       const result = await dir.removeHall(id, me.name);
       if (result.ok) await hallObject(env, id).forget();
       return reply(result);
@@ -183,27 +193,45 @@ async function apiRoutes(request, env, url) {
     return fail(404, "not found");
   }
 
-  // people and the journal
+  // the journal: every line for a main administrator, else the lines of the halls I may read it in
   if (path === "/api/journal" && method === "GET") {
-    if (!need("operator")) return fail(403, "operators and administrators only");
-    return json(await dir.journal("", 300));
+    if (isAdmin) return json(await dir.journal("", 300));
+    const readable = Object.keys(mine).filter(id => may(id, "journal"));
+    if (!readable.length) return fail(403, "not allowed");
+    return json(await dir.journal("", 300, readable));
   }
+
+  // people: a main administrator manages everyone; someone who manages a hall sees the people
+  // and gives rights in that hall (only the rights they have), and may add a person to it
   if (path === "/api/users") {
-    if (!need("admin")) return fail(403, "administrators only");
-    if (method === "GET") return json(await dir.users());
+    if (!isAdmin && !managed.length) return fail(403, "not allowed");
+    if (method === "GET") return json(await dir.users(isAdmin ? null : managed));
     const data = await body(request);
-    if (data.op === "add") return reply(await dir.addUser(data.name, ROLES.includes(data.role) ? data.role : "", data.password, me.name));
-    if (data.op === "role") return reply(await dir.setRole(String(data.name), String(data.role), me.name));
-    if (data.op === "remove") return reply(await dir.removeUser(String(data.name), me.name));
-    if (data.op === "password") {
-      if (String(data.name) === me.name) return fail(400, "change your own password under Account");
-      return reply(await dir.setPassword(String(data.name), data.password, me.name));
+    const name = String(data.name || "");
+    if (data.op === "grant") return reply(await dir.grant(me.name, name, String(data.hall || ""), String(data.role || ""), data.rights ?? null));
+    if (data.op === "add") {
+      const hall = String(data.hall || "");
+      const hallRole = String(data.hallRole || "viewer");
+      if (!isAdmin && !managed.includes(hall)) return fail(403, "add them to a hall you manage");
+      if (hall && !HALL_ROLES.includes(hallRole)) return fail(400, "unknown role");
+      if (hall && !cleanRights(data.rights ?? ROLE_RIGHTS[hallRole]).every(right => may(hall, right))) return fail(403, "only rights you have yourself");
+      const added = await dir.addUser(data.name, isAdmin && data.role === "admin" ? "admin" : "member", data.password, me.name);
+      if (!added.ok || !hall) return reply(added);
+      return reply(await dir.grant(me.name, added.name, hall, hallRole, data.rights ?? null));
     }
-    if (data.op === "reset2fa") return reply(await dir.totpReset(String(data.name), me.name));
+    if (!isAdmin) return fail(403, "main administrators only");
+    if (data.op === "role") return reply(await dir.setRole(name, String(data.role), me.name));
+    if (data.op === "remove") return reply(await dir.removeUser(name, me.name));
+    if (data.op === "password") {
+      if (name === me.name) return fail(400, "change your own password under Account");
+      return reply(await dir.setPassword(name, data.password, me.name));
+    }
+    if (data.op === "reset2fa") return reply(await dir.totpReset(name, me.name));
+    if (data.op === "signout") return reply(await dir.signOutUser(name, me.name));
+    if (data.op === "sessions") return json({ ok: true, sessions: await dir.userSessions(name) });
     return fail(400, "unknown");
   }
   return fail(404, "not found");
 }
 
-const reply = result => json(result, result.ok ? 200 : 400);
-const totpRequired = role => Directory.needsTotp(role);
+const reply = result => json(result, result.ok ? 200 : (result.message === "not allowed" ? 403 : 400));

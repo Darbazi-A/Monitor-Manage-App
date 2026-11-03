@@ -10,8 +10,12 @@ let me = null;
 let live = null;                 // the open hall's WebSocket
 let timers = [];                 // the page's own intervals, stopped when it changes
 const ui = { filter: "all", search: "" };
-const ROLES = ["viewer", "operator", "admin"];
-const can = role => ROLES.indexOf(me?.role) >= ROLES.indexOf(role);
+// what I may do: everything as a main administrator; otherwise the rights each hall gave me
+const isAdmin = () => me?.role === "admin";
+const mayIn = (hallId, right) => isAdmin() || !!me?.halls?.[hallId]?.rights.includes(right);
+const mayAnywhere = right => isAdmin() || Object.values(me?.halls || {}).some(a => a.rights.includes(right));
+const managesAny = () => mayAnywhere("manage");
+const canDesk = hallId => mayIn(hallId, "control") || mayIn(hallId, "web") || mayIn(hallId, "files");
 const every = (ms, fn) => timers.push(setInterval(() => { if (!document.hidden) fn(); }, ms));
 
 // -- icons (24 px, stroked) ----------------------------------------------------------------------------- //
@@ -38,6 +42,10 @@ const ICONS = {
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   wifioff: '<path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.6M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 10.7 5M12 20h.01"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>', chev: '<path d="m9 18 6-6-6-6"/>',
+  admin: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  upload: '<path d="M12 21V9M7 14l5-5 5 5M5 3h14"/>', crown: '<path d="m3 8 4 4 5-7 5 7 4-4-2 11H5z"/>',
 };
 const icon = (name, size = "") => `<svg class="i ${size}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 
@@ -81,10 +89,10 @@ const initials = name => String(name || "?").trim().split(/\s+/).map(w => w[0]).
 const isOnline = h => h.online && Date.now() - (h.lastSeen || 0) < 180000;
 
 // -- sheets (from below on a phone, a dialog on a computer) ------------------------------------------------ //
-function sheet(html, wire) {
+function sheet(html, wire, size = "") {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
-  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  scrim.innerHTML = `<div class="sheet ${size}" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
   document.body.appendChild(scrim);
   const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
   const onKey = e => { if (e.key === "Escape") close(); };
@@ -114,28 +122,52 @@ function applyTheme() {
   return theme;
 }
 applyTheme();
+const looksDark = () => { const theme = applyTheme(); return theme === "dark" || (theme === "auto" && matchMedia("(prefers-color-scheme: dark)").matches); };
+function setTheme(theme) {
+  try { localStorage.setItem("stageCloudTheme", theme); } catch (e) { /* */ }
+  applyTheme();
+}
+// the switch: the other one of light and dark (Account also has "as the device")
+function themeButton(id) {
+  return `<button class="btn ghost icon" id="${id}" title="${esc(t(looksDark() ? "Light" : "Dark"))}" aria-label="${esc(t(looksDark() ? "Light" : "Dark"))}">${icon(looksDark() ? "sun" : "moon")}</button>`;
+}
+function wireTheme(id) {
+  $(id)?.addEventListener("click", () => {
+    setTheme(looksDark() ? "light" : "dark");
+    const b = $(id);
+    if (b) { b.innerHTML = icon(looksDark() ? "sun" : "moon"); b.title = t(looksDark() ? "Light" : "Dark"); }
+  });
+}
 
 // -- the shell ---------------------------------------------------------------------------------------- //
 function navItems() {
   const items = [["halls", "#/", "Halls", "halls"]];
-  if (can("operator")) items.push(["journal", "#/journal", "Journal", "journal"]);
-  if (can("admin")) items.push(["people", "#/people", "People", "people"]);
+  if (mayAnywhere("journal")) items.push(["journal", "#/journal", "Journal", "journal"]);
+  if (managesAny()) items.push(["admin", "#/admin", "Administration", "admin"]);
   items.push(["account", "#/account", "Account", "account"]);
   return items;
+}
+// who I am, in a few words: a main administrator, or my role (my roles) in the halls
+function whoAmI() {
+  if (isAdmin()) return t("Main administrator");
+  const roles = [...new Set(Object.values(me.halls || {}).map(a => a.role))];
+  if (!roles.length) return t("no halls yet");
+  return roles.length === 1 ? tf("{0} · {1} hall(s)", t(roles[0]), Object.keys(me.halls).length) : roles.map(r => t(r)).join(", ");
 }
 function shell(active, title, body, options = {}) {
   const items = navItems();
   app.innerHTML = `<div class="shell">
     <aside class="side"><div class="brand"><div class="logo">${icon("halls", "s")}</div>Stage Cloud</div>
       ${items.map(([key, href, name, ico]) => `<a class="nav ${key === active ? "on" : ""}" href="${href}">${icon(ico)}${esc(t(name))}</a>`).join("")}
-      <div class="foot"><div class="me"><div class="avatar">${esc(initials(me.name))}</div><div class="grow"><b>${esc(me.name)}</b>
-        <small>${esc(t(me.role))}</small></div><button class="btn ghost icon" id="out" title="${esc(t("Sign out"))}">${icon("out")}</button></div></div></aside>
+      <div class="foot"><div class="me"><div class="avatar ${isAdmin() ? "admin" : ""}">${esc(initials(me.name))}</div><div class="grow"><b>${esc(me.name)}</b>
+        <small>${esc(whoAmI())}</small></div>${themeButton("theme")}<button class="btn ghost icon" id="out" title="${esc(t("Sign out"))}">${icon("out")}</button></div></div></aside>
     <div class="main"><div class="topbar">${options.back ? `<a class="btn ghost icon" href="${options.back}" aria-label="${esc(t("Back"))}">${icon("back")}</a>` : ""}
-        <h1>${esc(title)}</h1>${options.actions || ""}</div>
+        <h1>${esc(title)}</h1>${options.actions || ""}<span class="mobile-only">${themeButton("theme2")}</span></div>
       <div class="content">${body}</div></div>
-    <nav class="tabs">${items.map(([key, href, name, ico]) => `<a href="${href}" class="${key === active ? "on" : ""}"><span class="pill-ico">${icon(ico)}</span>${esc(t(name))}</a>`).join("")}</nav>
+    <nav class="tabs">${items.map(([key, href, name, ico]) => `<a href="${href}" class="${key === active ? "on" : ""}"><span class="pill-ico">${icon(ico)}</span><span class="lbl">${esc(t(name))}</span></a>`).join("")}</nav>
   </div>`;
   $("out")?.addEventListener("click", signOut);
+  wireTheme("theme"); wireTheme("theme2");
 }
 async function signOut() {
   await call("/api/logout", {});
@@ -148,6 +180,7 @@ async function route() {
   timers.forEach(clearInterval);
   timers = [];
   window.onmessage = null;
+  document.querySelectorAll(".scrim").forEach(scrim => scrim.remove());   // a sheet belongs to the page it was opened on
   if (live && !location.hash.startsWith("#/hall/" + live.hallId)) { live.close(); live = null; }
   if (!me) {
     try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch (e) { /* offline */ }
@@ -157,8 +190,11 @@ async function route() {
   if (me.need === "setup2fa") return setupTotp(true);
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "hall" && parts[1]) return parts[2] === "desk" ? remoteDesk(parts[1]) : hallPage(parts[1]);
-  if (parts[0] === "journal" && can("operator")) return journalPage();
-  if (parts[0] === "people" && can("admin")) return peoplePage();
+  if (parts[0] === "journal" && mayAnywhere("journal")) return journalPage();
+  if (parts[0] === "admin" && managesAny()) {
+    if (parts[1] === "person" && parts[2]) return personPage(decodeURIComponent(parts[2]));
+    return adminPage(["people", "access", "halls"].includes(parts[1]) ? parts[1] : "people");
+  }
   if (parts[0] === "account") return accountPage();
   return hallsPage();
 }
@@ -368,7 +404,7 @@ function updateBadge(sum) {
 
 function hallCard(h) {
   const sum = h.summary || {}, on = isOnline(h);
-  const desk = on && can("operator") && sum.control !== false;
+  const desk = on && canDesk(h.id) && sum.control !== false;
   return `<article class="card hall ${on ? "" : "offline"}" data-id="${esc(h.id)}">
     <div class="hall-head"><div class="hall-ico">${icon(on ? "halls" : "wifioff")}</div>
       <div class="grow"><h3 class="ell">${esc(h.name)}</h3><div class="row" style="margin-top:4px;gap:6px">${statusBadge(h)}</div></div></div>
@@ -384,8 +420,8 @@ function hallCard(h) {
 async function hallsPage() {
   shell("halls", t("Halls"), `<div id="stats"></div><div class="toolbar" id="tools"></div><div id="list"><div class="halls">
       <div class="skeleton"></div><div class="skeleton"></div></div></div>
-    ${can("admin") ? `<button class="btn primary fab mobile-only" id="addm">${icon("plus")}${esc(t("Add a hall"))}</button>` : ""}`,
-    { actions: can("admin") ? `<button class="btn primary desk-only" id="add">${icon("plus")}${esc(t("Add a hall"))}</button>` : "" });
+    ${isAdmin() ? `<button class="btn primary fab mobile-only" id="addm">${icon("plus")}${esc(t("Add a hall"))}</button>` : ""}`,
+    { actions: isAdmin() ? `<button class="btn primary desk-only" id="add">${icon("plus")}${esc(t("Add a hall"))}</button>` : "" });
   $("add")?.addEventListener("click", addHall);
   $("addm")?.addEventListener("click", addHall);
   let halls = [];
@@ -406,8 +442,8 @@ async function hallsPage() {
       && (!q || h.name.toLowerCase().includes(q) || (h.summary?.computer || "").toLowerCase().includes(q)));
     if (!halls.length) {
       $("list").innerHTML = `<div class="card empty"><div class="hall-ico">${icon("halls", "l")}</div><h3>${esc(t("No halls yet"))}</h3>
-        <p>${esc(t(can("admin") ? "Add a hall here, then type its code in the hall's program: Settings → Cloud." : "An administrator adds the halls."))}</p>
-        ${can("admin") ? `<button class="btn primary" id="add2">${icon("plus")}${esc(t("Add a hall"))}</button>` : ""}</div>`;
+        <p>${esc(t(isAdmin() ? "Add a hall here, then type its code in the hall's program: Settings → Cloud." : "No hall has been given to you yet: an administrator gives you the halls you work in."))}</p>
+        ${isAdmin() ? `<button class="btn primary" id="add2">${icon("plus")}${esc(t("Add a hall"))}</button>` : ""}</div>`;
       $("add2")?.addEventListener("click", addHall);
       return;
     }
@@ -418,7 +454,14 @@ async function hallsPage() {
       location.hash = deskButton ? `#/hall/${c.dataset.id}/desk` : `#/hall/${c.dataset.id}`;
     });
   };
-  const load = async () => { try { halls = (await call("/api/halls")).data || []; draw(); } catch (e) { /* signed out */ } };
+  const load = async () => {
+    try {
+      halls = (await call("/api/halls")).data || [];
+      // rights given or taken away meanwhile: what I may do, as the cloud says now
+      me.halls = Object.fromEntries(halls.map(h => [h.id, h.access]));
+      draw();
+    } catch (e) { /* signed out */ }
+  };
   await load();
   every(15000, load);
 }
@@ -472,7 +515,7 @@ class Live {
       this.pending.clear();
       if (this.closed) return;
       // the cloud closed it: signed out, removed, or a new role - ask again who I am
-      if (e.code === 4401) { this.closed = true; me = null; route(); return; }
+      if (e.code === 4401) { this.closed = true; me = null; toast("Your rights changed."); route(); return; }
       this.onMessage({ t: "socket", on: false });
       setTimeout(() => !this.closed && this.open(), Math.min(15000, 1000 * 2 ** this.tries++));
     };
@@ -506,27 +549,31 @@ async function hallPage(id) {
   const r = await call("/api/halls/" + id);
   if (!r.ok) { location.hash = "#/"; return; }
   let hall = r.data, log = hall.log || [], journal = null, pictures = {}, picturesOff = false;
+  if (hall.access && me.halls) me.halls[id] = hall.access;
+  const menu = mayIn(id, "manage") || mayIn(id, "pair");
   shell("halls", hall.name, `<div id="hall"></div>`, {
-    back: "#/", actions: can("admin") ? `<button class="btn ghost icon" id="more" aria-label="${esc(t("More"))}">${icon("more")}</button>` : "" });
+    back: "#/", actions: menu ? `<button class="btn ghost icon" id="more" aria-label="${esc(t("More"))}">${icon("more")}</button>` : "" });
   $("more")?.addEventListener("click", () => adminMenu(hall, () => { $("hall") && draw(); }));
 
   const draw = () => {
     const out = $("hall");
     if (!out) return;
     const st = hall.status || {}, sum = st.summary || {}, d = st.detail || {}, pc = d.pc || {};
-    const on = !!hall.online, desk = on && can("operator") && sum.control !== false;
+    const on = !!hall.online, desk = on && canDesk(id) && sum.control !== false;
+    const acts = [canDesk(id), mayIn(id, "message"), mayIn(id, "updates"), mayIn(id, "desk")];
     const ready = sum.update?.state === "ready";
     const kv = (ico, label, value) => `<div>${icon(ico)}<div class="grow"><small>${esc(t(label))}</small><b title="${esc(value)}">${esc(value)}</b></div></div>`;
-    out.innerHTML = `<section class="hero"><div class="hero-top"><div class="hall-ico">${icon(on ? "halls" : "wifioff", "l")}</div>
+    out.innerHTML = `<section class="hero ${on ? "live" : ""}"><div class="hero-top"><div class="hall-ico">${icon(on ? "halls" : "wifioff", "l")}</div>
         <div class="grow"><div class="row" style="gap:6px">${statusBadge({ ...hall, online: on, lastSeen: hall.lastSeen })}
           ${sum.version ? `<span class="badge">v${esc(sum.version)}</span>` : ""}${updateBadge(sum)}</div>
-          <div class="sub" style="margin-top:6px">${esc(sum.computer || hall.computer || "")}${sum.control === false ? " · " + esc(t("remote desk off")) : ""}</div></div></div>
-      ${can("operator") ? `<div class="actions">
-        <button class="action primary" id="desk" ${desk ? "" : "disabled"}>${icon("remote")}${esc(t("Control"))}</button>
-        <button class="action" id="msg" ${on ? "" : "disabled"}>${icon("message")}${esc(t("Message"))}</button>
-        <button class="action" id="upd" ${on ? "" : "disabled"}>${icon(ready ? "download" : "update")}${esc(t(ready ? "Install" : "Update"))}
-          ${ready ? `<span class="tag">${esc(sum.update.version)}</span>` : ""}</button>
-        <button class="action" id="lk" ${on ? "" : "disabled"}>${icon("lock")}${esc(t(sum.locked ? "Unlock" : "Lock"))}</button></div>` : ""}</section>
+          <div class="sub" style="margin-top:6px">${esc(sum.computer || hall.computer || "")}${sum.control === false ? " · " + esc(t("remote desk off")) : ""}</div>
+          ${isAdmin() ? "" : `<div class="chips-row">${roleChip(hall.access?.role || "", isCustom(hall.access?.role || "", hall.access?.rights || []))}</div>`}</div></div>
+      ${acts.some(Boolean) ? `<div class="actions">
+        ${acts[0] ? `<button class="action primary" id="desk" ${desk ? "" : "disabled"}>${icon("remote")}${esc(t("Control"))}</button>` : ""}
+        ${acts[1] ? `<button class="action" id="msg" ${on ? "" : "disabled"}>${icon("message")}${esc(t("Message"))}</button>` : ""}
+        ${acts[2] ? `<button class="action" id="upd" ${on ? "" : "disabled"}>${icon(ready ? "download" : "update")}${esc(t(ready ? "Install" : "Update"))}
+          ${ready ? `<span class="tag">${esc(sum.update.version)}</span>` : ""}</button>` : ""}
+        ${acts[3] ? `<button class="action" id="lk" ${on ? "" : "disabled"}>${icon("lock")}${esc(t(sum.locked ? "Unlock" : "Lock"))}</button>` : ""}</div>` : ""}</section>
       <div class="cols"><div>
         <div class="section-title"><h2>${esc(t("On the stage now"))}</h2>${on && !picturesOff ? `<span class="badge ok"><span class="dot"></span>${esc(t("live"))}</span>` : ""}</div>
         ${(sum.screens || []).length ? `<div class="stage">${sum.screens.map(s => `<div class="card tile ${s.kind === "strip" ? "strip" : ""}">
@@ -547,7 +594,7 @@ async function hallPage(id) {
           ${kv("phone", "Phone remote", d.phone ? (d.phone.on ? tf("on · {0} phone(s)", d.phone.phones) : t("off")) : "—")}
           ${kv("laptop", "Laptops", d.share ? (d.share.on ? tf("on · {0}", d.share.laptops) : t("off")) : "—")}
           ${kv("layers", "Scene", d.preset || "—")}${kv("globe", "Windows", pc.os || "—")}</div>
-        ${can("operator") ? `<div class="section-title"><h2>${esc(t("Journal"))}</h2></div><div class="card feed">${journal === null ? `<div class="muted">…</div>`
+        ${mayIn(id, "journal") ? `<div class="section-title"><h2>${esc(t("Journal"))}</h2></div><div class="card feed">${journal === null ? `<div class="muted">…</div>`
           : journal.length ? journal.slice(0, 10).map(j => `<div><time>${esc(hhmm(j.at))}</time><div class="grow"><span class="who">${esc(j.user)}</span> · ${esc(jt(j.what))}</div></div>`).join("")
           : `<div class="muted">${esc(t("Nothing so far."))}</div>`}</div>` : ""}
       </div></div>`;
@@ -583,10 +630,14 @@ async function hallPage(id) {
     }
   };
   draw();
-  if (can("operator")) call(`/api/halls/${id}/journal`).then(x => { journal = x.data || []; draw(); }).catch(() => {});
+  if (mayIn(id, "journal")) call(`/api/halls/${id}/journal`).then(x => { journal = x.data || []; draw(); }).catch(() => {});
   live?.close();
   live = new Live(id, m => {
-    if (m.t === "hello") { hall = { ...hall, status: m.status, online: m.online, lastSeen: m.lastSeen }; log = m.log || []; draw(); refreshPictures(); }
+    if (m.t === "hello") {
+      hall = { ...hall, status: m.status, online: m.online, lastSeen: m.lastSeen };
+      if (m.you?.rights && !isAdmin()) { hall.access = { role: m.you.role, rights: m.you.rights }; me.halls[id] = hall.access; }
+      log = m.log || []; draw(); refreshPictures();
+    }
     else if (m.t === "status") { hall.status = m.status; hall.lastSeen = m.at; hall.online = true; draw(); }
     else if (m.t === "online") { hall.online = m.online; draw(); }
     else if (m.t === "event") { log.unshift(m); draw(); }
@@ -622,21 +673,23 @@ async function updateAction(id, sum) {
 
 function adminMenu(hall, done) {
   sheet(`<h2>${esc(hall.name)}</h2><div class="menu" style="margin-top:8px">
-    <button id="rn">${icon("edit")}${esc(t("Rename"))}</button>
-    <button id="pa">${icon("key")}${esc(t("Pair again (new code)"))}</button>
-    <button id="rm" class="danger">${icon("trash")}${esc(t("Remove the hall"))}</button></div>`, (box, close) => {
-    box.querySelector("#rn").onclick = () => { close(); sheet(`<h2>${esc(t("Rename"))}</h2><form id="f">
+    ${mayIn(hall.id, "manage") ? `<button id="ppl">${icon("people")}${esc(t("Who has rights here"))}</button>
+      <button id="rn">${icon("edit")}${esc(t("Rename"))}</button>` : ""}
+    ${mayIn(hall.id, "pair") ? `<button id="pa">${icon("key")}${esc(t("Pair again (new code)"))}</button>` : ""}
+    ${isAdmin() ? `<button id="rm" class="danger">${icon("trash")}${esc(t("Remove the hall"))}</button>` : ""}</div>`, (box, close) => {
+    box.querySelector("#ppl")?.addEventListener("click", () => { close(); ui.accessHall = hall.id; location.hash = "#/admin/access"; });
+    if (box.querySelector("#rn")) box.querySelector("#rn").onclick = () => { close(); sheet(`<h2>${esc(t("Rename"))}</h2><form id="f">
       <label class="field"><span>${esc(t("The hall's name"))}</span><input id="n" maxlength="60" value="${esc(hall.name)}" required></label>
       <div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button><button class="btn primary">${esc(t("Save"))}</button></div></form>`,
       (b2, c2) => { b2.querySelector("#f").onsubmit = async e => { e.preventDefault(); const name = b2.querySelector("#n").value.trim();
         const x = await call(`/api/halls/${hall.id}/rename`, { name }); if (x.ok) { c2(); hall.name = name; toast("Saved."); route(); } else toast(x.data.message, true); }; }); };
-    box.querySelector("#pa").onclick = async () => {
+    if (box.querySelector("#pa")) box.querySelector("#pa").onclick = async () => {
       close();
       if (!await ask(t("Pair again"), t("A new code: the computer that pairs with it becomes this hall, and the one paired now loses its access."), t("Make a code"))) return;
       const x = await call(`/api/halls/${hall.id}/pair`, {});
       if (x.ok) showCode(hall.name, x.data.code); else toast(x.data.message, true);
     };
-    box.querySelector("#rm").onclick = async () => {
+    if (box.querySelector("#rm")) box.querySelector("#rm").onclick = async () => {
       close();
       if (!await ask(t("Remove the hall"), tf("Remove “{0}” from Stage Cloud? Its computer is disconnected for good (it can be paired again as a new hall).", hall.name), t("Remove"), true)) return;
       const x = await call(`/api/halls/${hall.id}/remove`, {});
@@ -745,12 +798,17 @@ async function remoteDesk(id) {
 // -- the journal ------------------------------------------------------------------------------------- //
 async function journalPage() {
   shell("journal", t("Journal"), `<p class="sub" style="margin:0 0 4px">${esc(t("Who did what, and when."))}</p>
-    <div class="toolbar" style="margin-top:12px"><select id="hf" style="max-width:320px"><option value="">${esc(t("All halls"))}</option></select></div><div id="j"></div>`);
+    <div class="toolbar" style="margin-top:12px"><select id="hf" style="max-width:260px"><option value="">${esc(t("All halls"))}</option></select>
+      <select id="pf" style="max-width:220px"><option value="">${esc(t("Everyone"))}</option></select>
+      <label class="search">${icon("search", "s")}<input id="jq" type="search" placeholder="${esc(t("Find…"))}"></label></div><div id="j"></div>`);
   const [rows, halls] = await Promise.all([call("/api/journal").then(x => x.data || []), call("/api/halls").then(x => x.data || [])]);
-  $("hf").innerHTML += halls.map(h => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
+  if (!$("hf")) return;
+  $("hf").innerHTML += halls.filter(h => mayIn(h.id, "journal")).map(h => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
+  $("pf").innerHTML += [...new Set(rows.map(j => j.user).filter(Boolean))].sort().map(n => `<option>${esc(n)}</option>`).join("");
   const draw = () => {
-    const only = $("hf").value;
-    const shown = rows.filter(j => !only || j.hall === only);
+    const only = $("hf").value, who = $("pf").value, q = $("jq").value.trim().toLowerCase();
+    const shown = rows.filter(j => (!only || j.hall === only) && (!who || j.user === who)
+      && (!q || (j.what + " " + jt(j.what) + " " + j.hallName).toLowerCase().includes(q)));
     if (!shown.length) { $("j").innerHTML = `<div class="card empty"><p>${esc(t("Nothing so far."))}</p></div>`; return; }
     let html = "", day = "";
     for (const j of shown) {
@@ -761,82 +819,292 @@ async function journalPage() {
     }
     $("j").innerHTML = html + "</div>";
   };
-  $("hf").onchange = draw;
+  $("hf").onchange = draw; $("pf").onchange = draw; $("jq").oninput = draw;
   draw();
 }
 
-// -- people ----------------------------------------------------------------------------------------- //
-async function peoplePage() {
-  shell("people", t("People"), `<div class="roles">
-      <div class="role-card">${icon("eye")}<div><b>${esc(t("viewer"))}</b><div class="sub">${esc(t("Sees every hall and what is on its screens."))}</div></div></div>
-      <div class="role-card">${icon("remote")}<div><b>${esc(t("operator"))}</b><div class="sub">${esc(t("Also sends messages and updates, and runs halls from the remote desk."))}</div></div></div>
-      <div class="role-card">${icon("shield")}<div><b>${esc(t("admin"))}</b><div class="sub">${esc(t("Also adds halls and people."))}</div></div></div></div>
-    <div class="card people" id="u"></div>
-    <button class="btn primary fab mobile-only" id="addm">${icon("plus")}${esc(t("Add a person"))}</button>`,
-    { actions: `<button class="btn primary desk-only" id="add">${icon("plus")}${esc(t("Add a person"))}</button>` });
-  const draw = async () => {
-    const users = (await call("/api/users")).data || [];
-    $("u").innerHTML = users.map(u => `<div><div class="avatar">${esc(initials(u.name))}</div>
-      <div class="grow"><b class="ell" style="display:block">${esc(u.name)}${u.name === me.name ? ` <span class="badge brand" style="height:20px">${esc(t("you"))}</span>` : ""}
-        ${u.totp ? `<span class="badge ok" style="height:20px" title="${esc(t("Two-step sign-in"))}">${icon("shield", "s")}2FA</span>` : ""}
-        ${u.mustChange ? `<span class="badge warn" style="height:20px">${esc(t("temporary password"))}</span>` : ""}</b>
-        <select data-role="${esc(u.name)}" aria-label="${esc(t("Role"))}">${ROLES.map(r => `<option value="${r}" ${r === u.role ? "selected" : ""}>${esc(t(r))}</option>`).join("")}</select></div>
-      <button class="btn ghost icon" data-menu="${esc(u.name)}" aria-label="${esc(t("More"))}">${icon("more")}</button></div>`).join("");
-    document.querySelectorAll("[data-role]").forEach(s => s.onchange = async () => {
-      const x = await call("/api/users", { op: "role", name: s.dataset.role, role: s.value }); toast(x.ok ? "Saved." : x.data.message, !x.ok); draw(); });
-    document.querySelectorAll("[data-menu]").forEach(b => b.onclick = () => {
-      const name = b.dataset.menu;
-      const person = users.find(u => u.name === name) || {};
-      sheet(`<h2>${esc(name)}</h2><div class="menu" style="margin-top:8px">
-        ${name === me.name ? "" : `<button id="pw">${icon("key")}${esc(t("Temporary password"))}</button>`}
-        ${person.totp && name !== me.name ? `<button id="r2">${icon("shield")}${esc(t("Reset two-step sign-in (lost phone)"))}</button>` : ""}
-        <button id="rm" class="danger">${icon("trash")}${esc(t("Remove"))}</button></div>`, (box, close) => {
-        box.querySelector("#pw")?.addEventListener("click", () => { close(); personForm(name, draw); });
-        box.querySelector("#r2")?.addEventListener("click", async () => {
-          close();
-          if (!await ask(tf("Reset {0}'s two-step sign-in?", name), t("They are signed out everywhere and set up the app again at their next sign-in."), t("Reset"), true)) return;
-          const x = await call("/api/users", { op: "reset2fa", name }); toast(x.ok ? "Done." : x.data.message, !x.ok); draw();
-        });
-        box.querySelector("#rm").onclick = async () => {
-          close();
-          if (!await ask(tf("Remove {0}?", name), t("They can no longer sign in."), t("Remove"), true)) return;
-          const x = await call("/api/users", { op: "remove", name }); toast(x.ok ? "Removed." : x.data.message, !x.ok); draw();
-        };
-      });
+// -- administration: people, their rights in each hall, the halls --------------------------------------- //
+// A role is a set of rights to start from; each right can be turned on or off person by person.
+// A main administrator does it all; someone who manages a hall gives rights there (only ones they have).
+const HALL_ROLES = ["viewer", "operator", "technician", "halladmin"];
+const RIGHTS = [
+  ["control", "remote", "Run the stage", "Screens, shows, slides, timers and texts, from the remote desk."],
+  ["web", "globe", "Web pages and laptops", "Open web pages on the stage; take a laptop's screen."],
+  ["files", "upload", "Send files", "Pictures, videos and slides to the hall's computer."],
+  ["message", "message", "Messages", "A message on the hall's desk, with their name."],
+  ["journal", "journal", "Journal", "Who did what in this hall."],
+  ["desk", "lock", "Desk lock", "Lock and unlock the hall's computer."],
+  ["updates", "update", "Program updates", "Look for the program's updates and install them."],
+  ["pair", "key", "Pairing", "A new code, to pair the hall's computer again."],
+  ["manage", "people", "Manage the hall", "Give people rights here (only rights they have themselves) and rename it."],
+];
+const OPERATOR_RIGHTS = ["control", "web", "files", "message", "journal"];
+const ROLE_RIGHTS = { viewer: [], operator: OPERATOR_RIGHTS, technician: [...OPERATOR_RIGHTS, "desk", "updates", "pair"],
+                      halladmin: [...OPERATOR_RIGHTS, "desk", "updates", "pair", "manage"] };
+const ROLE_TEXT = { "": "No rights in this hall: they do not see it.", viewer: "Sees the hall and what is on its screens.",
+  operator: "Runs the stage: the remote desk, web pages, files, messages.", technician: "Also program updates, the desk lock and pairing.",
+  halladmin: "Also gives people rights in this hall." };
+const roleName = role => t(role === "admin" ? "Main administrator" : role === "halladmin" ? "hall admin" : role || "no access");
+const isCustom = (role, rights) => !!role && role !== "admin" && [...rights].sort().join() !== [...ROLE_RIGHTS[role]].sort().join();
+const roleChip = (role, custom = false, where = "", label = "") => role === "" && !where ? "" : `<span class="rc ${role || "none"}" ${custom ? `title="${esc(t("custom rights"))}"` : ""}><span>${esc(label || roleName(role))}${custom ? "<i> *</i>" : ""}${where ? ` · ${esc(where)}` : ""}</span></span>`;
+const rightsLine = rights => rights.length ? RIGHTS.filter(([k]) => rights.includes(k)).map(([, , name]) => t(name)).join(", ") : t("view only");
+// what a role in a hall means: its own words, or the rights one by one when they were changed by hand
+const grantLine = g => isCustom(g.role, g.rights) ? rightsLine(g.rights) : t(ROLE_TEXT[g.role]);
+
+async function adminData() {
+  const [users, halls] = await Promise.all([call("/api/users").then(x => x.data || []), call("/api/halls").then(x => x.data || [])]);
+  return { users, halls: halls.filter(h => mayIn(h.id, "manage")) };
+}
+
+async function adminPage(tab) {
+  const tabs = [["people", "People"], ["access", "Rights"]];
+  if (isAdmin()) tabs.push(["halls", "Halls"]);
+  const adding = tab === "halls" ? "Add a hall" : "Add a person";
+  shell("admin", t("Administration"), `<div class="toolbar"><div class="seg">${tabs.map(([k, n]) =>
+      `<a href="#/admin/${k}" class="${k === tab ? "on" : ""}">${esc(t(n))}</a>`).join("")}</div><span class="grow"></span>
+      <button class="btn primary" id="add">${icon("plus", "s")}${esc(t(adding))}</button></div><div id="adm"><div class="skeleton"></div></div>`);
+  const data = await adminData();
+  const again = () => adminPage(tab);
+  $("add").onclick = () => tab === "halls" ? addHall() : addPerson(data.halls, again);
+  if (!$("adm")) return;
+  if (tab === "access") return drawMatrix(data, again);
+  if (tab === "halls") return drawHalls(data);
+  drawPeople(data);
+}
+
+function drawPeople({ users, halls }) {
+  const names = Object.fromEntries(halls.map(h => [h.id, h.name]));
+  $("adm").innerHTML = `${users.length > 6 ? `<div class="toolbar"><label class="search">${icon("search", "s")}<input id="q" type="search" placeholder="${esc(t("Find a person…"))}"></label></div>` : ""}
+    <div class="card list" id="pl"></div>
+    ${isAdmin() ? "" : `<p class="small-print" style="margin:12px 4px 0">${esc(t("You see the rights in the halls you manage."))}</p>`}`;
+  const draw = () => {
+    const q = ($("q")?.value || "").trim().toLowerCase();
+    const shown = users.filter(u => !q || u.name.toLowerCase().includes(q));
+    $("pl").innerHTML = shown.map(u => `<a class="item" href="#/admin/person/${encodeURIComponent(u.name)}">
+        <div class="avatar ${u.role === "admin" ? "admin" : ""}">${esc(initials(u.name))}</div>
+        <div class="grow"><div class="name">${esc(u.name)}${u.name === me.name ? ` <span class="badge brand tiny">${esc(t("you"))}</span>` : ""}
+          ${u.totp ? `<span class="badge ok tiny" title="${esc(t("Two-step sign-in"))}">${icon("shield", "s")}2FA</span>` : ""}
+          ${u.mustChange ? `<span class="badge warn tiny">${esc(t("temporary password"))}</span>` : ""}</div>
+          <div class="chips-row">${u.role === "admin" ? roleChip("admin") : u.grants.length ? u.grants.filter(g => names[g.hall])
+            .map(g => roleChip(g.role, isCustom(g.role, g.rights), names[g.hall])).join("") : `<span class="rc none">${esc(t("no halls yet"))}</span>`}</div></div>
+        <span class="chev">${icon("chev")}</span></a>`).join("") || `<div class="item muted">${esc(t("No one matches."))}</div>`;
+  };
+  $("q")?.addEventListener("input", draw);
+  draw();
+}
+
+function drawMatrix({ users, halls }, again) {
+  if (!halls.length) { $("adm").innerHTML = `<div class="card empty"><p>${esc(t("No halls yet."))}</p></div>`; return; }
+  if (ui.accessHall && !halls.some(h => h.id === ui.accessHall)) ui.accessHall = "";
+  $("adm").innerHTML = `<div class="toolbar">${halls.length > 1 ? `<select id="hf" style="max-width:280px"><option value="">${esc(t("All halls"))}</option>
+      ${halls.map(h => `<option value="${esc(h.id)}" ${ui.accessHall === h.id ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select>` : ""}
+      <div class="legend" style="margin:0">${HALL_ROLES.map(r => roleChip(r)).join("")}<span class="rc none">${esc(t("no access"))}</span></div></div>
+    <div class="card matrix-wrap" id="mx"></div>
+    <p class="small-print" style="margin:12px 4px 0">${esc(t("Tap a cell to change what that person may do in that hall. * marks rights changed by hand."))}</p>`;
+  const draw = () => {
+    const cols = halls.filter(h => !ui.accessHall || h.id === ui.accessHall);
+    $("mx").innerHTML = `<table class="matrix"><thead><tr><th>${esc(t("Person"))}</th>${cols.map(h => `<th title="${esc(h.name)}">${esc(h.name)}</th>`).join("")}</tr></thead>
+      <tbody>${users.map(u => `<tr><td class="who"><a href="#/admin/person/${encodeURIComponent(u.name)}">${esc(u.name)}</a></td>${cols.map(h => {
+        if (u.role === "admin") return `<td>${roleChip("admin", false, "", t("all rights"))}</td>`;
+        const g = u.grants.find(x => x.hall === h.id);
+        const locked = u.name === me.name;
+        return `<td><button class="cell" data-u="${esc(u.name)}" data-h="${esc(h.id)}" ${locked ? `disabled title="${esc(t("Your own rights are changed by someone else."))}"` : ""}>
+          ${g ? roleChip(g.role, isCustom(g.role, g.rights)) : `<span class="rc none">—</span>`}</button></td>`;
+      }).join("")}</tr>`).join("")}</tbody></table>`;
+    $("mx").querySelectorAll(".cell").forEach(b => b.onclick = () => {
+      const person = users.find(u => u.name === b.dataset.u), hall = halls.find(h => h.id === b.dataset.h);
+      grantSheet(person, hall, person.grants.find(g => g.hall === hall.id), again);
     });
   };
-  $("add").onclick = () => personForm(null, draw);
-  $("addm").onclick = () => personForm(null, draw);
+  $("hf")?.addEventListener("change", () => { ui.accessHall = $("hf").value; draw(); });
   draw();
 }
 
-function personForm(name, done) {
-  const suggestion = Array.from(crypto.getRandomValues(new Uint8Array(10)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
-  sheet(`<h2>${esc(name ? tf("Temporary password for {0}", name) : t("Add a person"))}</h2>
-    <p class="sub">${esc(t("A temporary password: give it to them yourself. At their first sign-in they choose their own (and set up the authenticator app, if their role needs it)."))}</p><form id="f">
-    ${name ? "" : `<label class="field"><span>${esc(t("Name"))}</span><input id="n" maxlength="40" required autocapitalize="off"></label>
-      <label class="field"><span>${esc(t("Role"))}</span><select id="r">${ROLES.map(r => `<option value="${r}" ${r === "operator" ? "selected" : ""}>${esc(t(r))}</option>`).join("")}</select></label>`}
-    <label class="field"><span>${esc(t("Password (8 or more characters)"))}</span><div class="copy"><input id="p" type="text" minlength="8" required autocomplete="off" value="${suggestion}">
-      <button type="button" class="btn icon" id="cp" title="${esc(t("Copy"))}">${icon("copy")}</button></div></label>
-    <div class="error" id="err"></div><div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button>
-    <button class="btn primary">${esc(t("Save"))}</button></div></form>`, (box, close) => {
+function drawHalls({ users, halls }) {
+  const count = id => users.filter(u => u.role !== "admin" && u.grants.some(g => g.hall === id)).length;
+  $("adm").innerHTML = halls.length ? `<div class="card list">${halls.map(h => `<div class="item">
+      <div class="hall-ico">${icon(isOnline(h) ? "halls" : "wifioff")}</div>
+      <div class="grow"><div class="name">${esc(h.name)}</div><div class="chips-row">${statusBadge(h)}
+        <span class="badge">${icon("people", "s")}${esc(tf("{0} with rights", count(h.id)))}</span></div></div>
+      <button class="btn small" data-who="${esc(h.id)}">${esc(t("Rights"))}</button>
+      <button class="btn ghost small icon" data-more="${esc(h.id)}" aria-label="${esc(t("More"))}">${icon("more")}</button></div>`).join("")}</div>`
+    : `<div class="card empty"><p>${esc(t("No halls yet."))}</p></div>`;
+  $("adm").querySelectorAll("[data-who]").forEach(b => b.onclick = () => { ui.accessHall = b.dataset.who; location.hash = "#/admin/access"; });
+  $("adm").querySelectorAll("[data-more]").forEach(b => b.onclick = () => adminMenu(halls.find(h => h.id === b.dataset.more)));
+}
+
+// one person in one hall: a role to start from, then each right on or off
+function grantSheet(person, hall, grant, done) {
+  let role = grant?.role || "", rights = grant ? [...grant.rights] : [];
+  const allowed = right => mayIn(hall.id, right);
+  sheet(`<h2>${esc(person.name)}</h2><p class="sub">${esc(tf("What they may do in “{0}”.", hall.name))}</p>
+    <div class="role-pick" id="roles"></div>
+    <div id="rs"><div class="section-title" style="margin-top:4px"><h2>${esc(t("Rights"))}</h2><span id="cust"></span></div><div class="rights" id="rights"></div></div>
+    <div class="error" id="err" style="margin-top:10px"></div>
+    <div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button><button class="btn primary" id="save">${esc(t("Save"))}</button></div>`,
+  (box, close) => {
+    const q = sel => box.querySelector(sel);
+    const draw = () => {
+      q("#roles").innerHTML = ["", ...HALL_ROLES].map(r => `<button type="button" class="role-opt ${r === role ? "on" : ""}" data-r="${r}"
+          ${r && !ROLE_RIGHTS[r].every(allowed) ? "disabled" : ""}><div>${r ? roleChip(r) : `<span class="rc none">${esc(t("no access"))}</span>`}
+          <small>${esc(t(ROLE_TEXT[r]))}</small></div></button>`).join("");
+      q("#rs").style.display = role ? "" : "none";
+      q("#cust").innerHTML = isCustom(role, rights) ? `<span class="badge brand tiny">${esc(t("changed by hand"))}</span>` : "";
+      q("#rights").innerHTML = RIGHTS.map(([k, ico, name, text]) => `<label class="${allowed(k) ? "" : "locked"}">${icon(ico)}
+          <div class="grow"><b>${esc(t(name))}</b><small>${esc(t(text))}</small></div>
+          <span class="switch"><input type="checkbox" data-k="${k}" ${rights.includes(k) ? "checked" : ""} ${allowed(k) ? "" : "disabled"}><span></span></span></label>`).join("");
+      q("#roles").querySelectorAll("[data-r]").forEach(b => b.onclick = () => { role = b.dataset.r; rights = role ? [...ROLE_RIGHTS[role]] : []; draw(); });
+      q("#rights").querySelectorAll("[data-k]").forEach(c => c.onchange = () => {
+        rights = c.checked ? [...new Set([...rights, c.dataset.k])] : rights.filter(r => r !== c.dataset.k);
+        q("#cust").innerHTML = isCustom(role, rights) ? `<span class="badge brand tiny">${esc(t("changed by hand"))}</span>` : "";
+      });
+    };
+    draw();
+    q("#save").onclick = async () => {
+      const x = await call("/api/users", { op: "grant", name: person.name, hall: hall.id, role, rights: role ? rights : undefined });
+      if (!x.ok) { q("#err").textContent = t(x.data.message || "That did not work."); return; }
+      close(); toast("Saved."); done();
+    };
+  }, "wide");
+}
+
+async function personPage(name) {
+  shell("admin", name, `<div id="pp"><div class="skeleton"></div></div>`, { back: "#/admin/people" });
+  const { users, halls } = await adminData();
+  const u = users.find(x => x.name === name);
+  if (!$("pp")) return;
+  if (!u) { location.hash = "#/admin/people"; return; }
+  const self = u.name === me.name, again = () => personPage(name);
+  $("pp").innerHTML = `<div class="card pad"><div class="me"><div class="avatar big ${u.role === "admin" ? "admin" : ""}">${esc(initials(u.name))}</div>
+      <div class="grow"><b style="font-size:18px">${esc(u.name)}</b><div class="chips-row">${u.role === "admin" ? roleChip("admin") : ""}
+        ${self ? `<span class="badge brand tiny">${esc(t("you"))}</span>` : ""}
+        ${u.totp ? `<span class="badge ok tiny">${icon("shield", "s")}2FA</span>` : u.totp === false ? `<span class="badge tiny">${esc(t("no 2FA"))}</span>` : ""}
+        ${u.mustChange ? `<span class="badge warn tiny">${esc(t("temporary password"))}</span>` : ""}</div></div></div>
+      ${isAdmin() && !self ? `<label class="row" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);cursor:pointer;flex-wrap:nowrap">
+        ${icon("crown")}<div class="grow"><b>${esc(t("Main administrator"))}</b><div class="small-print">${esc(t("Every hall, every right, and the people. Needs two-step sign-in."))}</div></div>
+        <span class="switch"><input type="checkbox" id="adm" ${u.role === "admin" ? "checked" : ""}><span></span></span></label>` : ""}</div>
+    <div class="section-title"><h2>${esc(t("Rights in the halls"))}</h2></div>
+    ${u.role === "admin" ? `<div class="card pad muted">${esc(t("A main administrator has every right in every hall."))}</div>`
+      : halls.length ? `<div class="card">${halls.map(h => {
+          const g = u.grants.find(x => x.hall === h.id);
+          return `<div class="grant-row"><div class="grow"><b class="ell" style="display:block">${esc(h.name)}</b>
+            <div class="rights-line">${g ? esc(grantLine(g)) : esc(t("does not see this hall"))}</div></div>
+            ${g ? roleChip(g.role, isCustom(g.role, g.rights)) : `<span class="rc none">${esc(t("no access"))}</span>`}
+            ${self ? "" : `<button class="btn small" data-h="${esc(h.id)}">${esc(t("Change"))}</button>`}</div>`;
+        }).join("")}</div>` : `<div class="card pad muted">${esc(t("No halls yet."))}</div>`}
+    ${isAdmin() ? `<div class="section-title"><h2>${esc(t("Signing in"))}</h2></div>
+      <div class="card list">
+        <div class="item">${icon("shield")}<div class="grow"><b>${esc(t("Two-step sign-in"))}</b>
+          <div class="small-print">${esc(t(u.totp ? "On: a code from the authenticator app as well as the password." : "Off: the password alone signs them in."))}</div></div>
+          ${u.totp && !self ? `<button class="btn small danger" id="r2">${esc(t("Reset"))}</button>` : ""}</div>
+        ${self ? "" : `<div class="item">${icon("key")}<div class="grow"><b>${esc(t("Temporary password"))}</b>
+          <div class="small-print">${esc(t("For a forgotten password: they choose their own at the next sign-in."))}</div></div>
+          <button class="btn small" id="pw">${esc(t("Give one"))}</button></div>`}</div>
+      <div class="section-title"><h2>${esc(t("Where they are signed in"))}</h2>${self ? "" : `<button class="btn small danger" id="outall">${esc(t("Sign out everywhere"))}</button>`}</div>
+      <div class="card feed" id="ss"><div class="muted">…</div></div>
+      ${self ? "" : `<button class="btn danger" id="rm" style="margin-top:24px">${icon("trash", "s")}${esc(t("Remove this person"))}</button>`}` : ""}`;
+  $("pp").querySelectorAll("[data-h]").forEach(b => b.onclick = () => {
+    const hall = halls.find(h => h.id === b.dataset.h);
+    grantSheet(u, hall, u.grants.find(g => g.hall === hall.id), again);
+  });
+  $("adm")?.addEventListener("change", async () => {
+    const on = $("adm").checked;
+    if (!await ask(t(on ? "Make them a main administrator?" : "No longer a main administrator?"),
+      t(on ? "They will see and manage every hall and every person." : "They keep only the rights given in each hall."), t(on ? "Make" : "Yes"), !on)) { $("adm").checked = !on; return; }
+    const x = await call("/api/users", { op: "role", name, role: on ? "admin" : "member" });
+    toast(x.ok ? "Saved." : x.data.message, !x.ok); again();
+  });
+  $("r2")?.addEventListener("click", async () => {
+    if (!await ask(tf("Reset {0}'s two-step sign-in?", name), t("They are signed out everywhere and set up the app again at their next sign-in."), t("Reset"), true)) return;
+    const x = await call("/api/users", { op: "reset2fa", name }); toast(x.ok ? "Done." : x.data.message, !x.ok); again();
+  });
+  $("pw")?.addEventListener("click", () => tempPassword(name, again));
+  $("outall")?.addEventListener("click", async () => {
+    if (!await ask(tf("Sign {0} out everywhere?", name), t("Every device of theirs needs the password (and the code) again."), t("Sign out"), true)) return;
+    const x = await call("/api/users", { op: "signout", name }); toast(x.ok ? "Done." : x.data.message, !x.ok); again();
+  });
+  $("rm")?.addEventListener("click", async () => {
+    if (!await ask(tf("Remove {0}?", name), t("They can no longer sign in."), t("Remove"), true)) return;
+    const x = await call("/api/users", { op: "remove", name });
+    if (x.ok) { toast("Removed."); location.hash = "#/admin/people"; } else toast(x.data.message, true);
+  });
+  if ($("ss")) {
+    const list = (await call("/api/users", { op: "sessions", name })).data?.sessions || [];
+    if ($("ss")) $("ss").innerHTML = list.length ? list.map(sessionRow).join("") : `<div class="muted">${esc(t("Not signed in anywhere."))}</div>`;
+    if (!list.length) $("outall")?.remove();
+  }
+}
+
+const suggestPassword = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), b => "abcdefghjkmnpqrstuvwxyz23456789"[b % 31]).join("");
+const passwordField = () => `<label class="field"><span>${esc(t("Temporary password (8 or more characters)"))}</span><div class="copy">
+    <input id="p" type="text" minlength="8" required autocomplete="off" value="${suggestPassword()}">
+    <button type="button" class="btn icon" id="cp" title="${esc(t("Copy"))}">${icon("copy")}</button></div></label>`;
+
+function tempPassword(name, done) {
+  sheet(`<h2>${esc(tf("Temporary password for {0}", name))}</h2>
+    <p class="sub">${esc(t("Give it to them yourself. At their next sign-in they choose their own; they are signed out everywhere now."))}</p>
+    <form id="f">${passwordField()}<div class="error" id="err"></div>
+    <div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button><button class="btn primary">${esc(t("Save"))}</button></div></form>`, (box, close) => {
     box.querySelector("#cp").onclick = () => navigator.clipboard?.writeText(box.querySelector("#p").value).then(() => toast("Copied."));
     box.querySelector("#f").onsubmit = async e => {
       e.preventDefault();
-      const body = name ? { op: "password", name, password: box.querySelector("#p").value }
-        : { op: "add", name: box.querySelector("#n").value.trim(), role: box.querySelector("#r").value, password: box.querySelector("#p").value };
-      const x = await call("/api/users", body);
+      const x = await call("/api/users", { op: "password", name, password: box.querySelector("#p").value });
       if (!x.ok) { box.querySelector("#err").textContent = t(x.data.message || "That did not work."); return; }
       close(); toast("Saved."); done();
     };
   });
 }
 
+// a new person: a temporary password, and the hall they start in (a hall administrator: one of theirs)
+function addPerson(halls, done) {
+  const roles = hallId => HALL_ROLES.filter(r => hallId && ROLE_RIGHTS[r].every(right => mayIn(hallId, right)));
+  sheet(`<h2>${esc(t("Add a person"))}</h2>
+    <p class="sub">${esc(t("Give them the temporary password yourself. At their first sign-in they choose their own (and set up the authenticator app, if their rights need it)."))}</p>
+    <form id="f"><label class="field"><span>${esc(t("Name"))}</span><input id="n" maxlength="40" required autocapitalize="off"></label>
+    ${passwordField()}
+    <label class="field"><span>${esc(t(isAdmin() ? "Hall (they can be given more later)" : "Hall"))}</span><select id="h">
+      ${isAdmin() ? `<option value="">${esc(t("No hall yet"))}</option>` : ""}${halls.map(h => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("")}</select></label>
+    <label class="field" id="rf"><span>${esc(t("Role in that hall"))}</span><select id="r"></select></label>
+    ${isAdmin() ? `<label class="row" style="flex-wrap:nowrap;margin:4px 0 14px;cursor:pointer"><div class="grow"><b>${esc(t("Main administrator"))}</b>
+      <div class="small-print">${esc(t("Every hall, every right, and the people."))}</div></div><span class="switch"><input type="checkbox" id="adm"><span></span></span></label>` : ""}
+    <div class="error" id="err"></div><div class="buttons"><button type="button" class="btn" data-close>${esc(t("Cancel"))}</button>
+    <button class="btn primary">${esc(t("Add"))}</button></div></form>`, (box, close) => {
+    const q = sel => box.querySelector(sel);
+    const sync = () => {
+      const hall = q("#h").value, admin = q("#adm")?.checked;
+      q("#h").closest(".field").style.display = admin ? "none" : "";
+      q("#rf").style.display = hall && !admin ? "" : "none";
+      q("#r").innerHTML = roles(hall).map(r => `<option value="${r}" ${r === "operator" ? "selected" : ""}>${esc(roleName(r))}</option>`).join("");
+    };
+    q("#h").onchange = sync; q("#adm")?.addEventListener("change", sync); sync();
+    q("#cp").onclick = () => navigator.clipboard?.writeText(q("#p").value).then(() => toast("Copied."));
+    q("#f").onsubmit = async e => {
+      e.preventDefault();
+      const admin = !!q("#adm")?.checked;
+      const x = await call("/api/users", { op: "add", name: q("#n").value.trim(), password: q("#p").value, role: admin ? "admin" : "member",
+                                           hall: admin ? "" : q("#h").value, hallRole: q("#r").value });
+      if (!x.ok) { q("#err").textContent = t(x.data.message || "That did not work."); return; }
+      close(); toast("Saved."); done();
+    };
+  });
+}
+
+// one signed-in device: what it is, where, when; mine can be ended from here
+const device = agent => /iPhone|iPad/.test(agent) ? "iPhone / iPad" : /Android/.test(agent) ? "Android"
+  : /Windows/.test(agent) ? "Windows" : /Mac OS/.test(agent) ? "Mac" : /Linux/.test(agent) ? "Linux" : t("a device");
+const browser = agent => /Edg\//.test(agent) ? "Edge" : /Chrome\//.test(agent) ? "Chrome" : /Firefox\//.test(agent) ? "Firefox" : /Safari\//.test(agent) ? "Safari" : "";
+const sessionRow = x => `<div>${icon(/iPhone|Android/.test(x.agent) ? "phone" : "laptop", "s")}<div class="grow">
+    <b>${esc(device(x.agent))}${browser(x.agent) ? " · " + esc(browser(x.agent)) : ""}</b>${x.current ? ` <span class="badge brand tiny">${esc(t("this one"))}</span>` : ""}
+    <div class="sub">${esc([x.ip, x.created ? tf("signed in {0}", ago(x.created)) : "", x.seen ? tf("last seen {0}", ago(x.seen)) : ""].filter(Boolean).join(" · "))}</div></div>
+    ${x.current === false ? `<button class="btn ghost small" data-end="${esc(x.id)}">${esc(t("Sign out"))}</button>` : ""}</div>`;
+
 // -- my account --------------------------------------------------------------------------------------- //
 function accountPage() {
   const theme = applyTheme();
-  shell("account", t("Account"), `<div class="card pad"><div class="me"><div class="avatar" style="width:48px;height:48px;font-size:17px">${esc(initials(me.name))}</div>
-      <div class="grow"><b style="font-size:17px">${esc(me.name)}</b><small>${esc(t(me.role))}</small></div></div></div>
+  const myHalls = Object.entries(me.halls || {});
+  shell("account", t("Account"), `<div class="card pad"><div class="me"><div class="avatar big ${isAdmin() ? "admin" : ""}">${esc(initials(me.name))}</div>
+      <div class="grow"><b style="font-size:18px">${esc(me.name)}</b><small>${esc(whoAmI())}</small></div></div></div>
+    ${!isAdmin() && myHalls.length ? `<div class="section-title"><h2>${esc(t("My rights"))}</h2></div><div class="card" id="mine">…</div>` : ""}
     <div class="section-title"><h2>${esc(t("Look"))}</h2></div>
     <div class="card pad" style="display:grid;gap:14px">
       <div class="row"><span class="grow">${esc(t("Language"))}</span>${langSeg()}</div>
@@ -860,7 +1128,7 @@ function accountPage() {
     <button class="btn block danger mobile-only" style="margin-top:22px" id="out2">${icon("out")}${esc(t("Sign out"))}</button>`);
   wireLang();
   document.querySelectorAll("[data-theme]").forEach(b => b.onclick = () => {
-    try { localStorage.setItem("stageCloudTheme", b.dataset.theme); } catch (e) { /* */ }
+    setTheme(b.dataset.theme);
     accountPage();
   });
   $("out2").onclick = signOut;
@@ -884,16 +1152,15 @@ function accountPage() {
     if (x.ok) { me.totp = false; toast("Saved."); accountPage(); }
     return x;
   }));
-  const device = agent => /iPhone|iPad/.test(agent) ? "iPhone / iPad" : /Android/.test(agent) ? "Android"
-    : /Windows/.test(agent) ? "Windows" : /Mac OS/.test(agent) ? "Mac" : /Linux/.test(agent) ? "Linux" : t("a device");
-  const browser = agent => /Edg\//.test(agent) ? "Edge" : /Chrome\//.test(agent) ? "Chrome" : /Firefox\//.test(agent) ? "Firefox" : /Safari\//.test(agent) ? "Safari" : "";
+  if ($("mine")) call("/api/halls").then(x => {
+    const halls = x.data || [];
+    if ($("mine")) $("mine").innerHTML = halls.map(h => `<div class="grant-row"><div class="grow"><b class="ell" style="display:block">${esc(h.name)}</b>
+      <div class="rights-line">${esc(grantLine(h.access))}</div></div>${roleChip(h.access.role, isCustom(h.access.role, h.access.rights))}</div>`).join("");
+  }).catch(() => {});
   const drawSessions = async () => {
     const list = (await call("/api/sessions")).data || [];
     if (!$("sess")) return;
-    $("sess").innerHTML = list.map(x => `<div>${icon(/iPhone|Android/.test(x.agent) ? "phone" : "laptop", "s")}<div class="grow">
-        <b>${esc(device(x.agent))}${browser(x.agent) ? " · " + esc(browser(x.agent)) : ""}</b>${x.current ? ` <span class="badge brand" style="height:20px">${esc(t("this one"))}</span>` : ""}
-        <div class="sub">${esc([x.ip, x.created ? tf("signed in {0}", ago(x.created)) : "", x.seen ? tf("last seen {0}", ago(x.seen)) : ""].filter(Boolean).join(" · "))}</div></div>
-        ${x.current ? "" : `<button class="btn ghost small" data-end="${esc(x.id)}">${esc(t("Sign out"))}</button>`}</div>`).join("")
+    $("sess").innerHTML = list.map(sessionRow).join("")
       + (list.length > 1 ? `<div><span class="grow"></span><button class="btn small danger" id="endall">${esc(t("Sign out everywhere else"))}</button></div>` : "");
     $("sess").querySelectorAll("[data-end]").forEach(b => b.onclick = async () => { await call("/api/sessions", { id: b.dataset.end }); drawSessions(); });
     $("endall")?.addEventListener("click", async () => { await call("/api/sessions", { all: true }); toast("Done."); drawSessions(); });

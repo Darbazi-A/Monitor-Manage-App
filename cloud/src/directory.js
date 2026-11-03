@@ -2,8 +2,8 @@
 // pairing codes, the journal and the lock-outs. The Worker calls its methods over RPC.
 import { DurableObject } from "cloudflare:workers";
 import {
-  ROLES, checkPassword, cleanName, hashPassword, newTotpSecret, normaliseCode, normaliseRecovery, pairingCode,
-  randomToken, rank, recoveryCodes, sha256, totpStep,
+  GLOBAL_ROLES, HALL_ROLES, RIGHTS, ROLE_RIGHTS, checkPassword, cleanName, cleanRights, hashPassword, newTotpSecret,
+  normaliseCode, normaliseRecovery, pairingCode, randomToken, recoveryCodes, sha256, totpStep,
 } from "./util.js";
 
 const SESSION_MS = 14 * 24 * 3600 * 1000;
@@ -26,7 +26,9 @@ export class Directory extends DurableObject {
         summary TEXT DEFAULT '{}', computer TEXT DEFAULT '');
       CREATE TABLE IF NOT EXISTS journal (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER, user TEXT, hall TEXT, what TEXT);
       CREATE TABLE IF NOT EXISTS failures (key TEXT PRIMARY KEY, count INTEGER, until INTEGER);
-      CREATE TABLE IF NOT EXISTS pending (hash TEXT PRIMARY KEY, name TEXT NOT NULL, expires INTEGER, tries INTEGER DEFAULT 0);`);
+      CREATE TABLE IF NOT EXISTS pending (hash TEXT PRIMARY KEY, name TEXT NOT NULL, expires INTEGER, tries INTEGER DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS grants (user TEXT NOT NULL, hall TEXT NOT NULL, role TEXT NOT NULL, rights TEXT NOT NULL DEFAULT '[]',
+        by TEXT DEFAULT '', at INTEGER DEFAULT 0, PRIMARY KEY (user, hall));`);
     // two-step sign-in and the sessions list came later: the tables of an older cloud get the columns
     const add = (table, column, type) => {
       if (!this.rows(`PRAGMA table_info(${table})`).some(c => c.name === column)) this.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -40,10 +42,24 @@ export class Directory extends DurableObject {
     add("sessions", "seen", "INTEGER DEFAULT 0");
     add("sessions", "ip", "TEXT DEFAULT ''");
     add("sessions", "agent", "TEXT DEFAULT ''");
+    // the rights were once one role for every hall: a viewer or an operator gets that role in
+    // each hall there was, and is a member from now on
+    for (const user of this.rows("SELECT name, role FROM users WHERE role IN ('viewer', 'operator')")) {
+      for (const { id } of this.rows("SELECT id FROM halls")) {
+        this.sql.exec("INSERT OR IGNORE INTO grants (user, hall, role, rights, by, at) VALUES (?, ?, ?, ?, '(cloud)', ?)",
+          user.name, id, user.role, JSON.stringify(ROLE_RIGHTS[user.role]), Date.now());
+      }
+      this.sql.exec("UPDATE users SET role = 'member' WHERE name = ?", user.name);
+      this.note("(cloud)", "", `rights of ${user.name}: ${user.role} in every hall`);
+    }
   }
 
-  // who must use the authenticator: whoever may change something in a hall
-  static needsTotp(role) { return rank(role) >= rank("operator"); }
+  // who must use the authenticator: a main administrator, and whoever may change something in a hall
+  needsTotp(user) {
+    if (!user) return false;
+    if (user.role === "admin") return true;
+    return this.rows("SELECT rights FROM grants WHERE user = ?", user.name).some(g => g.rights !== "[]");
+  }
 
   rows(query, ...args) { return this.sql.exec(query, ...args).toArray(); }
   one(query, ...args) { return this.rows(query, ...args)[0] || null; }
@@ -75,27 +91,85 @@ export class Directory extends DurableObject {
   // -- people ------------------------------------------------------------------------------ //
   async addUser(name, role, password, by, ip = "") {
     name = cleanName(name, 40);
-    if (!name || !ROLES.includes(role)) return { ok: false, message: "name and role" };
+    if (!name || !GLOBAL_ROLES.includes(role)) return { ok: false, message: "name and role" };
     if (String(password || "").length < 8) return { ok: false, message: "password: at least 8 characters" };
     if (this.one("SELECT name FROM users WHERE name = ? COLLATE NOCASE", name)) return { ok: false, message: "that name is taken" };
     const { salt, hash } = await hashPassword(password);
     this.sql.exec("INSERT INTO users (name, role, salt, hash, created, must_change) VALUES (?, ?, ?, ?, ?, ?)",
       name, role, salt, hash, Date.now(), by === "(setup)" ? 0 : 1);
-    this.note(by, "", `user added: ${name} (${role})${ip ? " from " + ip : ""}`);
-    return { ok: true };
+    this.note(by, "", `user added: ${name}${role === "admin" ? " (main administrator)" : ""}${ip ? " from " + ip : ""}`);
+    return { ok: true, name };
   }
 
-  users() {
+  // the people, each with their rights in the halls; for a hall administrator (halls = the ones
+  // they manage) only those halls' rights, and not how others sign in
+  users(halls = null) {
+    const grants = this.rows("SELECT user, hall, role, rights FROM grants");
     return this.rows("SELECT name, role, created, totp != '' AS totp, must_change FROM users ORDER BY name COLLATE NOCASE")
-      .map(u => ({ ...u, totp: !!u.totp, mustChange: !!u.must_change, must_change: undefined }));
+      .map(u => {
+        const mine = grants.filter(g => g.user === u.name && (!halls || halls.includes(g.hall)))
+          .map(g => ({ hall: g.hall, role: g.role, rights: JSON.parse(g.rights) }));
+        return halls ? { name: u.name, role: u.role, grants: mine }
+          : { name: u.name, role: u.role, created: u.created, totp: !!u.totp, mustChange: !!u.must_change, grants: mine };
+      });
   }
 
   async setRole(name, role, by) {
-    if (!ROLES.includes(role) || !this.one("SELECT name FROM users WHERE name = ?", name)) return { ok: false, message: "no such user" };
+    if (!GLOBAL_ROLES.includes(role) || !this.one("SELECT name FROM users WHERE name = ?", name)) return { ok: false, message: "no such user" };
     if (role !== "admin" && this.lastAdmin(name)) return { ok: false, message: "the last administrator stays one" };
     this.sql.exec("UPDATE users SET role = ? WHERE name = ?", role, name);
-    this.note(by, "", `role of ${name}: ${role}`);
+    this.note(by, "", role === "admin" ? `${name} is a main administrator` : `${name} is no longer a main administrator`);
     await this.dropViewers({ user: name });
+    return { ok: true };
+  }
+
+  // -- rights in the halls ------------------------------------------------------------------ //
+  // what someone may do in a hall now: a main administrator everything; a member what they were
+  // given; nobody else anything
+  access(name, hall) {
+    const user = this.one("SELECT name, role FROM users WHERE name = ?", name);
+    if (!user || !this.one("SELECT id FROM halls WHERE id = ?", hall)) return null;
+    if (user.role === "admin") return { role: "admin", rights: [...RIGHTS] };
+    const grant = this.one("SELECT role, rights FROM grants WHERE user = ? AND hall = ?", name, hall);
+    return grant ? { role: grant.role, rights: JSON.parse(grant.rights) } : null;
+  }
+
+  // every hall someone has rights in: { hallId: { role, rights } } (a main administrator: all)
+  accessMap(name) {
+    const user = this.one("SELECT name, role FROM users WHERE name = ?", name);
+    if (!user) return {};
+    if (user.role === "admin") return Object.fromEntries(this.rows("SELECT id FROM halls").map(h => [h.id, { role: "admin", rights: [...RIGHTS] }]));
+    return Object.fromEntries(this.rows("SELECT g.hall, g.role, g.rights FROM grants g JOIN halls h ON h.id = g.hall WHERE g.user = ?", name)
+      .map(g => [g.hall, { role: g.role, rights: JSON.parse(g.rights) }]));
+  }
+
+  // give someone a role and rights in a hall (role "" takes them away). A main administrator may
+  // do it in any hall; someone who manages a hall only there, only rights they hold themselves,
+  // and not to someone who holds rights they do not (nor to themselves)
+  async grant(by, name, hall, role, rights) {
+    const editor = this.access(by, hall);
+    const target = this.one("SELECT name, role FROM users WHERE name = ?", name);
+    if (!editor?.rights.includes("manage")) return { ok: false, message: "not allowed" };
+    if (!target) return { ok: false, message: "no such user" };
+    if (target.role === "admin") return { ok: false, message: "a main administrator has every right already" };
+    if (role && !HALL_ROLES.includes(role)) return { ok: false, message: "unknown role" };
+    const given = role ? cleanRights(rights ?? ROLE_RIGHTS[role]) : [];
+    if (editor.role !== "admin") {
+      const now = this.access(name, hall)?.rights || [];
+      if (name === by) return { ok: false, message: "your own rights are changed by someone else" };
+      if (![...now, ...given].every(right => editor.rights.includes(right))) return { ok: false, message: "only rights you have yourself" };
+    }
+    if (role) {
+      this.sql.exec(`INSERT INTO grants (user, hall, role, rights, by, at) VALUES (?, ?, ?, ?, ?, ?)
+                     ON CONFLICT (user, hall) DO UPDATE SET role = excluded.role, rights = excluded.rights, by = excluded.by, at = excluded.at`,
+        name, hall, role, JSON.stringify(given), by, Date.now());
+    } else {
+      this.sql.exec("DELETE FROM grants WHERE user = ? AND hall = ?", name, hall);
+    }
+    const custom = role && given.join() !== ROLE_RIGHTS[role].join();
+    this.note(by, hall, role ? `rights of ${name}: ${role}${custom ? " (" + (given.join(", ") || "view only") + ")" : ""}` : `rights of ${name} taken away`);
+    // an open desk of theirs in this hall closes, and opens again with the new rights
+    try { await this.env.HALL.get(this.env.HALL.idFromName(hall)).dropViewers({ user: name }); } catch (e) { /* it checks on the next request */ }
     return { ok: true };
   }
 
@@ -104,6 +178,7 @@ export class Directory extends DurableObject {
     if (this.lastAdmin(name)) return { ok: false, message: "the last administrator stays" };
     this.sql.exec("DELETE FROM users WHERE name = ?", name);
     this.sql.exec("DELETE FROM sessions WHERE name = ?", name);
+    this.sql.exec("DELETE FROM grants WHERE user = ?", name);
     this.note(by, "", `user removed: ${name}`);
     await this.dropViewers({ user: name });
     return { ok: true };
@@ -169,7 +244,7 @@ export class Directory extends DurableObject {
   async totpDisable(name, password) {
     const user = this.one("SELECT * FROM users WHERE name = ?", name);
     if (!user) return { ok: false, message: "no such user" };
-    if (Directory.needsTotp(user.role)) return { ok: false, message: "your role needs two-step sign-in" };
+    if (this.needsTotp(user)) return { ok: false, message: "your role needs two-step sign-in" };
     if (!(await checkPassword(String(password || ""), user.salt, user.hash))) return { ok: false, message: "wrong password" };
     this.sql.exec("UPDATE users SET totp = '', totp_new = '', recovery = '[]' WHERE name = ?", name);
     this.note(name, "", "two-step sign-in turned off");
@@ -262,8 +337,32 @@ export class Directory extends DurableObject {
                           JOIN users u ON u.name = s.name WHERE s.hash = ?`, hash);
     if (!row || row.expires < Date.now()) return null;
     if (Date.now() - (row.seen || 0) > SEEN_EVERY_MS) this.sql.exec("UPDATE sessions SET seen = ? WHERE hash = ?", Date.now(), hash);
-    const need = row.must_change ? "password" : (!row.totp && Directory.needsTotp(row.role)) ? "setup2fa" : "";
-    return { name: row.name, role: row.role, expires: row.expires, totp: !!row.totp, need };
+    const totpRequired = this.needsTotp(row);
+    const need = row.must_change ? "password" : (!row.totp && totpRequired) ? "setup2fa" : "";
+    return { name: row.name, role: row.role, expires: row.expires, totp: !!row.totp, totpRequired, need };
+  }
+
+  // a hall's open desk, on every request: who this session is now and what they may do there
+  hallAccess(hash, hall) {
+    const who = this.sessionByHash(hash);
+    if (!who || who.need) return null;
+    const access = this.access(who.name, hall);
+    return access ? { name: who.name, ...access } : null;
+  }
+
+  // an administrator: someone's sessions, and signing them out everywhere
+  userSessions(name) {
+    return this.rows("SELECT hash, created, seen, ip, agent FROM sessions WHERE name = ? AND expires > ? ORDER BY seen DESC", name, Date.now())
+      .map(r => ({ id: r.hash.slice(0, 12), created: r.created, seen: r.seen, ip: r.ip, agent: r.agent }));
+  }
+
+  async signOutUser(name, by) {
+    if (!this.one("SELECT name FROM users WHERE name = ?", name)) return { ok: false, message: "no such user" };
+    const ended = this.rows("SELECT hash FROM sessions WHERE name = ?", name).length;
+    this.sql.exec("DELETE FROM sessions WHERE name = ?", name);
+    await this.dropViewers({ user: name });
+    this.note(by, "", `${name} signed out everywhere`);
+    return { ok: true, ended };
   }
 
   // my sessions: where and when, which is this one; ending one, or all the others
@@ -371,6 +470,7 @@ export class Directory extends DurableObject {
     const hall = this.one("SELECT name FROM halls WHERE id = ?", id);
     if (!hall) return { ok: false, message: "no such hall" };
     this.sql.exec("DELETE FROM halls WHERE id = ?", id);
+    this.sql.exec("DELETE FROM grants WHERE hall = ?", id);
     this.note(by, id, `hall removed: ${hall.name}`);
     return { ok: true };
   }
@@ -387,10 +487,13 @@ export class Directory extends DurableObject {
     this.sql.exec("DELETE FROM journal WHERE id <= (SELECT MAX(id) FROM journal) - ?", JOURNAL_KEEP);
   }
 
-  journal(hall = "", limit = 200) {
+  // one hall's, every hall's (halls null), or those of the halls given (and not the cloud's own lines)
+  journal(hall = "", limit = 200, halls = null) {
     const rows = hall
       ? this.rows("SELECT at, user, hall, what FROM journal WHERE hall = ? ORDER BY id DESC LIMIT ?", hall, limit)
-      : this.rows("SELECT at, user, hall, what FROM journal ORDER BY id DESC LIMIT ?", limit);
+      : halls
+        ? this.rows(`SELECT at, user, hall, what FROM journal WHERE hall IN (SELECT value FROM json_each(?)) ORDER BY id DESC LIMIT ?`, JSON.stringify(halls), limit)
+        : this.rows("SELECT at, user, hall, what FROM journal ORDER BY id DESC LIMIT ?", limit);
     const names = Object.fromEntries(this.rows("SELECT id, name FROM halls").map(h => [h.id, h.name]));
     return rows.map(r => ({ ...r, hallName: names[r.hall] || "" }));
   }

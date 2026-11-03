@@ -22,8 +22,10 @@ buttons, actions in sheets that slide up from below, and *Add to Home screen* ma
   remote desk), Control / Message (with ready-made messages) / Update or Install, problems and
   events, the computer, the journal; rename, pair again and remove under ⋯.
 - **The remote desk** in the website's language; on a computer it sits in a phone-sized frame.
-- The journal by day, in Georgian or English; people with their roles explained; light, dark or
-  as the device is.
+- **Administration**: the people (who has rights where), a person × hall matrix of roles, each
+  person's halls, sign-in and sessions; the halls. The journal by day, by hall and by person, in
+  Georgian or English. A fresh look in light or dark (the switch is in the sidebar), or as the
+  device is.
 
 ## How it fits together
 
@@ -35,9 +37,16 @@ buttons, actions in sheets that slide up from below, and *Add to Home screen* ma
    answers: commands, the phone page's API     Directory (people, sessions, halls, journal)
 ```
 
-- **People** sign in with a name and password. *Viewers* see the halls; *operators* also send
-  commands and use the remote desk; *administrators* also add halls and people. Five wrong
-  passwords lock a name for a quarter of an hour (twenty lock an address).
+- **People** sign in with a name and password, and a code from an authenticator app whenever
+  they may change something. Five wrong passwords lock a name for a quarter of an hour (twenty
+  lock an address).
+- **Rights are given hall by hall.** A *main administrator* has every hall and manages the people.
+  Everyone else sees only the halls they were given, each with a role: *viewer* (the hall and its
+  screens), *operator* (the remote desk, web pages, files, messages, the journal), *technician*
+  (also updates, the desk lock, pairing) or *hall admin* (also gives people rights in that hall).
+  Each right can be turned on or off person by person. A hall admin gives only rights they have,
+  only in their hall, and not to themselves. Anything not on the list - an action the cloud does
+  not know, another kind of request - is refused.
 - **Halls** pair once with a code from the dashboard (*Add a hall* or *Pair again*: one use, 30
   minutes). A new pairing ends the old computer's access.
 - **The remote desk** is the hall's phone page in a sandboxed frame: its requests go over the
@@ -50,8 +59,8 @@ buttons, actions in sheets that slide up from below, and *Add to Home screen* ma
   frame is a page of its own, `/desk-frame` (sandboxed, with rules that let the hall's page run
   but reach nothing): the hall's page comes in by `postMessage`.
 - **Rights are checked on every request.** A remote desk or a live page that is open checks its
-  session with each request; a new role, a new password, signing out or being removed closes it
-  at once.
+  session and its rights in that hall with each request; new rights, a new password, signing out
+  or being removed closes it at once.
 - **Web pages from the cloud are web addresses** (`https://…`, `canva.com/…`): never a file on the
   hall's computer (`C:\…`, `file:`, `\\server\share`) nor the browser's own pages - checked
   here and again in the hall's program.
