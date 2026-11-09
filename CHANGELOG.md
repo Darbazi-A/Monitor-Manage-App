@@ -3,6 +3,12 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.4.1 — 2026-11-09 · A macro pad
+
+- **Two keys from any program**, for the buttons of a macro pad by the desk:
+  **Ctrl+Alt+Shift+B** - BLACKOUT, **Ctrl+Alt+Shift+L** - lock the desk. They work with
+  another program in front and the desk minimised; **?** lists them.
+
 ## 1.4.0 — 2026-10-29 · The desk lock
 
 - **Lock the desk, not the show.** A lock screen on the control monitor only - the time, the

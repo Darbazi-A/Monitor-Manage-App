@@ -361,6 +361,10 @@ nothing), and the phone remote. It re-checks every second.
 clicker, connected phones and missing files, coloured by how they are; a click
 opens the ready check. **?** shows every keyboard shortcut.
 
+**A macro pad.** Two keys work from whichever program is in front, at any time:
+**Ctrl+Alt+Shift+B** for BLACKOUT and **Ctrl+Alt+Shift+L** to lock the desk (an admin PIN
+must be set). Set a pad's buttons to them; Page Down / Page Up turn the slides as a clicker.
+
 **NOW / NEXT everywhere.** Under every tab but Show, one line carries the
 running order: the step that is on, its time, the next one, Back and
 **NEXT STEP**.

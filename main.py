@@ -440,6 +440,9 @@ class SlideStage:
 # Windows hotkey plumbing, for a clicker that must work whichever window has focus.
 WM_HOTKEY = 0x0312
 VK_BY_NAME = {"PgDown": 0x22, "PgUp": 0x21}
+# A macro pad by the desk: keys that work whichever program is in front, all the time.
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x4000
+PAD_KEYS = {0xB200: ("blackout", 0x42), 0xB201: ("lock", 0x4C)}      # Ctrl+Alt+Shift+B / +L
 
 
 class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl_mod.CloudControl,
@@ -540,6 +543,9 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         self._updates_section = 0
         self._cloud_setup()                  # Stage Cloud: this hall on the dashboard of every hall
         self._lock_setup()                   # the desk lock
+        self._pad_keys: Dict[int, str] = {}
+        self._pad_tries = 0
+        QTimer.singleShot(1000, self._register_pad_keys)
         self.sound = SoundDeck(self)
         self.sound.failed.connect(self._on_cue_failed)
         self.loaded_preset: Optional[str] = None
@@ -4109,16 +4115,51 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
                 user32.UnregisterHotKey(ctypes.c_void_p(hwnd), hotkey_id)
         self._hotkeys = {}
 
+    def _register_pad_keys(self) -> None:
+        """
+        Ctrl+Alt+Shift+B (BLACKOUT) and Ctrl+Alt+Shift+L (lock the desk), from any program -
+        what a macro pad's buttons are set to. A program restarting may find the keys still
+        held by the one closing: it tries again for half a minute.
+        """
+        if sys.platform != "win32" or os.environ.get("SDC_NO_PAD_KEYS"):
+            return
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        hwnd = int(self.winId())
+        for hotkey_id, (action, vk) in PAD_KEYS.items():
+            if hotkey_id not in self._pad_keys and user32.RegisterHotKey(
+                    hwnd, hotkey_id, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk):
+                self._pad_keys[hotkey_id] = action
+        self._pad_tries += 1
+        if len(self._pad_keys) < len(PAD_KEYS) and self._pad_tries < 10:
+            QTimer.singleShot(3000, self._register_pad_keys)
+
+    def _pad_key(self, action: str) -> None:
+        if action == "blackout":
+            self._blackout_all()
+        elif action == "lock" and not self.desk_locked():
+            ok, said = self.lock_desk("pad")
+            if not ok and said:
+                self.statusBar().showMessage(said, 8000)
+                self.tray.notify(tr("Lock the desk"), said)
+
     def nativeEvent(self, event_type, message):  # noqa: N802
-        if self._hotkeys:
+        if self._hotkeys or self._pad_keys:
             try:
                 if bytes(event_type) == b"windows_generic_MSG":
                     from ctypes import wintypes
                     msg = wintypes.MSG.from_address(int(message))
-                    name = self._hotkeys.get(int(msg.wParam)) if msg.message == WM_HOTKEY else None
-                    if name:
-                        QTimer.singleShot(0, lambda n=name: self._clicker_key(n, None, "from any program"))
-                        return True, 0
+                    if msg.message == WM_HOTKEY:
+                        pad = self._pad_keys.get(int(msg.wParam))
+                        if pad:
+                            QTimer.singleShot(0, lambda a=pad: self._pad_key(a))
+                            return True, 0
+                        name = self._hotkeys.get(int(msg.wParam))
+                        if name:
+                            QTimer.singleShot(0, lambda n=name: self._clicker_key(n, None, "from any program"))
+                            return True, 0
             except (TypeError, ValueError, OSError):
                 pass
         return super().nativeEvent(event_type, message)

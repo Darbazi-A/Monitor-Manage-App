@@ -934,6 +934,8 @@ SHORTCUTS = (
                ("Ctrl+Space", "stop all sound"))),
     ("Names on screen", (("Ctrl+→  Ctrl+←", "next / previous name"),
                          ("Ctrl+H", "hide the text"))),
+    ("From any program (a macro pad)", (("Ctrl+Alt+Shift+B", "BLACKOUT - every screen to black"),
+                                        ("Ctrl+Alt+Shift+L", "lock the desk"))),
     ("Slides (while on screen)", (("Page Down  →  Space", "next slide or animation"),
                                   ("Page Up  ←", "back"),
                                   ("B  /  .", "black the slides"),

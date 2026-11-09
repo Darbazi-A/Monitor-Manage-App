@@ -212,6 +212,7 @@ KA = {
     "Sound": "ხმა",
     "Names on screen": "სახელები ეკრანზე",
     "Slides (while on screen)": "სლაიდები (ეკრანზე ყოფნისას)",
+    "From any program (a macro pad)": "ნებისმიერი პროგრამიდან (მაკრო-პადი)",
     "next step (the clicker's forward button)": "შემდეგი ნაბიჯი (კლიკერის წინ ღილაკი)",
     "step back": "ნაბიჯით უკან",
     "choose Main / Sides / Top for the keys below": "აირჩიეთ მთავარი / გვერდები / ზედა ქვედა კლავიშებისთვის",
