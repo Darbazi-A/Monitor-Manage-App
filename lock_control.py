@@ -57,6 +57,8 @@ class LockControl:
             self._describe_security()
         if self.mini is not None and self.mini.isVisible():
             self.restore_from_bar()
+        if getattr(self, "cue_card", None) is not None:
+            self.cue_card.close_card()
         self.desk_lock.lock()
         self.settings.setValue("desk/locked", "true")
         self._lock_changed()

@@ -80,7 +80,10 @@ screens of video wants a newer card (or pictures on some of them).
 - **Sound cues** — eight small players on `F1`–`F8`: play, pause, resume, stop
   and a seek bar each. Every cue has its own player, so a fanfare fires over a
   bed of music instead of interrupting it. Per-cue loop, a master level, a
-  sound-device picker, and fades rather than hard cuts.
+  sound-device picker, and fades rather than hard cuts. The mouse resting on a
+  cue opens a small player over it: the whole name, ten seconds back or on, the
+  position, the cue's own level and mute, a fade, loop and another file; the
+  wheel over a pad turns its level.
 - **Keyboard control** — `1` `2` `3` pick a screen, `←` `→` step through its
   playlist, `Space` plays/pauses, `F1`–`F8` fire sound cues, `B` blacks out.
 - **Text slides** — names on screen over whatever is running, prepared as a

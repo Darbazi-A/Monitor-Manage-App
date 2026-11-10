@@ -3,6 +3,15 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.4.2 — 2026-11-10 · A player on every sound
+
+- **The mouse resting on a sound cue (F1-F8) opens a small player over it**: the whole name,
+  play / pause, stop, ten seconds back or on, the position and the time left, **this cue's own
+  level** and mute, a three-second fade, loop and another file. It closes when the mouse goes,
+  and never takes the keyboard. A right click opens it at once.
+- The mouse wheel over a pad turns that cue up or down; each pad shows its level. The levels
+  are kept in the preset.
+
 ## 1.4.1 — 2026-11-09 · A macro pad
 
 - **Two keys from any program**, for the buttons of a macro pad by the desk:

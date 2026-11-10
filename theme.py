@@ -889,6 +889,18 @@ QFrame#cuePad[playing="true"] QLabel#cueKey {{ color: {CLR_OK}; }}
 QFrame#cuePad[paused="true"] QLabel#cueKey {{ color: {CLR_ACCENT}; }}
 QLabel#cueName {{ font-size: 12px; font-weight: 500; }}
 QFrame#cuePad[filled="false"] QLabel#cueName {{ color: #4a5264; }}
+QFrame#cueCard {{ background: {CLR_CARD}; border: 1px solid {CLR_EDGE_HI}; border-radius: 12px; }}
+QLabel#cueCardKey {{ background: {CLR_RAISED}; color: {CLR_DIM}; border-radius: 6px; padding: 3px 7px;
+    font-size: 11px; font-weight: 700; }}
+QLabel#cueCardKey[state="playing"] {{ background: rgba(76, 187, 131, 0.18); color: {CLR_OK}; }}
+QLabel#cueCardKey[state="paused"] {{ background: {CLR_ACCENT_SOFT}; color: {CLR_ACCENT}; }}
+QLabel#cueCardName {{ font-size: 13px; font-weight: 600; }}
+QLabel#cueCardLevel {{ color: {CLR_DIM}; font-size: 12px; font-weight: 600; }}
+QSlider#cueLevel::groove:horizontal {{ height: 4px; background: {CLR_LINE}; border-radius: 2px; }}
+QSlider#cueLevel::sub-page:horizontal {{ background: {CLR_OK}; border-radius: 2px; }}
+QSlider#cueLevel::handle:horizontal {{ background: {CLR_TEXT}; width: 14px; height: 14px; margin: -5px 0;
+    border-radius: 7px; }}
+QSlider#cueLevel:disabled::sub-page:horizontal {{ background: {CLR_EDGE_HI}; }}
 
 /* -- the floating strip --------------------------------------------------- */
 QFrame#miniCard {{ background: {CLR_CARD}; border: 1px solid {CLR_EDGE_HI}; border-radius: 8px; }}

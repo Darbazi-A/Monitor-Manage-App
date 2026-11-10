@@ -3689,8 +3689,15 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         pads = QHBoxLayout()
         pads.setSpacing(7)
         self.cue_pads: List[CuePad] = []
+        # The small player over a pad while the mouse is on it: level, mute, seeking, a fade.
+        self.cue_card = CueCard(self)
+        self.cue_card.playPauseRequested.connect(self._fire_cue)
+        self.cue_card.stopRequested.connect(self._stop_cue)
+        self.cue_card.replaceRequested.connect(self._assign_cue)
+        self.cue_card.edited.connect(lambda _i: self._mark_preset_dirty())
         for index in range(SOUND_SLOTS):
             pad = CuePad(index)
+            pad.card = self.cue_card
             pad.assignRequested.connect(lambda path, i=index: self._assign_cue(i, path))
             pad.playPauseRequested.connect(lambda i=index: self._fire_cue(i))
             pad.stopRequested.connect(lambda i=index: self._stop_cue(i))
