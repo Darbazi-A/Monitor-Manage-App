@@ -51,6 +51,7 @@ from remote import local_addresses, qr_pixmap
 DEFAULT_SHARE_PORT = 8443
 MAX_BODY = 256 * 1024
 POLL_WAIT = 20.0            # a laptop's poll is held this long, waiting for news
+SENDER_KEYS = ("limit", "fps", "width", "height", "encoder", "kbps")
 GONE_AFTER = 30.0           # a laptop that has not polled for this long has left
 
 
@@ -73,6 +74,7 @@ class ShareRequest:
         self.message = ""
         self.seen = time.monotonic()
         self.arrived = time.time()
+        self.sender: dict = {}           # what the laptop's browser says of its own sending
 
 
 # --------------------------------------------------------------------------- #
@@ -302,6 +304,14 @@ class ShareServer(QObject):
         request = self.request(str(data.get("id", "")))
         if request is None:
             return 404, {"ok": False, "state": "ended", "message": tr("The stage desk no longer knows this share.")}
+        if path == "/api/report":
+            # Every few seconds while live: why the laptop is holding back, if it is - its
+            # processor or the network - and what it encodes with.
+            info = data.get("info")
+            if isinstance(info, dict):
+                request.sender = {key: info[key] for key in SENDER_KEYS
+                                  if isinstance(info.get(key), (int, float, str)) and len(str(info[key])) < 40}
+            return 200, {"ok": True}
         if path == "/api/poll":
             known = str(data.get("known", ""))
             known_where = str(data.get("where", ""))
@@ -672,6 +682,16 @@ def describe_stats(request: ShareRequest, link: Optional[ShareLink]) -> str:
     bits = []
     if stats.get("width"):
         bits.append(f"{stats['width']}×{stats['height']}  ·  {stats.get('fps', 0):.0f} fps")
+        # Why the picture stutters, when it does: lost packets (Wi-Fi), or the laptop holding back.
+        if float(stats.get("lossPct") or 0) >= 1:
+            bits.append(tr("{0}% lost").format(round(float(stats["lossPct"]))))
+        if int(stats.get("freezes") or 0):
+            bits.append(tr("stopped {0}×").format(int(stats["freezes"])))
+        limit = request.sender.get("limit")
+        if limit == "cpu":
+            bits.append(tr("the laptop's processor is behind"))
+        elif limit == "bandwidth":
+            bits.append(tr("Wi-Fi is the limit"))
     elif link is not None:
         bits.append(tr("connecting…"))
     if not request.audio:
@@ -1202,8 +1222,11 @@ async function share() {
   // The picture is sent at full size from the first frame: a high bitrate allowed at
   // once, and - for slides and text - the resolution kept even if frames must drop.
   const transceiver = pc.addTransceiver(video, {direction: "sendonly", streams: [stream],
-    sendEncodings: [{maxBitrate: kind === "detail" ? 12000000 : 10000000, maxFramerate: 30, scaleResolutionDownBy: 1}]});
-  preferCodecs(transceiver, kind === "detail" ? ["video/VP9", "video/VP8"] : ["video/VP8", "video/VP9"]);
+    sendEncodings: [{maxBitrate: maxRate(kind), maxFramerate: 30, scaleResolutionDownBy: 1}]});
+  // A Mac encodes H.264 on its own media chip (VideoToolbox) - VP8 / VP9 cost its processor,
+  // and a busy processor drops frames. The stage desk falls back to VP8 if it cannot take H.264.
+  const order = kind === "detail" ? ["video/VP9", "video/VP8"] : ["video/VP8", "video/VP9"];
+  preferCodecs(transceiver, MAC ? ["video/H264"].concat(order) : order);
   stream.getAudioTracks().forEach(track => pc.addTransceiver(track, {direction: "sendonly", streams: [stream]}));
   pc.addEventListener("connectionstatechange", () => {
     if (pc && pc.connectionState === "connected") { connectedText(); tune(kind); }
@@ -1228,16 +1251,41 @@ function preferCodecs(transceiver, order) {
   try { transceiver.setCodecPreferences(codecs.slice().sort((a, b) => rank(a) - rank(b))); } catch (e) {}
 }
 
+const MAC = /Mac/i.test(navigator.platform || navigator.userAgent);
+// A video is smoother at 8 Mbit/s that Wi-Fi keeps up with than at 10 that it now and then does not.
+const maxRate = kind => kind === "detail" ? 12000000 : 8000000;
+
 async function tune(kind) {
   const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
   if (!sender) return;
   const p = sender.getParameters();
   if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-  p.encodings[0].maxBitrate = kind === "detail" ? 12000000 : 10000000;
+  p.encodings[0].maxBitrate = maxRate(kind);
   p.encodings[0].maxFramerate = 30;
   p.encodings[0].scaleResolutionDownBy = 1;
-  p.degradationPreference = kind === "detail" ? "maintain-resolution" : "balanced";
+  // Slides keep their sharpness; a video keeps its movement, a little softer for a moment if it must.
+  p.degradationPreference = kind === "detail" ? "maintain-resolution" : "maintain-framerate";
   try { await sender.setParameters(p); } catch (e) {}
+  if (!reporter) reporter = setInterval(report, 4000);
+}
+
+let reporter = null, sentBefore = null;
+async function report() {
+  if (!pc || !id || !running) return;
+  const info = {};
+  try {
+    (await pc.getStats()).forEach(s => {
+      if (s.type !== "outbound-rtp" || s.kind !== "video") return;
+      info.limit = s.qualityLimitationReason || "none";
+      info.fps = Math.round(s.framesPerSecond || 0);
+      info.width = s.frameWidth || 0; info.height = s.frameHeight || 0;
+      info.encoder = s.encoderImplementation || "";
+      const now = {t: performance.now(), bytes: s.bytesSent || 0};
+      if (sentBefore) info.kbps = Math.round((now.bytes - sentBefore.bytes) * 8 / (now.t - sentBefore.t));
+      sentBefore = now;
+    });
+  } catch (e) { return; }
+  post("/api/report", {id, info}).catch(() => {});
 }
 
 async function poll() {
@@ -1272,6 +1320,8 @@ async function poll() {
 function stop(tell) {
   if (tell && id) post("/api/stop", {id}).catch(() => {});
   running = false; id = "";
+  if (reporter) clearInterval(reporter);
+  reporter = null; sentBefore = null;
   if (stream) stream.getTracks().forEach(track => track.stop());
   if (pc) pc.close();
   stream = null; pc = null;
@@ -1297,6 +1347,7 @@ video { width:100%; height:100%; object-fit:contain; background:#000; }
 <script>
 const video = document.getElementById("v");
 let pc = null, current = "", timer = null, last = {};
+const BUFFER_S = 0.25;
 const say = (kind, data) => console.log("SDS:" + kind + ":" + JSON.stringify(data));
 
 function tuneOpus(sdp) {
@@ -1308,8 +1359,10 @@ function tuneOpus(sdp) {
   return sdp.replace(new RegExp("(a=rtpmap:" + m[1] + " [^\\r\\n]*)"), "$1\r\na=fmtp:" + m[1] + " " + extra);
 }
 function tuneVideo(sdp) {
-  const extra = "x-google-start-bitrate=6000;x-google-min-bitrate=2500;x-google-max-bitrate=12000";
-  const types = [...sdp.matchAll(/a=rtpmap:(\d+) (VP8|VP9|AV1)\/90000/gi)].map(m => m[1]);
+  // A quick start, but no floor: when Wi-Fi falters the picture may soften for a moment
+  // instead of packets being lost and the picture stopping.
+  const extra = "x-google-start-bitrate=4000;x-google-min-bitrate=300;x-google-max-bitrate=12000";
+  const types = [...sdp.matchAll(/a=rtpmap:(\d+) (VP8|VP9|AV1|H264)\/90000/gi)].map(m => m[1]);
   for (const pt of types) {
     const line = new RegExp("a=fmtp:" + pt + " ([^\r\n]*)");
     if (line.test(sdp)) sdp = sdp.replace(line, (all, params) => "a=fmtp:" + pt + " " + params + ";" + extra);
@@ -1337,7 +1390,10 @@ async function receive(id, sdp, opts) {
     video.srcObject = media;
     peer.ontrack = e => {
       media.addTrack(e.track);
-      try { e.receiver.playoutDelayHint = 0.05; } catch (err) {}
+      // A quarter of a second in hand, sound and picture alike (they stay together): Wi-Fi's
+      // hiccups are absorbed instead of shown as a stopped picture.
+      try { e.receiver.playoutDelayHint = BUFFER_S; } catch (err) {}
+      try { e.receiver.jitterBufferTarget = BUFFER_S * 1000; } catch (err) {}
       video.play().catch(err => say("error", {id, message: String(err)}));
     };
     peer.onconnectionstatechange = () => { if (peer === pc) say("state", {id, state: peer.connectionState}); };
@@ -1364,6 +1420,9 @@ async function stats() {
     if (s.kind === "video") {
       out.fps = s.framesPerSecond || 0; out.width = s.frameWidth || 0; out.height = s.frameHeight || 0;
       bytes += s.bytesReceived || 0;
+      out.lost = s.packetsLost || 0; out.received = s.packetsReceived || 0;
+      out.freezes = s.freezeCount || 0; out.dropped = s.framesDropped || 0;
+      out.decoder = s.decoderImplementation || "";
     } else if (s.kind === "audio") {
       audioBytes = s.bytesReceived || 0;
       out.level = s.audioLevel || 0;
@@ -1376,8 +1435,11 @@ async function stats() {
     out.audioKbps = Math.round((audioBytes - last.audioBytes) * 8 / (now - last.t));
     // something audible: the level is only measured while the sound is played (not muted)
     out.audio = out.audioKbps > 0 && (out.energy || 0) - (last.energy || 0) > 1e-6;
+    // the last second's lost packets, in percent
+    const got = (out.received - last.received) + (out.lost - last.lost);
+    out.lossPct = got > 0 ? Math.round(1000 * Math.max(0, out.lost - last.lost) / got) / 10 : 0;
   }
-  last = {t: now, bytes, audioBytes, energy: out.energy || 0};
+  last = {t: now, bytes, audioBytes, energy: out.energy || 0, lost: out.lost || 0, received: out.received || 0};
   say("stats", out);
 }
 function stop() {

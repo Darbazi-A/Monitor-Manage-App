@@ -886,9 +886,14 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
                 continue
             card = self.cards.get(role) if hasattr(self, "cards") else None
             if role == ROLE_MAIN and self._share_on(window):
-                pixmap = self.share_receiver.snapshot()
-                pixmap = pixmap.scaled(tile.preview_size(), Qt.KeepAspectRatio, Qt.SmoothTransformation) \
-                    if not pixmap.isNull() else None
+                # Taking a picture of a laptop's live video stalls it for a moment: every
+                # two seconds is enough for the desk, twice a second showed on the stage.
+                shot_at, pixmap = getattr(self, "_share_shot", (0.0, None))
+                if time.monotonic() - shot_at >= 2.0 or pixmap is None:
+                    pixmap = self.share_receiver.snapshot()
+                    pixmap = pixmap.scaled(tile.preview_size(), Qt.KeepAspectRatio, Qt.SmoothTransformation) \
+                        if not pixmap.isNull() else None
+                    self._share_shot = (time.monotonic(), pixmap)
                 caption = tr("laptop  ·  {0}").format(self._share_names())
                 live = True
             elif role == ROLE_MAIN and self.web.on_stage(window):
