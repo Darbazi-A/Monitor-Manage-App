@@ -1239,6 +1239,7 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
 
     def _build_simple_page(self) -> QWidget:
         strip = desk_mod.PresetStrip(THEME)
+        strip.browseRequested.connect(self._open_preset_browser)
         self.simple_presets = strip
         page = simple_mod.SimplePage([(role, ROLE_LABELS[role]) for role in STAGE_ROLES], Icons, THEME, strip)
         page.presetChosen.connect(self._on_preset_tile)
@@ -2232,7 +2233,17 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         self.preset_strip = desk_mod.PresetStrip(THEME)
         self.preset_strip.presetClicked.connect(self._on_preset_tile)
         self.preset_strip.menuRequested.connect(self._preset_menu)
+        self.preset_strip.browseRequested.connect(self._open_preset_browser)
         layout.addWidget(self.preset_strip, 1)
+        # every preset in a big grid (Ctrl+P), the favourites on Ctrl+1 … Ctrl+9
+        self._preset_browser = None
+        browse = QShortcut(QKeySequence("Ctrl+P"), self)
+        browse.setContext(Qt.ApplicationShortcut)
+        browse.activated.connect(self._open_preset_browser)
+        for number in range(1, 10):
+            quick = QShortcut(QKeySequence(f"Ctrl+{number}"), self)
+            quick.setContext(Qt.ApplicationShortcut)
+            quick.activated.connect(lambda n=number: self._load_favourite(n))
 
         edit = QHBoxLayout()
         edit.setSpacing(6)
@@ -2265,8 +2276,10 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         thumbnailer().ready.connect(lambda *_a: self._preset_pictures_timer.start(400))
         return bar
 
-    def _preset_picture(self, payload: dict) -> QPixmap:
+    def _preset_picture(self, payload: dict, width: int = 176) -> QPixmap:
         """A preset at a glance: the Main Stage, the side screens inset, the ceiling strip on top."""
+        if width != 176:                    # drawn at the usual size, then enlarged: the same picture
+            return self._preset_picture(payload).scaledToWidth(width, Qt.SmoothTransformation)
         canvas = QPixmap(176, 99)
         canvas.fill(QColor("#05070b"))
         outputs = payload.get("outputs", {})
@@ -2297,9 +2310,102 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         painter.end()
         return canvas
 
+    # -- favourites, groups and the presets used last: kept in the settings, not in the presets --
+    def _preset_meta(self, key: str, default):
+        try:
+            value = json.loads(self.settings.value("presets/" + key, "") or "null")
+        except (ValueError, TypeError):
+            value = None
+        return value if isinstance(value, type(default)) else default
+
+    def _set_preset_meta(self, key: str, value) -> None:
+        self.settings.setValue("presets/" + key, json.dumps(value, ensure_ascii=False))
+
+    def _favourites(self) -> List[str]:
+        names = set(self.presets.names())
+        return [name for name in self._preset_meta("favourites", []) if name in names]
+
+    def _ordered_presets(self) -> List[str]:
+        favourites = self._favourites()
+        return favourites + [name for name in self.presets.names() if name not in favourites]
+
+    def _favourite_key(self, name: str, favourites: List[str]) -> str:
+        return str(favourites.index(name) + 1) if name in favourites and favourites.index(name) < 9 else ""
+
+    def _toggle_favourite(self, name: str) -> None:
+        favourites = self._favourites()
+        if name in favourites:
+            favourites.remove(name)
+        else:
+            favourites.append(name)
+        self._set_preset_meta("favourites", favourites)
+        self._rebuild_preset_strip()
+        key = self._favourite_key(name, favourites)
+        self.statusBar().showMessage(
+            (tr('★ {0} - Ctrl+{1} puts it on the screens').format(name, key) if key
+             else tr('★ {0} is a favourite').format(name)) if name in favourites
+            else tr('{0} is no longer a favourite').format(name), 6000)
+
+    def _set_preset_group(self, name: str) -> None:
+        groups = self._preset_meta("groups", {})
+        known = sorted({desk_mod.preset_group(n, groups).strip() for n in self.presets.names()} - {""})
+        current = desk_mod.preset_group(name, groups).strip()
+        group, accepted = QInputDialog.getItem(
+            self._preset_browser if self._preset_browser is not None and self._preset_browser.isVisible() else self,
+            tr('Group'), tr('The group for “{0}” (a new name makes a new group; empty for none):').format(name),
+            [current] + [g for g in known if g != current] if current else [""] + known, 0, True)
+        if not accepted:
+            return
+        groups = {n: g for n, g in groups.items() if n in self.presets.names()}
+        groups[name] = group.strip() or " "            # a blank keeps it out of a group named in its title
+        self._set_preset_meta("groups", groups)
+        self._rebuild_preset_strip()
+
+    def _load_favourite(self, number: int) -> None:
+        favourites = self._favourites()
+        if number <= len(favourites):
+            self._on_preset_tile(favourites[number - 1])
+        else:
+            self.statusBar().showMessage(
+                tr('No favourite on Ctrl+{0} - right-click a preset, “★ Favourite”').format(number), 6000)
+
+    @Slot()
+    def _open_preset_browser(self) -> None:
+        if not self.presets.names() or self.desk_locked():
+            return
+        if self._preset_browser is None:
+            self._preset_browser = desk_mod.PresetBrowser(THEME, self)
+            self._preset_browser.presetClicked.connect(self._on_preset_tile)
+            self._preset_browser.menuRequested.connect(self._preset_menu)
+            area = self.screen().availableGeometry()
+            self._preset_browser.resize(int(area.width() * 0.74), int(area.height() * 0.8))
+        self._fill_preset_browser()
+        browser = self._preset_browser
+        browser.move(self.geometry().center() - browser.rect().center())
+        browser.show()
+        browser.raise_()
+        browser.activateWindow()
+
+    def _fill_preset_browser(self) -> None:
+        browser = self._preset_browser
+        if browser is None:
+            return
+        favourites = self._favourites()
+        groups = self._preset_meta("groups", {})
+        recent = self._preset_meta("recent", [])
+        items = [dict(name=name, picture=self._preset_picture(self.presets.get(name) or {}, 352),
+                      group=desk_mod.preset_group(name, groups).strip(), favourite=name in favourites,
+                      key=self._favourite_key(name, favourites), recent=recent.index(name) if name in recent else None)
+                 for name in self._ordered_presets()]
+        browser.set_presets(items, self.loaded_preset, self._preset_dirty)
+
     def _rebuild_preset_strip(self) -> None:
-        items = [(name, self._preset_picture(self.presets.get(name) or {})) for name in self.presets.names()]
+        favourites = self._favourites()
+        items = [(name, self._preset_picture(self.presets.get(name) or {}), name in favourites,
+                  self._favourite_key(name, favourites)) for name in self._ordered_presets()]
         self.preset_strip.set_presets(items)
+        if self._preset_browser is not None and self._preset_browser.isVisible():
+            self._fill_preset_browser()
         if hasattr(self, "simple_presets"):
             self.simple_presets.set_presets(items)
             self.simple_page.set_has_scenes(bool(items))
@@ -2323,7 +2429,11 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
         self._mark_preset_strip()
         menu = QMenu(self)
         menu.addAction(tr('Put “{0}” on the screens').format(name), self._load_preset)
+        menu.addAction(tr('☆ Not a favourite any more') if name in self._favourites()
+                       else tr('★ Favourite - first in the row, on Ctrl+1 … 9'),
+                       lambda: self._toggle_favourite(name))
         if self.ui_mode == "setup":
+            menu.addAction(tr('Group…'), lambda: self._set_preset_group(name))
             menu.addSeparator()
             menu.addAction(tr('Save what is set up now into “{0}”').format(name), self._save_preset)
             menu.addAction(tr('Delete “{0}”…').format(name), self._delete_preset)
@@ -5780,6 +5890,8 @@ class ControlPanel(phone_mod.PhoneControl, timer_ctl_mod.TimerControl, cloud_ctl
             self._preset_dirty = False
             self._describe_preset_state()
             self.statusBar().showMessage(tr('Preset loaded: {0}').format(name), 6000)
+            recent = [n for n in self._preset_meta("recent", []) if n != name]
+            self._set_preset_meta("recent", ([name] + recent)[:8])
 
         main_file = payload.get("outputs", {}).get(ROLE_MAIN, {}).get("file", "")
         self._change_stage(tr('Preset  “{0}”').format(name), apply,

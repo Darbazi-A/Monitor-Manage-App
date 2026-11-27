@@ -213,6 +213,28 @@ KA = {
     "Names on screen": "სახელები ეკრანზე",
     "Slides (while on screen)": "სლაიდები (ეკრანზე ყოფნისას)",
     "muted": "დადუმებული",
+    "▦\nAll": "▦\nყველა",
+    "▦\nAll {0}": "▦\nყველა {0}",
+    "Every preset in a big grid, with a search and groups (Ctrl+P)":
+        "ყველა პრესეტი დიდ ბადეში, ძებნით და ჯგუფებით (Ctrl+P)",
+    "Search presets…": "პრესეტის ძებნა…",
+    "click: on the screens  ·  right-click: ★ and groups  ·  Ctrl+1…9: the favourites":
+        "დაჭერა: ეკრანებზე  ·  მარჯვენა ღილაკი: ★ და ჯგუფები  ·  Ctrl+1…9: რჩეულები",
+    "Nothing found.": "ვერაფერი მოიძებნა.",
+    "All  {0}": "ყველა  {0}",
+    "★ Favourites  {0}": "★ რჩეულები  {0}",
+    "Used last": "ბოლოს გამოყენებული",
+    "★ {0} - Ctrl+{1} puts it on the screens": "★ {0} - Ctrl+{1} მას ეკრანებზე გაუშვებს",
+    "★ {0} is a favourite": "★ {0} რჩეულებშია",
+    "{0} is no longer a favourite": "{0} აღარ არის რჩეულებში",
+    "Group": "ჯგუფი",
+    "The group for “{0}” (a new name makes a new group; empty for none):":
+        "„{0}“-ის ჯგუფი (ახალი სახელი ახალ ჯგუფს ქმნის; ცარიელი - ჯგუფის გარეშე):",
+    "No favourite on Ctrl+{0} - right-click a preset, “★ Favourite”":
+        "Ctrl+{0}-ზე რჩეული არ არის - პრესეტზე მარჯვენა ღილაკი, „★ რჩეული“",
+    "☆ Not a favourite any more": "☆ რჩეულებიდან ამოღება",
+    "★ Favourite - first in the row, on Ctrl+1 … 9": "★ რჩეული - რიგში პირველი, Ctrl+1 … 9-ზე",
+    "Group…": "ჯგუფი…",
     "looping": "მეორდება",
     "Another sound for this key…": "სხვა ხმა ამ ღილაკზე…",
     "Fade this sound out gently, over three seconds": "ამ ხმის რბილად მიქრობა, სამ წამში",

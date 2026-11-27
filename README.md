@@ -109,7 +109,10 @@ screens of video wants a newer card (or pictures on some of them).
   live video via a `QGraphicsScene`.
 - **Presets** — routing, geometry, playlists, scaling, volumes and marquee
   settings saved as JSON, shown as picture tiles of what each one puts on the
-  screens; the one on the screens is marked ON SCREEN (green), or CHANGED
+  screens. **▦ All** (or Ctrl+P) shows every preset at once in a big grid, with a
+  search and groups (from names like “Lighting · Blue”, or set by right-click);
+  ★ favourites come first in the row and go on with Ctrl+1 … Ctrl+9. The one on
+  the screens is marked ON SCREEN (green), or CHANGED
   (amber) once edited by hand. One tap loads it with a transition on every
   screen; **Blank** clears everything for building the next show (monitor
   routing is kept — that is the hall's wiring, not the event).

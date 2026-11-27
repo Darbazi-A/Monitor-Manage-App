@@ -3,6 +3,15 @@
 Every version of Stage Display Controller. The installer for each is on the
 [Releases](../../releases) page.
 
+## 1.4.3 — 2026-11-27 · Presets at a glance
+
+- **▦ All** at the start of the presets row (or **Ctrl+P**) opens every preset at once, as big
+  pictures in a grid: type to search, Enter takes the first found; groups across the top -
+  from names like “Lighting · Blue”, or set with a right-click, *Group…*; and *Used last*.
+  A click puts a preset on the screens and closes the grid.
+- **★ Favourites** (right-click a preset): first in the row, and on **Ctrl+1 … Ctrl+9**
+  from anywhere in the program.
+
 ## 1.4.2 — 2026-11-10 · A player on every sound
 
 - **The mouse resting on a sound cue (F1-F8) opens a small player over it**: the whole name,

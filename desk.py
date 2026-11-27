@@ -22,9 +22,9 @@ from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QSizePolicy, QTabWidget, QToolButton, QToolTip, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton, QScrollArea, QSizePolicy, QTabWidget, QToolButton, QToolTip,
+                               QVBoxLayout, QWidget)
 
 STATE_CLOSED = "closed"        # no window on that screen
 STATE_BLACK = "black"          # window open, nothing on it
@@ -749,14 +749,18 @@ class PresetTile(QWidget):
 
     SIZE = QSize(116, 72)
 
-    def __init__(self, name: str, picture: Optional[QPixmap], theme: dict) -> None:
+    def __init__(self, name: str, picture: Optional[QPixmap], theme: dict, size: Optional[QSize] = None,
+                 favourite: bool = False, key: str = "") -> None:
         super().__init__()
         self.name = name
         self.picture = picture
         self.theme = theme
         self.state = ""                     # "" | "on" (on the screens) | "changed"
         self.selected = False
-        self.setFixedSize(self.SIZE)
+        self.favourite = favourite
+        self.key = key                      # "1".."9": Ctrl+that number puts it on
+        self.big = size is not None and size.width() > self.SIZE.width()
+        self.setFixedSize(size or self.SIZE)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(tr('{0} - click to put it on the screens; right-click for more').format(name))
 
@@ -769,7 +773,8 @@ class PresetTile(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        frame = QRectF(1, 1, self.width() - 2, self.height() - 22)
+        label_h = 26 if self.big else 22
+        frame = QRectF(1, 1, self.width() - 2, self.height() - label_h)
         clip = QPainterPath()
         clip.addRoundedRect(frame, 7, 7)
         p.setPen(Qt.NoPen)
@@ -811,9 +816,19 @@ class PresetTile(QWidget):
             p.drawRoundedRect(box, 7, 7)
             p.setPen(QColor(theme["ink"]))
             p.drawText(box, Qt.AlignCenter, tag)
-        p.setFont(_font(12, QFont.DemiBold))
+        if self.favourite or self.key:              # a star, and its Ctrl+number, top left
+            text = ("★ " if self.favourite else "") + (f"Ctrl+{self.key}" if self.key else "")
+            p.setFont(_font(9, QFont.Bold))
+            width = p.fontMetrics().horizontalAdvance(text) + 10
+            box = QRectF(frame.left() + 4, frame.top() + 4, width, 15)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(0, 0, 0, 170))
+            p.drawRoundedRect(box, 7, 7)
+            p.setPen(QColor(theme["accent"]))
+            p.drawText(box, Qt.AlignCenter, text)
+        p.setFont(_font(13 if self.big else 12, QFont.DemiBold))
         p.setPen(QColor(theme["text"]))
-        name_rect = QRectF(2, self.height() - 20, self.width() - 4, 20)
+        name_rect = QRectF(2, self.height() - label_h + 2, self.width() - 4, label_h - 2)
         p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
                    p.fontMetrics().elidedText(self.name, Qt.ElideRight, int(name_rect.width())))
         p.end()
@@ -830,6 +845,7 @@ class PresetStrip(QScrollArea):
 
     presetClicked = Signal(str)
     menuRequested = Signal(str, object)
+    browseRequested = Signal()
 
     def __init__(self, theme: dict) -> None:
         super().__init__()
@@ -844,31 +860,219 @@ class PresetStrip(QScrollArea):
         self.row = QHBoxLayout(host)
         self.row.setContentsMargins(0, 0, 0, 0)
         self.row.setSpacing(10)
+        # every preset at once, in a big grid with a search: the row only scrolls
+        self.browse = QPushButton(tr("▦\nAll"))
+        self.browse.setFixedSize(64, PresetTile.SIZE.height())
+        self.browse.setToolTip(tr('Every preset in a big grid, with a search and groups (Ctrl+P)'))
+        self.browse.setStyleSheet(f"QPushButton {{ font-size: 13px; font-weight: 700; border-radius: 8px; "
+                                  f"border: 1px solid {theme['edge']}; }}")
+        self.browse.clicked.connect(self.browseRequested.emit)
+        self.row.addWidget(self.browse)
         self.row.addStretch(1)
         self.setWidget(host)
         self.tiles: Dict[str, PresetTile] = {}
         self.empty = QLabel(tr('No presets yet - set the screens up, then “Save as new…”'))
         self.empty.setObjectName("cardHint")
-        self.row.insertWidget(0, self.empty)
+        self.row.insertWidget(1, self.empty)
 
     def set_presets(self, items: List[tuple]) -> None:
-        """items: (name, picture) in order."""
+        """items: (name, picture[, favourite, key]) in order - the favourites first."""
         for tile in self.tiles.values():
             tile.setParent(None)
             tile.deleteLater()
         self.tiles = {}
-        for position, (name, picture) in enumerate(items):
-            tile = PresetTile(name, picture, self.theme)
+        for position, item in enumerate(items):
+            name, picture = item[0], item[1]
+            favourite, key = (item[2], item[3]) if len(item) > 3 else (False, "")
+            tile = PresetTile(name, picture, self.theme, favourite=favourite, key=key)
             tile.clicked.connect(self.presetClicked.emit)
             tile.menuRequested.connect(self.menuRequested.emit)
-            self.row.insertWidget(position, tile)
+            self.row.insertWidget(position + 1, tile)
             self.tiles[name] = tile
         self.empty.setVisible(not items)
+        self.browse.setText(tr("▦\nAll {0}").format(len(items)) if items else tr("▦\nAll"))
+        self.browse.setVisible(bool(items))
 
     def mark(self, loaded: Optional[str], changed: bool, selected: Optional[str]) -> None:
         for name, tile in self.tiles.items():
             state = ("changed" if changed else "on") if name == loaded else ""
             tile.set_state(state, name == selected)
+
+
+def preset_group(name: str, groups: Dict[str, str]) -> str:
+    """A preset's group: the one given it, else the part before " · " in its name."""
+    if groups.get(name):
+        return groups[name]
+    return name.split(" · ", 1)[0].strip() if " · " in name else ""
+
+
+class PresetBrowser(QDialog):
+    """
+    Every preset at once: big pictures in a grid, a search, the groups, the favourites and
+    the ones used last. A click puts one on the screens and closes it; typing searches, and
+    Enter takes the first one found.
+    """
+
+    presetClicked = Signal(str)
+    menuRequested = Signal(str, object)
+
+    TILE = QSize(236, 158)
+    ALL, FAVOURITES, RECENT = "\x00all", "\x00fav", "\x00recent"
+
+    def __init__(self, theme: dict, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.theme = theme
+        self.setWindowTitle(tr("Presets"))
+        self.items: List[dict] = []
+        self.loaded: Optional[str] = None
+        self.changed = False
+        self.filter = self.ALL
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+        top = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(tr("Search presets…"))
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumHeight(38)
+        self.search.setStyleSheet("font-size: 15px;")
+        self.search.textChanged.connect(lambda _t: self._fill())
+        self.search.returnPressed.connect(self._take_first)
+        top.addWidget(self.search, 1)
+        hint = QLabel(tr("click: on the screens  ·  right-click: ★ and groups  ·  Ctrl+1…9: the favourites"))
+        hint.setObjectName("cardHint")
+        top.addWidget(hint)
+        layout.addLayout(top)
+        self.chips_row = QHBoxLayout()
+        self.chips_row.setSpacing(6)
+        layout.addLayout(self.chips_row)
+        self.chips = QButtonGroup(self)
+        self.chips.setExclusive(True)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; } "
+                                  "QScrollArea > QWidget > QWidget { background: transparent; }")
+        host = QWidget()
+        self.grid = QGridLayout(host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
+        self.scroll.setWidget(host)
+        layout.addWidget(self.scroll, 1)
+        self.nothing = QLabel(tr("Nothing found."))
+        self.nothing.setObjectName("cardHint")
+        self.nothing.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.nothing)
+        self.tiles: List[PresetTile] = []
+        self._columns = 0
+
+    def set_presets(self, items: List[dict], loaded: Optional[str], changed: bool) -> None:
+        """items: dicts of name, picture, group, favourite, key, recent (a rank, or None)."""
+        self.items, self.loaded, self.changed = items, loaded, changed
+        self._make_chips()
+        self._fill()
+
+    def _make_chips(self) -> None:
+        for button in self.chips.buttons():
+            self.chips.removeButton(button)
+            button.setParent(None)
+            button.deleteLater()
+        while self.chips_row.count():
+            self.chips_row.takeAt(0)
+        groups = sorted({item["group"] for item in self.items if item["group"]})
+        choices = [(self.ALL, tr("All  {0}").format(len(self.items)))]
+        favourites = sum(1 for item in self.items if item["favourite"])
+        if favourites:
+            choices.append((self.FAVOURITES, tr("★ Favourites  {0}").format(favourites)))
+        if any(item["recent"] is not None for item in self.items):
+            choices.append((self.RECENT, tr("Used last")))
+        choices += [(group, f"{group}  {sum(1 for i in self.items if i['group'] == group)}") for group in groups]
+        if self.filter not in [key for key, _ in choices]:
+            self.filter = self.ALL
+        for key, text in choices:
+            chip = QPushButton(text)
+            chip.setCheckable(True)
+            chip.setChecked(key == self.filter)
+            chip.setMinimumHeight(32)
+            chip.setStyleSheet(
+                f"QPushButton {{ border-radius: 16px; padding: 4px 14px; border: 1px solid {self.theme['edge']}; }}"
+                f"QPushButton:checked {{ background: {self.theme['accent']}; color: {self.theme['ink']}; "
+                f"border-color: {self.theme['accent']}; font-weight: 700; }}")
+            chip.clicked.connect(lambda _c=False, k=key: self._choose(k))
+            self.chips.addButton(chip)
+            self.chips_row.addWidget(chip)
+        self.chips_row.addStretch(1)
+
+    def _choose(self, key: str) -> None:
+        self.filter = key
+        self._fill()
+
+    def _shown(self) -> List[dict]:
+        words = self.search.text().strip().lower().split()
+        shown = []
+        for item in self.items:
+            haystack = (item["name"] + " " + item["group"]).lower()
+            if words and not all(word in haystack for word in words):
+                continue
+            if words:                                    # a search looks through everything
+                shown.append(item)
+            elif self.filter == self.FAVOURITES and item["favourite"]:
+                shown.append(item)
+            elif self.filter == self.RECENT and item["recent"] is not None:
+                shown.append(item)
+            elif self.filter == self.ALL or self.filter == item["group"]:
+                shown.append(item)
+        if self.filter == self.RECENT and not words:
+            shown.sort(key=lambda item: item["recent"])
+        return shown
+
+    def _fill(self) -> None:
+        for tile in self.tiles:
+            tile.setParent(None)
+            tile.deleteLater()
+        self.tiles = []
+        shown = self._shown()
+        columns = self._columns_for(self.scroll.viewport().width())
+        for n, item in enumerate(shown):
+            tile = PresetTile(item["name"], item["picture"], self.theme, self.TILE, item["favourite"], item["key"])
+            state = ("changed" if self.changed else "on") if item["name"] == self.loaded else ""
+            tile.set_state(state, False)
+            tile.clicked.connect(self._clicked)
+            tile.menuRequested.connect(self.menuRequested.emit)
+            self.grid.addWidget(tile, n // columns, n % columns, Qt.AlignLeft | Qt.AlignTop)
+            self.tiles.append(tile)
+        self.grid.setRowStretch(self.grid.rowCount(), 1)
+        self.grid.setColumnStretch(columns, 1)
+        self._columns = columns
+        self.nothing.setVisible(not shown)
+
+    def _columns_for(self, width: int) -> int:
+        return max(1, (max(width, self.TILE.width()) + 14) // (self.TILE.width() + 14))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self.tiles and self._columns_for(self.scroll.viewport().width()) != self._columns:
+            self._fill()
+
+    def _clicked(self, name: str) -> None:
+        self.presetClicked.emit(name)
+        self.accept()
+
+    def _take_first(self) -> None:
+        shown = self._shown()
+        if shown:
+            self._clicked(shown[0]["name"])
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.search.blockSignals(True)
+        self.search.clear()                              # each time opened: everything, ready to type
+        self.search.blockSignals(False)
+        self.filter = self.ALL
+        self._make_chips()
+        self.search.setFocus()
+        QTimer.singleShot(0, self._fill)                 # now that the width is known
 
 
 # --------------------------------------------------------------------------- #
